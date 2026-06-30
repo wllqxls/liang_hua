@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 & "$PSScriptRoot\setup_terminal.ps1"
 

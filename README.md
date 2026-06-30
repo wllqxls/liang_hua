@@ -1,4 +1,4 @@
-# liang_hua
+﻿# liang_hua
 
 本项目是一个全自动量化交易机器人的第一阶段 MVP：在本机网页中选择交易对、周期、策略和参数，然后使用历史 K 线数据运行回测，展示收益曲线、胜率、回撤、夏普比率和交易明细。
 
@@ -37,6 +37,18 @@ python main.py
 
 ```powershell
 .\scripts\start.ps1
+```
+
+如果 PowerShell 提示脚本执行被禁用，可以改用：
+
+```cmd
+scripts\start.cmd
+```
+
+或临时绕过执行策略：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start.ps1
 ```
 
 启动后打开：

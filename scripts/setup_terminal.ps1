@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 chcp 65001 | Out-Null
 [Console]::InputEncoding = [System.Text.UTF8Encoding]::new()
