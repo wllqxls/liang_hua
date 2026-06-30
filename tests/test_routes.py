@@ -26,8 +26,8 @@ def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
     def fake_run(self: object, **kwargs: Any) -> BacktestResult:
         assert kwargs["position_amount"] == 3.3
         assert kwargs["leverage"] == 5
-        assert kwargs["take_profit_pct"] == 0
-        assert kwargs["stop_loss_pct"] == 3
+        assert kwargs["take_profit_amount"] == 0
+        assert kwargs["stop_loss_amount"] == 2
         assert kwargs["commission"] == 0.0005
         return BacktestResult(
             total_return_pct=12.5,
@@ -52,8 +52,8 @@ def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
             "cash": 100_000,
             "position_amount": 3.3,
             "leverage": 5,
-            "take_profit_pct": 0,
-            "stop_loss_pct": 3,
+            "take_profit_amount": 0,
+            "stop_loss_amount": 2,
             "maker_fee": 0.0002,
             "taker_fee": 0.0005,
         },
@@ -103,8 +103,8 @@ def test_backtest_api_accepts_ten_usdt_cash(monkeypatch: Any) -> None:
             "cash": 10,
             "position_amount": 3.3,
             "leverage": 5,
-            "take_profit_pct": 0,
-            "stop_loss_pct": 3,
+            "take_profit_amount": 0,
+            "stop_loss_amount": 2,
             "maker_fee": 0.0002,
             "taker_fee": 0.0005,
         },
@@ -127,8 +127,8 @@ def test_backtest_api_rejects_position_amount_above_cash() -> None:
             "cash": 10,
             "position_amount": 20,
             "leverage": 5,
-            "take_profit_pct": 0,
-            "stop_loss_pct": 3,
+            "take_profit_amount": 0,
+            "stop_loss_amount": 2,
             "maker_fee": 0.0002,
             "taker_fee": 0.0005,
         },

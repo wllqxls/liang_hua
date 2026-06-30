@@ -20,8 +20,8 @@ class MovingAverageCross(Strategy):
     lookback = 30
     position_amount = 0.0
     leverage = 1.0
-    take_profit_pct = 0.0
-    stop_loss_pct = 0.0
+    take_profit_amount = 0.0
+    stop_loss_amount = 0.0
 
     def init(self) -> None:
         """策略初始化——计算快慢均线。"""
@@ -45,7 +45,13 @@ class MovingAverageCross(Strategy):
         if self.fast_ma[-2] <= self.slow_ma[-2] and self.fast_ma[-1] > self.slow_ma[-1]:
             if not self.position:
                 price = self.data.Close[-1]
-                take_profit, stop_loss = build_long_risk_prices(price, self.take_profit_pct, self.stop_loss_pct)
+                take_profit, stop_loss = build_long_risk_prices(
+                    price,
+                    self.position_amount,
+                    self.leverage,
+                    self.take_profit_amount,
+                    self.stop_loss_amount,
+                )
                 size = calculate_fractional_order_size(
                     price=price,
                     equity=self.equity,

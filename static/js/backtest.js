@@ -37,8 +37,8 @@ async function runBacktest() {
         cash: numberValue('cash', 1000),
         position_amount: numberValue('position-amount', 3.3),
         leverage: numberValue('leverage', 5),
-        take_profit_pct: numberValue('take-profit-pct', 0),
-        stop_loss_pct: numberValue('stop-loss-pct', 0),
+        take_profit_amount: numberValue('take-profit-amount', 0),
+        stop_loss_amount: numberValue('stop-loss-amount', 2),
         maker_fee: numberValue('maker-fee', 0.0002),
         taker_fee: numberValue('taker-fee', 0.0005),
     };
@@ -97,8 +97,14 @@ function validateBacktestPayload(payload) {
     if (payload.leverage < 1 || payload.leverage > 150) {
         return '杠杆必须在 x1 到 x150 之间';
     }
-    if (payload.take_profit_pct < 0 || payload.stop_loss_pct < 0) {
+    if (payload.take_profit_amount < 0 || payload.stop_loss_amount < 0) {
         return '止盈止损不能为负数';
+    }
+    if (payload.take_profit_amount > payload.position_amount * payload.leverage) {
+        return '止盈金额不建议大于单笔名义仓位';
+    }
+    if (payload.stop_loss_amount > payload.position_amount) {
+        return '止损金额不能大于单笔逐仓金额';
     }
     if (payload.maker_fee < 0 || payload.taker_fee < 0 || payload.maker_fee > 0.1 || payload.taker_fee > 0.1) {
         return '手续费率必须在 0 到 0.1 之间';

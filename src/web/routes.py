@@ -101,8 +101,8 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
             commission=req.taker_fee,
             leverage=req.leverage,
             position_amount=req.position_amount,
-            take_profit_pct=req.take_profit_pct,
-            stop_loss_pct=req.stop_loss_pct,
+            take_profit_amount=req.take_profit_amount,
+            stop_loss_amount=req.stop_loss_amount,
         )
 
         return BacktestResponse(

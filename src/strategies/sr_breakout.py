@@ -28,8 +28,8 @@ class SRBreakout(Strategy):
     atr_mult = 2.0      # ATR 止损倍数
     position_amount = 0.0
     leverage = 1.0
-    take_profit_pct = 0.0
-    stop_loss_pct = 3.0
+    take_profit_amount = 0.0
+    stop_loss_amount = 0.0
 
     def init(self) -> None:
         """策略初始化——计算指标。"""
@@ -52,15 +52,18 @@ class SRBreakout(Strategy):
         """每根 K 线触发一次——决策买卖。"""
         price = self.data.Close[-1]
 
-        # 有持仓时检查止损（亏损超过 3% 平仓）
         if self.position:
-            if self.stop_loss_pct <= 0 and self.position.pl_pct <= -3.0:
-                self.position.close()
             return
 
         # 收盘价突破阻力位 → 买入（不指定 size，自动用全部可用资金）
         if price > self.resistance[-1]:
-            take_profit, stop_loss = build_long_risk_prices(price, self.take_profit_pct, self.stop_loss_pct)
+            take_profit, stop_loss = build_long_risk_prices(
+                price,
+                self.position_amount,
+                self.leverage,
+                self.take_profit_amount,
+                self.stop_loss_amount,
+            )
             size = calculate_fractional_order_size(
                 price=price,
                 equity=self.equity,

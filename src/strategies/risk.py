@@ -29,10 +29,18 @@ def calculate_fractional_order_size(
 
 def build_long_risk_prices(
     price: float,
-    take_profit_pct: float,
-    stop_loss_pct: float,
+    position_amount: float,
+    leverage: float,
+    take_profit_amount: float,
+    stop_loss_amount: float,
 ) -> tuple[float | None, float | None]:
-    """根据当前价格计算多头止盈/止损价格。"""
-    take_profit = price * (1 + take_profit_pct / 100) if take_profit_pct > 0 else None
-    stop_loss = price * (1 - stop_loss_pct / 100) if stop_loss_pct > 0 else None
+    """根据目标盈亏金额计算多头止盈/止损价格。"""
+    notional_amount = position_amount * max(leverage, 1)
+    if price <= 0 or notional_amount <= 0:
+        return None, None
+
+    take_profit_pct = take_profit_amount / notional_amount if take_profit_amount > 0 else 0
+    stop_loss_pct = stop_loss_amount / notional_amount if stop_loss_amount > 0 else 0
+    take_profit = price * (1 + take_profit_pct) if take_profit_pct > 0 else None
+    stop_loss = price * (1 - stop_loss_pct) if stop_loss_pct > 0 else None
     return take_profit, stop_loss

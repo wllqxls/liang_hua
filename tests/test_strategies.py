@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
 from src.strategies.ma_cross import MovingAverageCross
-from src.strategies.risk import calculate_fractional_order_size
+from src.strategies.risk import build_long_risk_prices, calculate_fractional_order_size
 from src.strategies.rsi_reversion import RSIReversion
 from src.strategies.sr_breakout import SRBreakout, SupportResistanceBreakout
 
@@ -34,3 +34,16 @@ def test_fractional_order_size_uses_margin_and_leverage() -> None:
     )
 
     assert size == 27_500
+
+
+def test_long_risk_prices_use_usdt_amounts() -> None:
+    take_profit, stop_loss = build_long_risk_prices(
+        price=100.0,
+        position_amount=3.3,
+        leverage=20,
+        take_profit_amount=6.0,
+        stop_loss_amount=2.0,
+    )
+
+    assert round(take_profit, 4) == 109.0909
+    assert round(stop_loss, 4) == 96.9697
