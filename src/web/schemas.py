@@ -80,6 +80,8 @@ class OptimizationCandidate(BaseModel):
     """参数搜索候选结果。"""
 
     rank: int
+    strategy: str
+    strategy_label: str
     lookback: int
     leverage: float
     take_profit_amount: float

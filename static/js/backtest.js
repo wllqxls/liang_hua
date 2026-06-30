@@ -155,7 +155,7 @@ async function optimizeParams() {
     }
 
     btn.disabled = true;
-    status.innerHTML = '<span class="spinner"></span>正在搜索参数...';
+    status.innerHTML = '<span class="spinner"></span>正在搜索策略和参数...';
     results.classList.remove('hidden');
 
     try {
@@ -438,7 +438,7 @@ function renderOptimizationTable(candidates) {
     tbody.innerHTML = '';
 
     if (!candidates || candidates.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" class="empty-cell">尚未搜索</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11" class="empty-cell">尚未搜索</td></tr>';
         return;
     }
 
@@ -448,6 +448,7 @@ function renderOptimizationTable(candidates) {
         const drawdownClass = item.max_drawdown_pct >= 0 ? 'positive' : 'negative';
         row.innerHTML =
             '<td>' + item.rank + '</td>' +
+            '<td>' + (item.strategy_label || item.strategy || '--') + '</td>' +
             '<td>' + item.lookback + '</td>' +
             '<td>x' + formatNumber(item.leverage, 0) + '</td>' +
             '<td>' + formatNumber(item.take_profit_amount, 2) + '</td>' +

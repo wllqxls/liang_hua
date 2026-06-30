@@ -101,7 +101,7 @@
                 </div>
             </div>
             <button id="run-btn" class="btn-primary" onclick="runBacktest()">▶ 开始回测</button>
-            <button id="optimize-btn" class="btn-secondary" onclick="optimizeParams()">参数搜索</button>
+            <button id="optimize-btn" class="btn-secondary" onclick="optimizeParams()">策略参数搜索</button>
             <span id="status" class="status-text"></span>
         </section>
 
@@ -194,12 +194,13 @@
                 </table>
             </div>
 
-            <h3>参数搜索</h3>
+            <h3>策略参数搜索</h3>
             <div class="table-container">
                 <table id="optimization-table">
                     <thead>
                         <tr>
                             <th>排名</th>
+                            <th>策略</th>
                             <th>回溯</th>
                             <th>杠杆</th>
                             <th>止盈U</th>
@@ -212,7 +213,7 @@
                         </tr>
                     </thead>
                     <tbody id="optimization-tbody">
-                        <tr><td colspan="10" class="empty-cell">尚未搜索</td></tr>
+                        <tr><td colspan="11" class="empty-cell">尚未搜索</td></tr>
                     </tbody>
                 </table>
             </div>

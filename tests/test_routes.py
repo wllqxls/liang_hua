@@ -195,7 +195,11 @@ def test_optimize_api_returns_ranked_candidates(monkeypatch: Any) -> None:
     assert payload["success"] is True
     assert len(payload["candidates"]) == 10
     assert payload["candidates"][0]["rank"] == 1
+    assert "strategy" in payload["candidates"][0]
+    assert "strategy_label" in payload["candidates"][0]
     assert calls[0]["slippage_rate"] == 0.0002
+    strategy_classes = {call["strategy_class"].__name__ for call in calls}
+    assert strategy_classes == {"SRBreakout", "MovingAverageCross", "RSIReversion"}
 
 
 def test_data_status_api_reports_local_csv(tmp_path: Path, monkeypatch: Any) -> None:

@@ -64,6 +64,14 @@ STRATEGY_OPTIONS = [
     },
 ]
 
+OPTIMIZATION_STRATEGIES = {
+    option["value"]: {
+        "class": STRATEGIES[option["value"]],
+        "label": option["label"],
+    }
+    for option in STRATEGY_OPTIONS
+}
+
 TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
 
 SYMBOLS = [
@@ -137,9 +145,8 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
 
 @router.post("/api/optimize", response_model=OptimizationResponse)
 async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
-    """基于当前选择做一轮小型参数搜索。"""
-    strategy_class = STRATEGIES.get(req.strategy)
-    if strategy_class is None:
+    """基于当前参数，对多个策略和参数组合做一轮小型搜索。"""
+    if req.strategy not in STRATEGIES:
         return OptimizationResponse(success=False, candidates=[], error=f"未知策略: {req.strategy}")
     if req.position_amount > req.cash:
         return OptimizationResponse(success=False, candidates=[], error="单笔逐仓金额不能大于初始资金")
@@ -153,44 +160,47 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
     candidates: list[OptimizationCandidate] = []
     rankless: list[dict] = []
 
-    for lookback in lookbacks:
-        for leverage in leverages:
-            for take_profit_amount in take_profits:
-                for stop_loss_amount in stop_losses:
-                    try:
-                        result = engine.run(
-                            strategy_class=strategy_class,
-                            symbol=req.symbol,
-                            timeframe=req.timeframe,
-                            lookback=lookback,
-                            cash=req.cash,
-                            commission=req.taker_fee,
-                            leverage=leverage,
-                            slippage_rate=req.slippage_rate,
-                            funding_rate=req.funding_rate,
-                            maintenance_margin_rate=req.maintenance_margin_rate,
-                            position_amount=req.position_amount,
-                            take_profit_amount=take_profit_amount,
-                            stop_loss_amount=stop_loss_amount,
-                        )
-                    except Exception:
-                        logger.exception("参数搜索候选失败")
-                        continue
-                    total_return_pct = _finite_number(result.total_return_pct)
-                    max_drawdown_pct = _finite_number(result.max_drawdown_pct)
-                    win_rate_pct = _finite_number(result.win_rate_pct)
-                    score = total_return_pct + max_drawdown_pct * 0.5 + win_rate_pct * 0.05
-                    rankless.append({
-                        "lookback": lookback,
-                        "leverage": leverage,
-                        "take_profit_amount": take_profit_amount,
-                        "stop_loss_amount": stop_loss_amount,
-                        "total_return_pct": total_return_pct,
-                        "max_drawdown_pct": max_drawdown_pct,
-                        "win_rate_pct": win_rate_pct,
-                        "num_trades": result.num_trades,
-                        "score": score,
-                    })
+    for strategy_name, strategy_info in OPTIMIZATION_STRATEGIES.items():
+        for lookback in lookbacks:
+            for leverage in leverages:
+                for take_profit_amount in take_profits:
+                    for stop_loss_amount in stop_losses:
+                        try:
+                            result = engine.run(
+                                strategy_class=strategy_info["class"],
+                                symbol=req.symbol,
+                                timeframe=req.timeframe,
+                                lookback=lookback,
+                                cash=req.cash,
+                                commission=req.taker_fee,
+                                leverage=leverage,
+                                slippage_rate=req.slippage_rate,
+                                funding_rate=req.funding_rate,
+                                maintenance_margin_rate=req.maintenance_margin_rate,
+                                position_amount=req.position_amount,
+                                take_profit_amount=take_profit_amount,
+                                stop_loss_amount=stop_loss_amount,
+                            )
+                        except Exception:
+                            logger.exception("参数搜索候选失败")
+                            continue
+                        total_return_pct = _finite_number(result.total_return_pct)
+                        max_drawdown_pct = _finite_number(result.max_drawdown_pct)
+                        win_rate_pct = _finite_number(result.win_rate_pct)
+                        score = total_return_pct + max_drawdown_pct * 0.5 + win_rate_pct * 0.05
+                        rankless.append({
+                            "strategy": strategy_name,
+                            "strategy_label": strategy_info["label"],
+                            "lookback": lookback,
+                            "leverage": leverage,
+                            "take_profit_amount": take_profit_amount,
+                            "stop_loss_amount": stop_loss_amount,
+                            "total_return_pct": total_return_pct,
+                            "max_drawdown_pct": max_drawdown_pct,
+                            "win_rate_pct": win_rate_pct,
+                            "num_trades": result.num_trades,
+                            "score": score,
+                        })
 
     ranked = sorted(rankless, key=lambda item: item["score"], reverse=True)[:10]
     for index, item in enumerate(ranked, start=1):
