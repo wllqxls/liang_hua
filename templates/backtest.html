@@ -114,6 +114,8 @@
                     <input type="number" id="maintenance-margin-rate" value="0.005" min="0" max="0.1" step="0.0001">
                 </div>
             </div>
+            <div id="order-check-msg" class="notice-msg hidden"></div>
+            <div id="error-msg" class="error-msg hidden"></div>
             <button id="run-btn" class="btn-primary" onclick="runBacktest()">▶ 开始回测</button>
             <button id="optimize-btn" class="btn-secondary" onclick="optimizeParams()">策略参数搜索</button>
             <span id="status" class="status-text"></span>
@@ -232,12 +234,9 @@
                     </tbody>
                 </table>
             </div>
-
-            <!-- 错误信息 -->
-            <div id="error-msg" class="error-msg hidden"></div>
         </section>
     </div>
 
-    <script src="/static/js/backtest.js"></script>
+    <script src="/static/js/backtest.js?v=order-check-1"></script>
 </body>
 </html>

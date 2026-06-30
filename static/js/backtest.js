@@ -5,10 +5,23 @@
 let equityChart = null;
 let chartData = null;
 let optimizationCandidates = [];
+const MIN_NOTIONAL_BY_SYMBOL = {
+    'BTC/USDT': 50,
+    'ETH/USDT': 20,
+    'BNB/USDT': 5,
+    'SOL/USDT': 5,
+    'XRP/USDT': 5,
+    'ADA/USDT': 5,
+    'DOGE/USDT': 5,
+    'AVAX/USDT': 5,
+};
+const LEVERAGE_OPTIONS = [1, 2, 3, 5, 10, 20, 50, 100, 125, 150];
 
 window.addEventListener('DOMContentLoaded', () => {
     updateStrategyDescription();
     document.getElementById('strategy').addEventListener('change', updateStrategyDescription);
+    bindRealtimeChecks();
+    updateOrderCheck();
     loadDataStatus();
 });
 
@@ -91,6 +104,10 @@ function validateBacktestPayload(payload) {
     if (payload.leverage < 1 || payload.leverage > 150) {
         return '杠杆必须在 x1 到 x150 之间';
     }
+    const orderCheck = getOrderCheck(payload);
+    if (!orderCheck.ok) {
+        return orderCheck.message;
+    }
     if (payload.take_profit_amount < 0 || payload.stop_loss_amount < 0) {
         return '止盈止损不能为负数';
     }
@@ -113,6 +130,53 @@ function validateBacktestPayload(payload) {
         return '维持保证金率必须在 0 到 0.1 之间';
     }
     return '';
+}
+
+
+function bindRealtimeChecks() {
+    const ids = ['symbol', 'position-amount', 'leverage'];
+    for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('input', updateOrderCheck);
+            el.addEventListener('change', updateOrderCheck);
+        }
+    }
+}
+
+
+function updateOrderCheck() {
+    const msg = document.getElementById('order-check-msg');
+    if (!msg) return;
+    const payload = collectBacktestPayload();
+    const check = getOrderCheck(payload);
+    msg.textContent = check.message;
+    msg.className = check.ok ? 'notice-msg positive' : 'notice-msg warning';
+}
+
+
+function getOrderCheck(payload) {
+    const minNotional = MIN_NOTIONAL_BY_SYMBOL[payload.symbol] || 5;
+    const notional = payload.position_amount * payload.leverage;
+    const base = payload.symbol + ' 估算最小名义仓位 ' + formatNumber(minNotional, 2) + 'U，当前 ' +
+        formatNumber(payload.position_amount, 2) + 'U × x' + formatNumber(payload.leverage, 0) + ' = ' +
+        formatNumber(notional, 2) + 'U';
+
+    if (notional >= minNotional) {
+        return { ok: true, message: base + '，可开仓' };
+    }
+
+    const suggested = LEVERAGE_OPTIONS.find(item => payload.position_amount * item >= minNotional);
+    if (suggested) {
+        return {
+            ok: false,
+            message: base + '，实盘可能无法开仓；建议至少 x' + suggested + '，或提高逐仓金额/换交易对',
+        };
+    }
+    return {
+        ok: false,
+        message: base + '，实盘可能无法开仓；当前逐仓金额过小，x150 也不够最小名义仓位',
+    };
 }
 
 
@@ -489,6 +553,7 @@ function applyOptimizationCandidate(index) {
     document.getElementById('take-profit-amount').value = item.take_profit_amount;
     document.getElementById('stop-loss-amount').value = item.stop_loss_amount;
     updateStrategyDescription();
+    updateOrderCheck();
 
     const status = document.getElementById('status');
     status.textContent = '已套用第 ' + item.rank + ' 名策略参数';
@@ -549,11 +614,10 @@ function formatApiError(data) {
 
 function showError(msg) {
     const errorMsg = document.getElementById('error-msg');
-    const results = document.getElementById('results');
     const status = document.getElementById('status');
 
     errorMsg.textContent = '❌ ' + msg;
     errorMsg.classList.remove('hidden');
-    results.classList.remove('hidden');
     status.textContent = '回测失败';
+    errorMsg.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
