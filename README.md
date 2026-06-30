@@ -69,7 +69,7 @@ python -m src.data.fetcher --symbol BTC/USDT --timeframe 1h --days 365
 pytest
 ```
 
-当前测试目录还没有实际测试用例，后续新增核心逻辑时需要补上。
+测试使用本地构造的数据，不依赖网络。
 
 ## 安全说明
 
