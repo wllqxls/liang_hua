@@ -17,7 +17,7 @@ class BacktestRequest(BaseModel):
     cash: float = Field(default=1_000, ge=10, description="初始资金")
     position_amount: float = Field(default=3.3, ge=0.1, description="单笔逐仓保证金")
     leverage: float = Field(default=5, ge=1, le=150, description="杠杆倍数")
-    take_profit_amount: float = Field(default=0, ge=0, description="止盈金额")
+    take_profit_amount: float = Field(default=1, ge=0, description="止盈金额")
     stop_loss_amount: float = Field(default=2, ge=0, description="止损金额")
     maker_fee: float = Field(default=0.0002, ge=0, le=0.1, description="Maker 手续费率")
     taker_fee: float = Field(default=0.0005, ge=0, le=0.1, description="Taker 手续费率")

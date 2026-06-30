@@ -181,6 +181,22 @@ header h1 {
     cursor: not-allowed;
 }
 
+.btn-mini {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.btn-mini:hover {
+    opacity: 0.85;
+}
+
 .status-text {
     margin-left: 12px;
     color: var(--text-secondary);

@@ -74,6 +74,8 @@ OPTIMIZATION_STRATEGIES = {
 
 TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
 
+LEVERAGE_OPTIONS = [1, 2, 3, 5, 10, 20, 50, 100, 125, 150]
+
 SYMBOLS = [
     "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT",
     "XRP/USDT", "ADA/USDT", "DOGE/USDT", "AVAX/USDT",
@@ -152,8 +154,14 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
         return OptimizationResponse(success=False, candidates=[], error="单笔逐仓金额不能大于初始资金")
 
     lookbacks = _nearby_ints(req.lookback, [0.5, 1, 2], min_value=2, max_value=500)
-    leverages = _nearby_numbers(req.leverage, [0.5, 1, 2], min_value=1, max_value=150)
-    take_profits = _nearby_numbers(req.take_profit_amount or req.position_amount, [0, 0.5, 1], min_value=0, max_value=req.position_amount * req.leverage)
+    leverages = _nearby_leverages(req.leverage)
+    take_profit_base = req.take_profit_amount if req.take_profit_amount > 0 else req.position_amount * 0.5
+    take_profits = _nearby_numbers(
+        take_profit_base,
+        [0.75, 1, 1.5],
+        min_value=0.1,
+        max_value=req.position_amount * req.leverage,
+    )
     stop_losses = _nearby_numbers(req.stop_loss_amount, [0.5, 1, 1.5], min_value=0.1, max_value=req.position_amount)
 
     engine = BacktestEngine(data_dir="./data")
@@ -187,7 +195,12 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
                         total_return_pct = _finite_number(result.total_return_pct)
                         max_drawdown_pct = _finite_number(result.max_drawdown_pct)
                         win_rate_pct = _finite_number(result.win_rate_pct)
-                        score = total_return_pct + max_drawdown_pct * 0.5 + win_rate_pct * 0.05
+                        score = _optimization_score(
+                            total_return_pct=total_return_pct,
+                            max_drawdown_pct=max_drawdown_pct,
+                            win_rate_pct=win_rate_pct,
+                            num_trades=result.num_trades,
+                        )
                         rankless.append({
                             "strategy": strategy_name,
                             "strategy_label": strategy_info["label"],
@@ -307,7 +320,36 @@ def _nearby_numbers(value: float, factors: list[float], min_value: float, max_va
     return sorted(values)
 
 
+def _nearby_leverages(value: float) -> list[float]:
+    targets = [min(max(value * factor, 1), 150) for factor in [0.5, 1, 2]]
+    selected = {
+        min(LEVERAGE_OPTIONS, key=lambda option: abs(option - target))
+        for target in targets
+    }
+    return [float(item) for item in sorted(selected)]
+
+
 def _finite_number(value: float | None) -> float:
     if value is None or not math.isfinite(value):
         return 0.0
     return float(value)
+
+
+def _optimization_score(
+    total_return_pct: float,
+    max_drawdown_pct: float,
+    win_rate_pct: float,
+    num_trades: int,
+) -> float:
+    """给自动交易候选打稳定性分，避免低胜率单次暴利排太靠前。"""
+    low_win_penalty = max(45 - win_rate_pct, 0) * 2
+    few_trades_penalty = max(5 - num_trades, 0) * 2
+    trade_bonus = min(num_trades, 30) * 0.1
+    return (
+        total_return_pct
+        + max_drawdown_pct
+        + win_rate_pct * 0.2
+        + trade_bonus
+        - low_win_penalty
+        - few_trades_penalty
+    )

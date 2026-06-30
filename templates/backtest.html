@@ -72,7 +72,7 @@
                 </div>
                 <div class="form-group">
                     <label for="take-profit-amount">止盈金额 (USDT)</label>
-                    <input type="number" id="take-profit-amount" value="0" min="0" step="0.1">
+                    <input type="number" id="take-profit-amount" value="1" min="0" step="0.1">
                 </div>
                 <div class="form-group">
                     <label for="stop-loss-amount">止损金额 (USDT)</label>
@@ -209,11 +209,12 @@
                             <th>回撤%</th>
                             <th>胜率%</th>
                             <th>交易</th>
-                            <th>评分</th>
+                            <th>稳定评分</th>
+                            <th>操作</th>
                         </tr>
                     </thead>
                     <tbody id="optimization-tbody">
-                        <tr><td colspan="11" class="empty-cell">尚未搜索</td></tr>
+                        <tr><td colspan="12" class="empty-cell">尚未搜索</td></tr>
                     </tbody>
                 </table>
             </div>

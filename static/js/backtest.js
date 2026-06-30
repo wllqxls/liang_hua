@@ -4,6 +4,7 @@
 
 let equityChart = null;
 let chartData = null;
+let optimizationCandidates = [];
 
 window.addEventListener('DOMContentLoaded', () => {
     updateStrategyDescription();
@@ -118,7 +119,7 @@ function collectBacktestPayload() {
         cash: numberValue('cash', 1000),
         position_amount: numberValue('position-amount', 3.3),
         leverage: numberValue('leverage', 5),
-        take_profit_amount: numberValue('take-profit-amount', 0),
+        take_profit_amount: numberValue('take-profit-amount', 1),
         stop_loss_amount: numberValue('stop-loss-amount', 2),
         maker_fee: numberValue('maker-fee', 0.0002),
         taker_fee: numberValue('taker-fee', 0.0005),
@@ -435,14 +436,15 @@ function renderTradesTable(trades) {
 function renderOptimizationTable(candidates) {
     const tbody = document.getElementById('optimization-tbody');
     if (!tbody) return;
+    optimizationCandidates = candidates || [];
     tbody.innerHTML = '';
 
     if (!candidates || candidates.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="11" class="empty-cell">尚未搜索</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="12" class="empty-cell">尚未搜索</td></tr>';
         return;
     }
 
-    for (const item of candidates) {
+    for (const [index, item] of candidates.entries()) {
         const row = document.createElement('tr');
         const returnClass = item.total_return_pct >= 0 ? 'positive' : 'negative';
         const drawdownClass = item.max_drawdown_pct >= 0 ? 'positive' : 'negative';
@@ -457,9 +459,27 @@ function renderOptimizationTable(candidates) {
             '<td class="' + drawdownClass + '">' + formatNumber(item.max_drawdown_pct, 2) + '</td>' +
             '<td>' + formatNumber(item.win_rate_pct, 2) + '</td>' +
             '<td>' + item.num_trades + '</td>' +
-            '<td>' + formatNumber(item.score, 2) + '</td>';
+            '<td>' + formatNumber(item.score, 2) + '</td>' +
+            '<td><button class="btn-mini" onclick="applyOptimizationCandidate(' + index + ')">套用</button></td>';
         tbody.appendChild(row);
     }
+}
+
+
+function applyOptimizationCandidate(index) {
+    const item = optimizationCandidates[index];
+    if (!item) return;
+
+    document.getElementById('strategy').value = item.strategy;
+    document.getElementById('lookback').value = item.lookback;
+    document.getElementById('leverage').value = String(item.leverage);
+    document.getElementById('take-profit-amount').value = item.take_profit_amount;
+    document.getElementById('stop-loss-amount').value = item.stop_loss_amount;
+    updateStrategyDescription();
+
+    const status = document.getElementById('status');
+    status.textContent = '已套用第 ' + item.rank + ' 名策略参数';
+    document.querySelector('.panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 

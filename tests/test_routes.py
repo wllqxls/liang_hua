@@ -198,6 +198,10 @@ def test_optimize_api_returns_ranked_candidates(monkeypatch: Any) -> None:
     assert "strategy" in payload["candidates"][0]
     assert "strategy_label" in payload["candidates"][0]
     assert calls[0]["slippage_rate"] == 0.0002
+    assert all(candidate["take_profit_amount"] > 0 for candidate in payload["candidates"])
+    assert all(candidate["leverage"] in routes.LEVERAGE_OPTIONS for candidate in payload["candidates"])
+    assert all(call["take_profit_amount"] > 0 for call in calls)
+    assert all(call["leverage"] in routes.LEVERAGE_OPTIONS for call in calls)
     strategy_classes = {call["strategy_class"].__name__ for call in calls}
     assert strategy_classes == {"SRBreakout", "MovingAverageCross", "RSIReversion"}
 
