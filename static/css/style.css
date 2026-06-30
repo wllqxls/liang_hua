@@ -68,6 +68,22 @@ header h1 {
     border-bottom: 1px solid var(--border);
 }
 
+.panel-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.panel-title-row h2 {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
 .panel h3 {
     font-size: 16px;
     font-weight: 600;
@@ -92,6 +108,10 @@ header h1 {
     font-size: 13px;
     color: var(--text-secondary);
     font-weight: 500;
+}
+
+.form-group.compact {
+    width: 140px;
 }
 
 .form-group select,
@@ -129,6 +149,28 @@ header h1 {
 }
 
 .btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-secondary {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.2s, color 0.2s;
+}
+
+.btn-secondary:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.btn-secondary:disabled {
     opacity: 0.5;
     cursor: not-allowed;
 }
@@ -219,6 +261,23 @@ td:first-child, th:first-child { text-align: left; }
 
 td.positive { color: var(--green); }
 td.negative { color: var(--red); }
+
+.data-actions {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.data-table-container {
+    max-height: 300px;
+}
+
+.empty-cell {
+    color: var(--text-secondary);
+    text-align: center !important;
+}
 
 /* Error */
 .error-msg {

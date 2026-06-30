@@ -5,6 +5,10 @@
 let equityChart = null;
 let chartData = null;
 
+window.addEventListener('DOMContentLoaded', () => {
+    loadDataStatus();
+});
+
 // ============================================================
 // 回测
 // ============================================================
@@ -54,6 +58,93 @@ async function runBacktest() {
     } finally {
         btn.disabled = false;
         btn.textContent = '▶ 开始回测';
+    }
+}
+
+
+// ============================================================
+// 数据管理
+// ============================================================
+
+async function loadDataStatus(successMessage) {
+    const statusText = document.getElementById('data-status-text');
+    const refreshBtn = document.getElementById('refresh-data-btn');
+
+    refreshBtn.disabled = true;
+    statusText.innerHTML = '<span class="spinner"></span>正在读取数据状态...';
+
+    try {
+        const resp = await fetch('/api/data-status');
+        const data = await resp.json();
+        renderDataStatusTable(data);
+        statusText.textContent = successMessage || '数据状态已更新';
+    } catch (err) {
+        statusText.textContent = '数据状态读取失败: ' + err.message;
+        renderDataStatusTable([]);
+    } finally {
+        refreshBtn.disabled = false;
+    }
+}
+
+
+async function fetchSelectedData() {
+    const btn = document.getElementById('fetch-data-btn');
+    const statusText = document.getElementById('data-status-text');
+    const payload = {
+        symbol: document.getElementById('symbol').value,
+        timeframe: document.getElementById('timeframe').value,
+        days: parseInt(document.getElementById('fetch-days').value) || 365,
+    };
+
+    btn.disabled = true;
+    statusText.innerHTML = '<span class="spinner"></span>正在拉取 ' + payload.symbol + ' ' + payload.timeframe + '...';
+
+    try {
+        const resp = await fetch('/api/fetch-data', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+
+        if (!data.success) {
+            statusText.textContent = data.error || '数据拉取失败';
+            return;
+        }
+
+        const rows = data.rows == null ? '--' : data.rows.toLocaleString();
+        await loadDataStatus('已保存 ' + data.symbol + ' ' + data.timeframe + '，共 ' + rows + ' 行');
+    } catch (err) {
+        statusText.textContent = '数据拉取失败: ' + err.message;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+
+function renderDataStatusTable(items) {
+    const tbody = document.getElementById('data-status-tbody');
+    tbody.innerHTML = '';
+
+    if (!items || items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-cell">暂无数据状态</td></tr>';
+        return;
+    }
+
+    for (const item of items) {
+        const row = document.createElement('tr');
+        const statusClass = item.exists ? 'positive' : 'negative';
+        const statusText = item.exists ? '已存在' : '缺失';
+        const rows = item.rows == null ? '--' : item.rows.toLocaleString();
+        const size = item.file_size_kb == null ? '--' : item.file_size_kb.toFixed(1) + ' KB';
+
+        row.innerHTML =
+            '<td>' + item.symbol + '</td>' +
+            '<td>' + item.timeframe + '</td>' +
+            '<td class="' + statusClass + '">' + statusText + '</td>' +
+            '<td>' + rows + '</td>' +
+            '<td>' + size + '</td>';
+        tbody.appendChild(row);
     }
 }
 

@@ -5,15 +5,27 @@ FastAPI 路由：回测 API 和页面渲染。
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import ccxt
+import pandas as pd
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from src.backtest.engine import BacktestEngine
+from src.data.fetcher import DataFetcher
 from src.strategies.sr_breakout import SRBreakout
-from src.web.schemas import BacktestRequest, BacktestResponse, DataStatus, EquityPoint, TradeItem
+from src.web.schemas import (
+    BacktestRequest,
+    BacktestResponse,
+    DataFetchRequest,
+    DataFetchResponse,
+    DataStatus,
+    EquityPoint,
+    TradeItem,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,27 +104,79 @@ async def data_status() -> list[DataStatus]:
     data_dir = Path("./data")
     results: list[DataStatus] = []
 
-    import pandas as pd
-
     for symbol in SYMBOLS[:4]:
         for tf in ["1h", "4h", "1d"]:
-            safe_sym = symbol.replace("/", "_")
-            filepath = data_dir / f"{safe_sym}_{tf}.csv"
-            exists = filepath.exists()
-            rows = None
-            size = None
-            if exists:
-                try:
-                    df = pd.read_csv(filepath)
-                    rows = len(df)
-                    size = filepath.stat().st_size / 1024
-                except Exception:
-                    pass
-            results.append(DataStatus(
-                symbol=symbol, timeframe=tf, exists=exists,
-                rows=rows, file_size_kb=round(size, 1) if size else None,
-            ))
+            results.append(_inspect_data_file(data_dir, symbol, tf))
     return results
+
+
+@router.post("/api/fetch-data", response_model=DataFetchResponse)
+async def fetch_data(req: DataFetchRequest) -> DataFetchResponse:
+    """拉取历史 K 线数据并保存到本地 CSV。"""
+    if req.symbol not in SYMBOLS:
+        return _fetch_error_response(req, f"暂不支持的交易对: {req.symbol}")
+    if req.timeframe not in TIMEFRAMES:
+        return _fetch_error_response(req, f"暂不支持的 K 线周期: {req.timeframe}")
+
+    data_dir = Path("./data")
+    since = datetime.now(timezone.utc) - timedelta(days=req.days)
+
+    try:
+        DataFetcher().fetch_and_save(
+            symbol=req.symbol,
+            timeframe=req.timeframe,
+            since=since,
+            data_dir=str(data_dir),
+        )
+        status = _inspect_data_file(data_dir, req.symbol, req.timeframe)
+        return DataFetchResponse(
+            success=True,
+            symbol=req.symbol,
+            timeframe=req.timeframe,
+            rows=status.rows,
+            file_size_kb=status.file_size_kb,
+        )
+    except (ccxt.BaseError, OSError, ValueError) as e:
+        logger.exception("数据拉取失败")
+        return _fetch_error_response(
+            req,
+            f"数据拉取失败: {e}。请检查网络、代理或交易所接口状态。",
+        )
+
+
+def _inspect_data_file(data_dir: Path, symbol: str, timeframe: str) -> DataStatus:
+    safe_sym = symbol.replace("/", "_")
+    filepath = data_dir / f"{safe_sym}_{timeframe}.csv"
+    exists = filepath.exists()
+    rows = None
+    size = None
+
+    if exists:
+        try:
+            df = pd.read_csv(filepath)
+            rows = len(df)
+            size = filepath.stat().st_size / 1024
+        except (OSError, pd.errors.ParserError):
+            logger.warning("无法读取数据文件: %s", filepath)
+
+    return DataStatus(
+        symbol=symbol,
+        timeframe=timeframe,
+        exists=exists,
+        rows=rows,
+        file_size_kb=round(size, 1) if size else None,
+    )
+
+
+def _fetch_error_response(req: DataFetchRequest, msg: str) -> DataFetchResponse:
+    return DataFetchResponse(
+        success=False,
+        symbol=req.symbol,
+        timeframe=req.timeframe,
+        rows=None,
+        file_size_kb=None,
+        error=msg,
+    )
 
 
 def _error_response(msg: str) -> BacktestResponse:

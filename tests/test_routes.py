@@ -1,7 +1,9 @@
 ﻿from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+import pandas as pd
 from fastapi.testclient import TestClient
 
 from main import app
@@ -52,3 +54,88 @@ def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
     assert payload["success"] is True
     assert payload["total_return_pct"] == 12.5
     assert payload["equity_curve"][0]["equity"] == 100_000.0
+
+
+def test_data_status_api_reports_local_csv(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.chdir(tmp_path)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    pd.DataFrame(
+        {
+            "timestamp": ["2024-01-01T00:00:00+00:00"],
+            "Open": [1.0],
+            "High": [2.0],
+            "Low": [0.5],
+            "Close": [1.5],
+            "Volume": [10.0],
+        }
+    ).to_csv(data_dir / "BTC_USDT_1h.csv", index=False)
+
+    client = TestClient(app)
+    response = client.get("/api/data-status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    btc_1h = next(item for item in payload if item["symbol"] == "BTC/USDT" and item["timeframe"] == "1h")
+    assert btc_1h["exists"] is True
+    assert btc_1h["rows"] == 1
+
+
+def test_fetch_data_api_saves_csv(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    class FakeFetcher:
+        def fetch_and_save(self, symbol: str, timeframe: str, since: object, data_dir: str) -> Path:
+            path = Path(data_dir) / f"{symbol.replace('/', '_')}_{timeframe}.csv"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(
+                {
+                    "timestamp": ["2024-01-01T00:00:00+00:00", "2024-01-01T01:00:00+00:00"],
+                    "Open": [1.0, 1.1],
+                    "High": [2.0, 2.1],
+                    "Low": [0.5, 0.6],
+                    "Close": [1.5, 1.6],
+                    "Volume": [10.0, 11.0],
+                }
+            ).to_csv(path, index=False)
+            return path
+
+    monkeypatch.setattr(routes, "DataFetcher", FakeFetcher)
+    client = TestClient(app)
+
+    response = client.post("/api/fetch-data", json={"symbol": "BTC/USDT", "timeframe": "1h", "days": 30})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["rows"] == 2
+    assert (tmp_path / "data" / "BTC_USDT_1h.csv").exists()
+
+
+def test_fetch_data_api_rejects_unsupported_symbol() -> None:
+    client = TestClient(app)
+
+    response = client.post("/api/fetch-data", json={"symbol": "NOT/USDT", "timeframe": "1h", "days": 30})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is False
+    assert "暂不支持" in payload["error"]
+
+
+def test_fetch_data_api_returns_fetch_error(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    class FailingFetcher:
+        def fetch_and_save(self, symbol: str, timeframe: str, since: object, data_dir: str) -> Path:
+            raise OSError("network unavailable")
+
+    monkeypatch.setattr(routes, "DataFetcher", FailingFetcher)
+    client = TestClient(app)
+
+    response = client.post("/api/fetch-data", json={"symbol": "BTC/USDT", "timeframe": "1h", "days": 30})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is False
+    assert "数据拉取失败" in payload["error"]

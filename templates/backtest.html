@@ -61,6 +61,38 @@
             <span id="status" class="status-text"></span>
         </section>
 
+        <!-- 数据面板 -->
+        <section class="panel">
+            <div class="panel-title-row">
+                <h2>本地数据</h2>
+                <button id="refresh-data-btn" class="btn-secondary" onclick="loadDataStatus()">刷新</button>
+            </div>
+            <div class="data-actions">
+                <div class="form-group compact">
+                    <label for="fetch-days">拉取天数</label>
+                    <input type="number" id="fetch-days" value="365" min="1" max="3650">
+                </div>
+                <button id="fetch-data-btn" class="btn-secondary" onclick="fetchSelectedData()">拉取当前交易对数据</button>
+                <span id="data-status-text" class="status-text"></span>
+            </div>
+            <div class="table-container data-table-container">
+                <table id="data-status-table">
+                    <thead>
+                        <tr>
+                            <th>交易对</th>
+                            <th>K 线周期</th>
+                            <th>状态</th>
+                            <th>行数</th>
+                            <th>大小</th>
+                        </tr>
+                    </thead>
+                    <tbody id="data-status-tbody">
+                        <tr><td colspan="5" class="empty-cell">正在读取...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
         <!-- 结果面板 -->
         <section id="results" class="panel hidden">
             <h2>回测结果</h2>

@@ -18,6 +18,14 @@ class BacktestRequest(BaseModel):
     commission: float = Field(default=0.001, ge=0, le=0.1, description="手续费率")
 
 
+class DataFetchRequest(BaseModel):
+    """历史数据拉取请求参数。"""
+
+    symbol: str = Field(default="BTC/USDT", description="交易对")
+    timeframe: str = Field(default="1h", description="K 线周期")
+    days: int = Field(default=365, ge=1, le=3650, description="拉取天数")
+
+
 class TradeItem(BaseModel):
     """单笔交易记录。"""
 
@@ -59,3 +67,14 @@ class DataStatus(BaseModel):
     exists: bool
     rows: int | None = None
     file_size_kb: float | None = None
+
+
+class DataFetchResponse(BaseModel):
+    """历史数据拉取响应。"""
+
+    success: bool = True
+    symbol: str
+    timeframe: str
+    rows: int | None = None
+    file_size_kb: float | None = None
+    error: str | None = None
