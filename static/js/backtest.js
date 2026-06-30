@@ -170,7 +170,7 @@ function getOrderCheck(payload) {
     if (suggested) {
         return {
             ok: false,
-            message: base + '，实盘可能无法开仓；建议至少 x' + suggested + '，或提高逐仓金额/换交易对',
+            message: base + '，实盘可能无法开仓；建议至少 x' + suggested + '，或提高逐仓金额/换交易对象',
         };
     }
     return {

@@ -90,6 +90,55 @@ header h1 {
     margin: 20px 0 12px;
 }
 
+.collapsible-panel {
+    padding: 0;
+}
+
+.collapsible-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 18px 24px;
+    cursor: pointer;
+    list-style: none;
+}
+
+.collapsible-summary::-webkit-details-marker {
+    display: none;
+}
+
+.collapsible-summary::after {
+    content: "展开";
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.collapsible-panel[open] .collapsible-summary {
+    border-bottom: 1px solid var(--border);
+}
+
+.collapsible-panel[open] .collapsible-summary::after {
+    content: "收起";
+}
+
+.summary-title {
+    color: var(--text);
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.summary-note {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-left: auto;
+}
+
+.collapsible-content {
+    padding: 18px 24px 24px;
+}
+
 /* Form */
 .form-grid {
     display: grid;

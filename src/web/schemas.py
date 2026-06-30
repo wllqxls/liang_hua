@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 class BacktestRequest(BaseModel):
     """回测请求参数。"""
 
-    symbol: str = Field(default="BTC/USDT", description="交易对")
+    symbol: str = Field(default="BTC/USDT", description="交易对象")
     timeframe: str = Field(default="5m", description="入场 K 线周期")
     context_timeframe: str = Field(default="15m", description="环境 K 线周期")
     strategy: str = Field(default="KeyLevelScoring", description="策略名称")
@@ -31,7 +31,7 @@ class BacktestRequest(BaseModel):
 class DataFetchRequest(BaseModel):
     """历史数据拉取请求参数。"""
 
-    symbol: str = Field(default="BTC/USDT", description="交易对")
+    symbol: str = Field(default="BTC/USDT", description="交易对象")
     timeframe: str = Field(default="1h", description="K 线周期")
     days: int = Field(default=365, ge=1, le=3650, description="拉取天数")
 

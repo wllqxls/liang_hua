@@ -248,7 +248,7 @@ async def data_status() -> list[DataStatus]:
 async def fetch_data(req: DataFetchRequest) -> DataFetchResponse:
     """拉取历史 K 线数据并保存到本地 CSV。"""
     if req.symbol not in SYMBOLS:
-        return _fetch_error_response(req, f"暂不支持的交易对: {req.symbol}")
+        return _fetch_error_response(req, f"暂不支持的交易对象: {req.symbol}")
     if req.timeframe not in TIMEFRAMES:
         return _fetch_error_response(req, f"暂不支持的 K 线周期: {req.timeframe}")
 

@@ -90,7 +90,7 @@ class DataFetcher:
         """从交易所拉取 OHLCV 数据。
 
         Args:
-            symbol: 交易对，如 BTC/USDT、ETH/USDT
+            symbol: 交易对象，如 BTC/USDT、ETH/USDT
             timeframe: K 线周期，1m/5m/15m/1h/4h/1d/1w
             since: 起始时间（UTC），None 表示最近 1 年
             limit: 拉取条数（交易所单次通常最大 1000）
@@ -207,7 +207,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
     parser = argparse.ArgumentParser(description="从交易所拉取历史 K 线数据")
-    parser.add_argument("--symbol", default="BTC/USDT", help="交易对（默认 BTC/USDT）")
+    parser.add_argument("--symbol", default="BTC/USDT", help="交易对象（默认 BTC/USDT）")
     parser.add_argument("--timeframe", default="1h", help="K 线周期（默认 1h）")
     parser.add_argument("--days", type=int, default=365, help="拉取天数（默认 365）")
     parser.add_argument("--data-dir", default="./data", help="数据存储目录")
