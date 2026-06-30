@@ -17,7 +17,12 @@
 from backtesting import Strategy
 import pandas as pd
 
-from src.strategies.risk import build_risk_prices, calculate_fractional_order_size, context_allows_side
+from src.strategies.risk import (
+    build_entry_tag,
+    build_risk_prices,
+    calculate_fractional_order_size,
+    context_allows_side,
+)
 
 
 class SRBreakout(Strategy):
@@ -59,6 +64,11 @@ class SRBreakout(Strategy):
         if price > self.resistance[-1]:
             if not context_allows_side(self.data, "long", price):
                 return
+            tag = build_entry_tag(
+                reason="收盘突破近期阻力",
+                score=3,
+                context={"price": round(float(price), 4), "resistance": round(float(self.resistance[-1]), 4)},
+            )
             take_profit, stop_loss = build_risk_prices(
                 side="long",
                 price=price,
@@ -75,12 +85,17 @@ class SRBreakout(Strategy):
                 leverage=self.leverage,
             )
             if size is None:
-                self.buy(tp=take_profit, sl=stop_loss)
+                self.buy(tp=take_profit, sl=stop_loss, tag=tag)
             else:
-                self.buy(size=size, tp=take_profit, sl=stop_loss)
+                self.buy(size=size, tp=take_profit, sl=stop_loss, tag=tag)
         elif price < self.support[-1]:
             if not context_allows_side(self.data, "short", price):
                 return
+            tag = build_entry_tag(
+                reason="收盘跌破近期支撑",
+                score=3,
+                context={"price": round(float(price), 4), "support": round(float(self.support[-1]), 4)},
+            )
             take_profit, stop_loss = build_risk_prices(
                 side="short",
                 price=price,
@@ -97,9 +112,9 @@ class SRBreakout(Strategy):
                 leverage=self.leverage,
             )
             if size is None:
-                self.sell(tp=take_profit, sl=stop_loss)
+                self.sell(tp=take_profit, sl=stop_loss, tag=tag)
             else:
-                self.sell(size=size, tp=take_profit, sl=stop_loss)
+                self.sell(size=size, tp=take_profit, sl=stop_loss, tag=tag)
 
 
 # ============================================================

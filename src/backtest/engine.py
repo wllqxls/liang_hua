@@ -106,6 +106,8 @@ class BacktestEngine:
         context_timeframe: str | None = None,
         context_lookback: int = 192,
         backtest_days: int | None = None,
+        window_start: Any | None = None,
+        window_end: Any | None = None,
         cash: float = 1_000_000,
         commission: float = 0.001,
         leverage: float = 1.0,
@@ -123,7 +125,12 @@ class BacktestEngine:
             context_path = self._data_dir / f"{safe_symbol}_{context_timeframe}.csv"
             context_df = self.load_data(context_path)
             df = _merge_context_features(df, context_df, lookback=context_lookback)
-        df = _filter_recent_days(df, backtest_days)
+        df = _filter_backtest_window(
+            df,
+            days=backtest_days,
+            start_time=window_start,
+            end_time=window_end,
+        )
 
         bt = FractionalBacktest(
             df,
@@ -176,6 +183,7 @@ class BacktestEngine:
                     margin_amount = notional / max(leverage, 1)
                     entry_time = str(t.get("EntryTime", ""))
                     exit_time = str(t.get("ExitTime", ""))
+                    entry_reason, entry_score, entry_context = _parse_entry_tag(t.get("Tag"))
                     funding_fee = _estimate_funding_fee(entry_time, exit_time, notional, funding_rate)
                     total_funding_fee += funding_fee
                     trade_list.append({
@@ -198,6 +206,9 @@ class BacktestEngine:
                         "pnl": float(t.get("PnL", 0)) - funding_fee,
                         "pnl_pct": float(t.get("ReturnPct", 0)) * 100,
                         "exit_reason": _infer_exit_reason(side, exit_price, t.get("TP"), t.get("SL")),
+                        "entry_reason": entry_reason,
+                        "entry_score": entry_score,
+                        "entry_context": entry_context,
                     })
 
         # 夏普比率
@@ -309,6 +320,29 @@ def _filter_recent_days(df: pd.DataFrame, days: int | None) -> pd.DataFrame:
     return filtered if not filtered.empty else df
 
 
+def _filter_backtest_window(
+    df: pd.DataFrame,
+    days: int | None = None,
+    start_time: Any | None = None,
+    end_time: Any | None = None,
+) -> pd.DataFrame:
+    """按指定时间段或最近 N 天裁剪回测数据。"""
+    if df.empty:
+        return df
+    if start_time is None and end_time is None:
+        return _filter_recent_days(df, days)
+
+    end = pd.to_datetime(end_time) if end_time is not None else df.index.max()
+    start = pd.to_datetime(start_time) if start_time is not None else None
+    if start is None and days is not None and days > 0:
+        start = end - pd.Timedelta(days=days)
+    if start is None:
+        start = df.index.min()
+
+    filtered = df.loc[(df.index >= start) & (df.index <= end)]
+    return filtered if not filtered.empty else df
+
+
 def _estimate_funding_fee(entry_time: str, exit_time: str, notional: float, funding_rate: float) -> float:
     if funding_rate <= 0 or notional <= 0:
         return 0.0
@@ -333,3 +367,19 @@ def _infer_exit_reason(side: str, exit_price: float, take_profit: Any, stop_loss
     if pd.notna(sl) and ((side == "long" and exit_price <= sl) or (side == "short" and exit_price >= sl)):
         return "止损/强平保护"
     return "策略平仓"
+
+
+def _parse_entry_tag(tag: Any) -> tuple[str, float, str]:
+    if not isinstance(tag, dict):
+        return (str(tag) if tag else "策略信号", 0.0, "")
+    reason = str(tag.get("reason") or "策略信号")
+    try:
+        score = float(tag.get("score") or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    context = tag.get("context")
+    if isinstance(context, dict) and context:
+        context_text = "，".join(f"{key}:{value}" for key, value in context.items())
+    else:
+        context_text = ""
+    return reason, score, context_text

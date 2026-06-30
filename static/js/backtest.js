@@ -482,7 +482,7 @@ function renderTradesTable(trades) {
     tbody.innerHTML = '';
 
     if (!trades || trades.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="12" class="empty-cell">无交易记录</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="14" class="empty-cell">无交易记录</td></tr>';
         return;
     }
 
@@ -504,6 +504,8 @@ function renderTradesTable(trades) {
             '<td>' + formatNumber(t.margin_amount, 2) + '</td>' +
             '<td>' + formatNumber(t.notional_amount, 2) + '</td>' +
             '<td>' + formatNumber(t.liquidation_price, 2) + '</td>' +
+            '<td>' + formatNumber(t.entry_score, 0) + '</td>' +
+            '<td title="' + escapeHtml(t.entry_context || '') + '">' + escapeHtml(t.entry_reason || '策略信号') + '</td>' +
             '<td>' + formatNumber(t.funding_fee, 4) + '</td>' +
             '<td class="' + pnlClass + '">' + t.pnl.toFixed(2) + '</td>' +
             '<td class="' + pnlPctClass + '">' + t.pnl_pct.toFixed(2) + '%</td>' +
@@ -530,15 +532,18 @@ function renderOptimizationTable(candidates, summary) {
         const text = evaluated > 0
             ? '没有通过严格过滤的组合，已过滤 ' + filtered + ' / ' + evaluated + ' 个'
             : '尚未搜索';
-        tbody.innerHTML = '<tr><td colspan="16" class="empty-cell">' + text + '</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="20" class="empty-cell">' + text + '</td></tr>';
         return;
     }
 
     for (const [index, item] of candidates.entries()) {
         const row = document.createElement('tr');
         const returnClass = item.total_return_pct >= 0 ? 'positive' : 'negative';
+        const outReturnClass = item.out_sample_return_pct >= 0 ? 'positive' : 'negative';
+        const randomWorstClass = item.random_worst_return_pct >= 0 ? 'positive' : 'negative';
         const drawdownClass = item.max_drawdown_pct >= 0 ? 'positive' : 'negative';
         const badge = qualityBadge(item.quality_label, item.quality_grade, item.quality_reasons);
+        const robustness = robustnessBadge(item.robustness_label, item.robustness_score);
         row.innerHTML =
             '<td>' + item.rank + '</td>' +
             '<td>' + (item.strategy_label || item.strategy || '--') + '</td>' +
@@ -549,6 +554,10 @@ function renderOptimizationTable(candidates, summary) {
             '<td>' + formatNumber(item.take_profit_amount, 2) + '</td>' +
             '<td>' + formatNumber(item.stop_loss_amount, 2) + '</td>' +
             '<td class="' + returnClass + '">' + formatNumber(item.total_return_pct, 2) + '</td>' +
+            '<td class="' + outReturnClass + '">' + formatNumber(item.out_sample_return_pct, 2) + '</td>' +
+            '<td>' + formatNumber(item.random_pass_rate_pct, 0) + '%</td>' +
+            '<td class="' + randomWorstClass + '">' + formatNumber(item.random_worst_return_pct, 2) + '</td>' +
+            '<td>' + robustness + '</td>' +
             '<td class="' + drawdownClass + '">' + formatNumber(item.max_drawdown_pct, 2) + '</td>' +
             '<td>' + formatNumber(item.win_rate_pct, 2) + '</td>' +
             '<td>' + formatNumber(item.profit_factor, 2) + '</td>' +
@@ -631,6 +640,15 @@ function qualityBadge(label, grade, reasons) {
     const title = Array.isArray(reasons) ? escapeHtml(reasons.join('；')) : '';
     return '<span class="quality-badge ' + escapeHtml(grade || 'watch') + '" title="' + title + '">' +
         safeLabel + '</span>';
+}
+
+
+function robustnessBadge(label, score) {
+    let grade = 'reject';
+    if (label === '稳健') grade = 'recommend';
+    else if (label === '观察') grade = 'watch';
+    return '<span class="quality-badge ' + grade + '" title="稳健分 ' + formatNumber(score, 0) + '">' +
+        escapeHtml(label || '未验证') + '</span>';
 }
 
 

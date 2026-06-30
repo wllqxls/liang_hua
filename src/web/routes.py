@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import logging
 import math
+import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from pathlib import Path
 
 import ccxt
@@ -111,6 +113,19 @@ class QualityReport:
     passes_filter: bool
 
 
+@dataclass
+class ValidationReport:
+    """样本外和随机窗口验证结果。"""
+
+    out_sample_return_pct: float
+    out_sample_quality_score: float
+    random_pass_rate_pct: float
+    random_avg_return_pct: float
+    random_worst_return_pct: float
+    robustness_score: float
+    robustness_label: str
+
+
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
     """回测主页面。"""
@@ -211,6 +226,14 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
     stop_losses = _nearby_numbers(req.stop_loss_amount, [0.75, 1], min_value=0.1, max_value=req.position_amount)
 
     engine = BacktestEngine(data_dir="./data")
+    try:
+        data_start, data_end = _load_data_bounds(engine, req.symbol, req.timeframe)
+    except Exception as e:
+        logger.exception("参数搜索读取数据范围失败")
+        return OptimizationResponse(success=False, candidates=[], error=str(e))
+    in_start, in_end, out_start, out_end = _split_validation_bounds(data_start, data_end, req.backtest_days)
+    in_sample_days = max(1, math.ceil((in_end - in_start).total_seconds() / 86400))
+    out_sample_days = max(1, math.ceil((out_end - out_start).total_seconds() / 86400))
     candidates: list[OptimizationCandidate] = []
     rankless: list[dict] = []
     evaluated_count = 0
@@ -229,7 +252,8 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
                                     timeframe=req.timeframe,
                                     context_timeframe=req.context_timeframe,
                                     context_lookback=context_lookback,
-                                    backtest_days=req.backtest_days,
+                                    window_start=in_start,
+                                    window_end=in_end,
                                     lookback=entry_lookback,
                                     cash=req.cash,
                                     commission=req.taker_fee,
@@ -252,7 +276,7 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
                                 result=result,
                                 take_profit_amount=take_profit_amount,
                                 stop_loss_amount=stop_loss_amount,
-                                backtest_days=req.backtest_days,
+                                backtest_days=in_sample_days,
                             )
                             if not quality.passes_filter:
                                 filtered_count += 1
@@ -278,6 +302,13 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
                                 "total_return_pct": total_return_pct,
                                 "max_drawdown_pct": max_drawdown_pct,
                                 "win_rate_pct": win_rate_pct,
+                                "out_sample_return_pct": 0.0,
+                                "out_sample_quality_score": 0.0,
+                                "random_pass_rate_pct": 0.0,
+                                "random_avg_return_pct": 0.0,
+                                "random_worst_return_pct": 0.0,
+                                "robustness_score": 0.0,
+                                "robustness_label": "未验证",
                                 "num_trades": result.num_trades,
                                 "quality_score": quality.score,
                                 "quality_grade": quality.grade,
@@ -289,7 +320,28 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
                                 "score": score,
                             })
 
-    ranked = sorted(rankless, key=lambda item: item["score"], reverse=True)[:10]
+    validation_pool = sorted(rankless, key=lambda item: item["score"], reverse=True)[:20]
+    for item in validation_pool:
+        validation = _validate_candidate(
+            engine=engine,
+            req=req,
+            item=item,
+            out_start=out_start,
+            out_end=out_end,
+            out_sample_days=out_sample_days,
+            data_start=data_start,
+            data_end=data_end,
+        )
+        item["out_sample_return_pct"] = validation.out_sample_return_pct
+        item["out_sample_quality_score"] = validation.out_sample_quality_score
+        item["random_pass_rate_pct"] = validation.random_pass_rate_pct
+        item["random_avg_return_pct"] = validation.random_avg_return_pct
+        item["random_worst_return_pct"] = validation.random_worst_return_pct
+        item["robustness_score"] = validation.robustness_score
+        item["robustness_label"] = validation.robustness_label
+        item["score"] += validation.robustness_score * 0.8
+
+    ranked = sorted(validation_pool, key=lambda item: item["score"], reverse=True)[:10]
     for index, item in enumerate(ranked, start=1):
         candidates.append(OptimizationCandidate(rank=index, **item))
     return OptimizationResponse(
@@ -415,6 +467,181 @@ def _nearby_options(value: int, options: list[int]) -> list[int]:
     start = max(index - 1, 0)
     end = min(index + 2, len(options))
     return options[start:end]
+
+
+def _load_data_bounds(engine: BacktestEngine, symbol: str, timeframe: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    safe_symbol = symbol.replace("/", "_")
+    filepath = Path("./data") / f"{safe_symbol}_{timeframe}.csv"
+    df = engine.load_data(filepath)
+    if df.empty:
+        raise ValueError("本地数据为空，无法做稳健性验证")
+    return pd.Timestamp(df.index.min()), pd.Timestamp(df.index.max())
+
+
+def _split_validation_bounds(
+    data_start: pd.Timestamp,
+    data_end: pd.Timestamp,
+    backtest_days: int,
+) -> tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]:
+    end = data_end
+    requested_start = end - pd.Timedelta(days=backtest_days)
+    start = max(data_start, requested_start)
+    duration = end - start
+    if duration <= pd.Timedelta(hours=2):
+        return start, end, start, end
+    split = start + duration * 0.7
+    return start, split, split, end
+
+
+def _validate_candidate(
+    engine: BacktestEngine,
+    req: BacktestRequest,
+    item: dict,
+    out_start: pd.Timestamp,
+    out_end: pd.Timestamp,
+    out_sample_days: int,
+    data_start: pd.Timestamp,
+    data_end: pd.Timestamp,
+) -> ValidationReport:
+    try:
+        out_result = _run_candidate_window(engine, req, item, out_start, out_end)
+        out_quality = _assess_backtest_quality(
+            result=out_result,
+            take_profit_amount=item["take_profit_amount"],
+            stop_loss_amount=item["stop_loss_amount"],
+            backtest_days=out_sample_days,
+        )
+        out_return = _finite_number(out_result.total_return_pct)
+        out_quality_score = out_quality.score
+    except Exception:
+        logger.exception("样本外验证失败")
+        out_return = 0.0
+        out_quality_score = 0.0
+
+    random_returns: list[float] = []
+    random_passes = 0
+    windows = _random_validation_windows(data_start, data_end, req.backtest_days, item)
+    for start, end in windows:
+        try:
+            random_result = _run_candidate_window(engine, req, item, start, end)
+            random_quality = _assess_backtest_quality(
+                result=random_result,
+                take_profit_amount=item["take_profit_amount"],
+                stop_loss_amount=item["stop_loss_amount"],
+                backtest_days=req.backtest_days,
+            )
+        except Exception:
+            logger.exception("随机窗口验证失败")
+            continue
+        random_return = _finite_number(random_result.total_return_pct)
+        random_returns.append(random_return)
+        if random_return > 0 and random_quality.passes_filter:
+            random_passes += 1
+
+    random_avg_return = sum(random_returns) / len(random_returns) if random_returns else 0.0
+    random_worst_return = min(random_returns) if random_returns else 0.0
+    random_pass_rate = (random_passes / len(windows) * 100) if windows else 0.0
+    robustness_score = _robustness_score(
+        out_return=out_return,
+        out_quality_score=out_quality_score,
+        random_pass_rate=random_pass_rate,
+        random_avg_return=random_avg_return,
+        random_worst_return=random_worst_return,
+    )
+    if robustness_score >= 70:
+        robustness_label = "稳健"
+    elif robustness_score >= 45:
+        robustness_label = "观察"
+    else:
+        robustness_label = "不稳"
+    return ValidationReport(
+        out_sample_return_pct=round(out_return, 2),
+        out_sample_quality_score=round(out_quality_score, 2),
+        random_pass_rate_pct=round(random_pass_rate, 2),
+        random_avg_return_pct=round(random_avg_return, 2),
+        random_worst_return_pct=round(random_worst_return, 2),
+        robustness_score=round(robustness_score, 2),
+        robustness_label=robustness_label,
+    )
+
+
+def _run_candidate_window(
+    engine: BacktestEngine,
+    req: BacktestRequest,
+    item: dict,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> object:
+    strategy_info = OPTIMIZATION_STRATEGIES[item["strategy"]]
+    return engine.run(
+        strategy_class=strategy_info["class"],
+        symbol=req.symbol,
+        timeframe=req.timeframe,
+        context_timeframe=req.context_timeframe,
+        context_lookback=item["context_lookback"],
+        window_start=start,
+        window_end=end,
+        lookback=item["entry_lookback"],
+        cash=req.cash,
+        commission=req.taker_fee,
+        leverage=item["leverage"],
+        slippage_rate=req.slippage_rate,
+        funding_rate=req.funding_rate,
+        maintenance_margin_rate=req.maintenance_margin_rate,
+        position_amount=req.position_amount,
+        take_profit_amount=item["take_profit_amount"],
+        stop_loss_amount=item["stop_loss_amount"],
+    )
+
+
+def _random_validation_windows(
+    data_start: pd.Timestamp,
+    data_end: pd.Timestamp,
+    days: int,
+    item: dict,
+    count: int = 3,
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    window = pd.Timedelta(days=days)
+    if data_end - data_start <= window:
+        return [(max(data_start, data_end - window), data_end)]
+    seed_text = "|".join(
+        str(item[key])
+        for key in ["strategy", "context_lookback", "entry_lookback", "leverage", "take_profit_amount", "stop_loss_amount"]
+    )
+    seed = int(sha256(seed_text.encode("utf-8")).hexdigest()[:12], 16)
+    rng = random.Random(seed)
+    max_offset_seconds = int((data_end - data_start - window).total_seconds())
+    windows: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    seen_offsets: set[int] = set()
+    for _ in range(count * 3):
+        if len(windows) >= count:
+            break
+        offset = rng.randint(0, max_offset_seconds)
+        if offset in seen_offsets:
+            continue
+        seen_offsets.add(offset)
+        start = data_start + pd.Timedelta(seconds=offset)
+        windows.append((start, start + window))
+    return windows or [(data_end - window, data_end)]
+
+
+def _robustness_score(
+    out_return: float,
+    out_quality_score: float,
+    random_pass_rate: float,
+    random_avg_return: float,
+    random_worst_return: float,
+) -> float:
+    score = 0.0
+    score += out_quality_score * 0.45
+    score += random_pass_rate * 0.35
+    score += max(min(random_avg_return, 40), -40) * 0.35
+    score += max(min(random_worst_return, 20), -40) * 0.25
+    if out_return <= 0:
+        score -= 15
+    if random_worst_return < -10:
+        score -= 10
+    return max(min(score, 100), 0)
 
 
 def _finite_number(value: float | None) -> float:

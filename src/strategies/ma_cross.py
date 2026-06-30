@@ -11,7 +11,12 @@
 from backtesting import Strategy
 import pandas as pd
 
-from src.strategies.risk import build_risk_prices, calculate_fractional_order_size, context_allows_side
+from src.strategies.risk import (
+    build_entry_tag,
+    build_risk_prices,
+    calculate_fractional_order_size,
+    context_allows_side,
+)
 
 
 class MovingAverageCross(Strategy):
@@ -60,6 +65,15 @@ class MovingAverageCross(Strategy):
         price = self.data.Close[-1]
         if not context_allows_side(self.data, side, price):
             return
+        reason = "快线上穿慢线" if side == "long" else "快线下穿慢线"
+        tag = build_entry_tag(
+            reason=reason,
+            score=3,
+            context={
+                "fast_ma": round(float(self.fast_ma[-1]), 4),
+                "slow_ma": round(float(self.slow_ma[-1]), 4),
+            },
+        )
         take_profit, stop_loss = build_risk_prices(
             side=side,
             price=price,
@@ -77,10 +91,10 @@ class MovingAverageCross(Strategy):
         )
         if side == "short":
             if size is None:
-                self.sell(tp=take_profit, sl=stop_loss)
+                self.sell(tp=take_profit, sl=stop_loss, tag=tag)
             else:
-                self.sell(size=size, tp=take_profit, sl=stop_loss)
+                self.sell(size=size, tp=take_profit, sl=stop_loss, tag=tag)
         elif size is None:
-            self.buy(tp=take_profit, sl=stop_loss)
+            self.buy(tp=take_profit, sl=stop_loss, tag=tag)
         else:
-            self.buy(size=size, tp=take_profit, sl=stop_loss)
+            self.buy(size=size, tp=take_profit, sl=stop_loss, tag=tag)

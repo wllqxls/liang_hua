@@ -224,12 +224,15 @@ def test_optimize_api_returns_ranked_candidates(monkeypatch: Any) -> None:
     assert "strategy" in payload["candidates"][0]
     assert "strategy_label" in payload["candidates"][0]
     assert "quality_score" in payload["candidates"][0]
-    assert payload["evaluated_count"] == len(calls)
+    assert "out_sample_return_pct" in payload["candidates"][0]
+    assert "random_pass_rate_pct" in payload["candidates"][0]
+    assert "robustness_score" in payload["candidates"][0]
+    assert payload["evaluated_count"] < len(calls)
     assert payload["filtered_count"] == 0
     assert calls[0]["slippage_rate"] == 0.0002
     assert calls[0]["context_timeframe"] == "15m"
     assert calls[0]["context_lookback"] in routes.CONTEXT_LOOKBACK_OPTIONS
-    assert calls[0]["backtest_days"] == 30
+    assert calls[0]["window_start"] < calls[0]["window_end"]
     assert all(candidate["take_profit_amount"] > 0 for candidate in payload["candidates"])
     assert all(candidate["context_lookback"] in routes.CONTEXT_LOOKBACK_OPTIONS for candidate in payload["candidates"])
     assert all(candidate["entry_lookback"] in routes.ENTRY_LOOKBACK_OPTIONS for candidate in payload["candidates"])

@@ -14,7 +14,12 @@ from __future__ import annotations
 from backtesting import Strategy
 import pandas as pd
 
-from src.strategies.risk import build_risk_prices, calculate_fractional_order_size, context_allows_side
+from src.strategies.risk import (
+    build_entry_tag,
+    build_risk_prices,
+    calculate_fractional_order_size,
+    context_allows_side,
+)
 
 
 def calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, window: int) -> pd.Series:
@@ -100,13 +105,13 @@ class KeyLevelScoring(Strategy):
         if signal is None:
             return
 
-        side, _, _ = signal
+        side, score, reason = signal
         if self.position:
             if (self.position.is_long and side == "short") or (self.position.is_short and side == "long"):
                 self.position.close()
             return
 
-        self._open(side)
+        self._open(side, score, reason)
 
     def _score_signal(self) -> tuple[str, int, str] | None:
         resistance = float(self.resistance[-1])
@@ -185,10 +190,11 @@ class KeyLevelScoring(Strategy):
             return "short", short_score, short_reason or "关键位评分做空"
         return None
 
-    def _open(self, side: str) -> None:
+    def _open(self, side: str, score: int, reason: str) -> None:
         price = float(self.data.Close[-1])
         if not context_allows_side(self.data, side, price):
             return
+        tag = build_entry_tag(reason=reason, score=score, context=self._entry_context(price))
         take_profit, stop_loss = build_risk_prices(
             side=side,
             price=price,
@@ -206,10 +212,24 @@ class KeyLevelScoring(Strategy):
         )
         if side == "short":
             if size is None:
-                self.sell(tp=take_profit, sl=stop_loss)
+                self.sell(tp=take_profit, sl=stop_loss, tag=tag)
             else:
-                self.sell(size=size, tp=take_profit, sl=stop_loss)
+                self.sell(size=size, tp=take_profit, sl=stop_loss, tag=tag)
         elif size is None:
-            self.buy(tp=take_profit, sl=stop_loss)
+            self.buy(tp=take_profit, sl=stop_loss, tag=tag)
         else:
-            self.buy(size=size, tp=take_profit, sl=stop_loss)
+            self.buy(size=size, tp=take_profit, sl=stop_loss, tag=tag)
+
+    def _entry_context(self, price: float) -> dict[str, float | str]:
+        trend = "震荡"
+        if float(self.fast_ma[-1]) > float(self.slow_ma[-1]):
+            trend = "上行"
+        elif float(self.fast_ma[-1]) < float(self.slow_ma[-1]):
+            trend = "下行"
+        return {
+            "trend": trend,
+            "price": round(price, 4),
+            "support": round(float(self.support[-1]), 4),
+            "resistance": round(float(self.resistance[-1]), 4),
+            "volume_ratio": round(float(self.data.Volume[-1]) / float(self.volume_ma[-1]), 2),
+        }

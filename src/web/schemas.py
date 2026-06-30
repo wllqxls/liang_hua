@@ -55,6 +55,9 @@ class TradeItem(BaseModel):
     pnl: float
     pnl_pct: float
     exit_reason: str = "策略平仓"
+    entry_reason: str = "策略信号"
+    entry_score: float = 0
+    entry_context: str = ""
 
 
 class EquityPoint(BaseModel):
@@ -102,6 +105,13 @@ class OptimizationCandidate(BaseModel):
     total_return_pct: float
     max_drawdown_pct: float
     win_rate_pct: float
+    out_sample_return_pct: float = 0
+    out_sample_quality_score: float = 0
+    random_pass_rate_pct: float = 0
+    random_avg_return_pct: float = 0
+    random_worst_return_pct: float = 0
+    robustness_score: float = 0
+    robustness_label: str = "未验证"
     num_trades: int
     quality_score: float
     quality_grade: str

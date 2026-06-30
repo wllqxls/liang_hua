@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 
 FRACTIONAL_UNIT = 1 / 100e6
 
@@ -112,6 +114,15 @@ def context_allows_side(data: object, side: str, price: float) -> bool:
     if side == "long":
         return trend == 0 or near_support
     return trend == 0 or near_resistance
+
+
+def build_entry_tag(reason: str, score: float, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    """生成可写入交易记录的入场标签。"""
+    return {
+        "reason": reason,
+        "score": round(float(score), 2),
+        "context": context or {},
+    }
 
 
 def _latest_data_value(data: object, column: str) -> float | None:

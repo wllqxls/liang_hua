@@ -10,7 +10,12 @@ RSI 超卖反弹策略。
 from backtesting import Strategy
 import pandas as pd
 
-from src.strategies.risk import build_risk_prices, calculate_fractional_order_size, context_allows_side
+from src.strategies.risk import (
+    build_entry_tag,
+    build_risk_prices,
+    calculate_fractional_order_size,
+    context_allows_side,
+)
 
 
 def calculate_rsi(values: pd.Series, window: int) -> pd.Series:
@@ -61,6 +66,9 @@ class RSIReversion(Strategy):
         price = self.data.Close[-1]
         if not context_allows_side(self.data, side, price):
             return
+        rsi_value = float(self.rsi[-1])
+        reason = "RSI 低位反弹" if side == "long" else "RSI 高位回落"
+        tag = build_entry_tag(reason=reason, score=3, context={"rsi": round(rsi_value, 2)})
         take_profit, stop_loss = build_risk_prices(
             side=side,
             price=price,
@@ -78,10 +86,10 @@ class RSIReversion(Strategy):
         )
         if side == "short":
             if size is None:
-                self.sell(tp=take_profit, sl=stop_loss)
+                self.sell(tp=take_profit, sl=stop_loss, tag=tag)
             else:
-                self.sell(size=size, tp=take_profit, sl=stop_loss)
+                self.sell(size=size, tp=take_profit, sl=stop_loss, tag=tag)
         elif size is None:
-            self.buy(tp=take_profit, sl=stop_loss)
+            self.buy(tp=take_profit, sl=stop_loss, tag=tag)
         else:
-            self.buy(size=size, tp=take_profit, sl=stop_loss)
+            self.buy(size=size, tp=take_profit, sl=stop_loss, tag=tag)
