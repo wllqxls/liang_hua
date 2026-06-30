@@ -17,6 +17,7 @@ from fastapi.templating import Jinja2Templates
 
 from src.backtest.engine import BacktestEngine
 from src.data.fetcher import DataFetcher
+from src.strategies.key_level_scoring import KeyLevelScoring
 from src.strategies.ma_cross import MovingAverageCross
 from src.strategies.rsi_reversion import RSIReversion
 from src.strategies.sr_breakout import SRBreakout
@@ -40,6 +41,7 @@ _templates_dir = Path(__file__).parent.parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_templates_dir))
 
 STRATEGIES: dict[str, type] = {
+    "KeyLevelScoring": KeyLevelScoring,
     "SRBreakout": SRBreakout,
     "SupportResistanceBreakout": SRBreakout,
     "MovingAverageCross": MovingAverageCross,
@@ -47,6 +49,11 @@ STRATEGIES: dict[str, type] = {
 }
 
 STRATEGY_OPTIONS = [
+    {
+        "value": "KeyLevelScoring",
+        "label": "关键位评分",
+        "description": "评分策略：支撑阻力只定位关键位，结合影线、成交量、趋势判断做多、做空或不交易。",
+    },
     {
         "value": "SRBreakout",
         "label": "支撑阻力突破",

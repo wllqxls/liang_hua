@@ -83,6 +83,7 @@ def test_index_renders_chinese_strategy_names() -> None:
     response = client.get("/")
 
     assert response.status_code == 200
+    assert "关键位评分" in response.text
     assert "支撑阻力突破" in response.text
     assert "均线金叉死叉" in response.text
     assert "RSI 超卖反弹" in response.text
@@ -203,7 +204,7 @@ def test_optimize_api_returns_ranked_candidates(monkeypatch: Any) -> None:
     assert all(call["take_profit_amount"] > 0 for call in calls)
     assert all(call["leverage"] in routes.LEVERAGE_OPTIONS for call in calls)
     strategy_classes = {call["strategy_class"].__name__ for call in calls}
-    assert strategy_classes == {"SRBreakout", "MovingAverageCross", "RSIReversion"}
+    assert strategy_classes == {"KeyLevelScoring", "SRBreakout", "MovingAverageCross", "RSIReversion"}
 
 
 def test_data_status_api_reports_local_csv(tmp_path: Path, monkeypatch: Any) -> None:
