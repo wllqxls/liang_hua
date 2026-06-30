@@ -242,8 +242,9 @@ async function optimizeParams() {
             showError(data.error || formatApiError(data));
             return;
         }
-        renderOptimizationTable(data.candidates);
-        status.textContent = '✅ 参数搜索完成';
+        renderOptimizationTable(data.candidates, data);
+        status.textContent = '✅ 参数搜索完成，通过 ' + (data.candidates || []).length +
+            ' 个，过滤 ' + (data.filtered_count || 0) + ' 个';
         results.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (err) {
         showError('运行错误: ' + err.message);
@@ -359,6 +360,8 @@ function displayResults(data) {
     setMetric('metric-drawdown', data.max_drawdown_pct, '%', true);
     setMetric('metric-sharpe', data.sharpe_ratio, '', false, 2);
     setMetric('metric-trades', data.num_trades, '次', false, 0);
+    setMetric('metric-quality-score', data.quality_score, '', true, 0);
+    setTextMetric('metric-quality-label', data.quality_label, data.quality_grade);
 
     // 权益曲线图
     if (data.equity_curve && data.equity_curve.length > 0) {
@@ -510,14 +513,19 @@ function renderTradesTable(trades) {
 // 参数搜索
 // ============================================================
 
-function renderOptimizationTable(candidates) {
+function renderOptimizationTable(candidates, summary) {
     const tbody = document.getElementById('optimization-tbody');
     if (!tbody) return;
     optimizationCandidates = candidates || [];
     tbody.innerHTML = '';
 
     if (!candidates || candidates.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="12" class="empty-cell">尚未搜索</td></tr>';
+        const evaluated = summary && summary.evaluated_count ? summary.evaluated_count : 0;
+        const filtered = summary && summary.filtered_count ? summary.filtered_count : 0;
+        const text = evaluated > 0
+            ? '没有通过严格过滤的组合，已过滤 ' + filtered + ' / ' + evaluated + ' 个'
+            : '尚未搜索';
+        tbody.innerHTML = '<tr><td colspan="15" class="empty-cell">' + text + '</td></tr>';
         return;
     }
 
@@ -525,9 +533,11 @@ function renderOptimizationTable(candidates) {
         const row = document.createElement('tr');
         const returnClass = item.total_return_pct >= 0 ? 'positive' : 'negative';
         const drawdownClass = item.max_drawdown_pct >= 0 ? 'positive' : 'negative';
+        const badge = qualityBadge(item.quality_label, item.quality_grade, item.quality_reasons);
         row.innerHTML =
             '<td>' + item.rank + '</td>' +
             '<td>' + (item.strategy_label || item.strategy || '--') + '</td>' +
+            '<td>' + badge + '</td>' +
             '<td>' + item.lookback + '</td>' +
             '<td>x' + formatNumber(item.leverage, 0) + '</td>' +
             '<td>' + formatNumber(item.take_profit_amount, 2) + '</td>' +
@@ -535,8 +545,10 @@ function renderOptimizationTable(candidates) {
             '<td class="' + returnClass + '">' + formatNumber(item.total_return_pct, 2) + '</td>' +
             '<td class="' + drawdownClass + '">' + formatNumber(item.max_drawdown_pct, 2) + '</td>' +
             '<td>' + formatNumber(item.win_rate_pct, 2) + '</td>' +
+            '<td>' + formatNumber(item.profit_factor, 2) + '</td>' +
+            '<td>' + item.max_consecutive_losses + '</td>' +
             '<td>' + item.num_trades + '</td>' +
-            '<td>' + formatNumber(item.score, 2) + '</td>' +
+            '<td>' + formatNumber(item.quality_score, 0) + '</td>' +
             '<td><button class="btn-mini" onclick="applyOptimizationCandidate(' + index + ')">套用</button></td>';
         tbody.appendChild(row);
     }
@@ -594,6 +606,34 @@ function formatNumber(value, decimals) {
     const number = Number(value);
     if (!Number.isFinite(number)) return '--';
     return number.toFixed(decimals);
+}
+
+
+function setTextMetric(id, text, grade) {
+    const el = document.getElementById(id);
+    el.className = 'metric-value';
+    el.textContent = text || '--';
+    if (grade === 'recommend') el.classList.add('positive');
+    else if (grade === 'reject') el.classList.add('negative');
+    else el.classList.add('neutral');
+}
+
+
+function qualityBadge(label, grade, reasons) {
+    const safeLabel = escapeHtml(label || '--');
+    const title = Array.isArray(reasons) ? escapeHtml(reasons.join('；')) : '';
+    return '<span class="quality-badge ' + escapeHtml(grade || 'watch') + '" title="' + title + '">' +
+        safeLabel + '</span>';
+}
+
+
+function escapeHtml(value) {
+    return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
 }
 
 

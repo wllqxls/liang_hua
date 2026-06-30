@@ -168,12 +168,21 @@ def test_optimize_api_returns_ranked_candidates(monkeypatch: Any) -> None:
         score_base = kwargs["leverage"] + kwargs["lookback"] * 0.01
         return BacktestResult(
             total_return_pct=score_base,
-            win_rate_pct=40.0,
+            win_rate_pct=45.0,
             max_drawdown_pct=-2.0,
             sharpe_ratio=None,
-            num_trades=3,
+            num_trades=8,
             equity_curve=[],
-            trade_list=[],
+            trade_list=[
+                {"pnl": 1.2},
+                {"pnl": -0.4},
+                {"pnl": 1.0},
+                {"pnl": -0.3},
+                {"pnl": 0.8},
+                {"pnl": -0.2},
+                {"pnl": 0.9},
+                {"pnl": -0.2},
+            ],
         )
 
     monkeypatch.setattr(routes.BacktestEngine, "run", fake_run)
@@ -208,6 +217,9 @@ def test_optimize_api_returns_ranked_candidates(monkeypatch: Any) -> None:
     assert payload["candidates"][0]["rank"] == 1
     assert "strategy" in payload["candidates"][0]
     assert "strategy_label" in payload["candidates"][0]
+    assert "quality_score" in payload["candidates"][0]
+    assert payload["evaluated_count"] == len(calls)
+    assert payload["filtered_count"] == 0
     assert calls[0]["slippage_rate"] == 0.0002
     assert calls[0]["context_timeframe"] == "15m"
     assert calls[0]["backtest_days"] == 30
@@ -217,6 +229,54 @@ def test_optimize_api_returns_ranked_candidates(monkeypatch: Any) -> None:
     assert all(call["leverage"] in routes.LEVERAGE_OPTIONS for call in calls)
     strategy_classes = {call["strategy_class"].__name__ for call in calls}
     assert strategy_classes == {"KeyLevelScoring", "SRBreakout", "MovingAverageCross", "RSIReversion"}
+
+
+def test_optimize_api_filters_low_quality_candidates(monkeypatch: Any) -> None:
+    def fake_run(self: object, **kwargs: Any) -> BacktestResult:
+        return BacktestResult(
+            total_return_pct=80.0,
+            win_rate_pct=10.0,
+            max_drawdown_pct=-45.0,
+            sharpe_ratio=None,
+            num_trades=2,
+            equity_curve=[],
+            trade_list=[
+                {"pnl": -0.3},
+                {"pnl": 5.0},
+            ],
+        )
+
+    monkeypatch.setattr(routes.BacktestEngine, "run", fake_run)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/optimize",
+        json={
+            "symbol": "BTC/USDT",
+            "timeframe": "1h",
+            "context_timeframe": "15m",
+            "strategy": "SRBreakout",
+            "backtest_days": 30,
+            "lookback": 20,
+            "cash": 100,
+            "position_amount": 3.3,
+            "leverage": 5,
+            "take_profit_amount": 0,
+            "stop_loss_amount": 2,
+            "maker_fee": 0.0002,
+            "taker_fee": 0.0005,
+            "slippage_rate": 0.0002,
+            "funding_rate": 0.0001,
+            "maintenance_margin_rate": 0.005,
+        },
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["success"] is True
+    assert payload["candidates"] == []
+    assert payload["evaluated_count"] > 0
+    assert payload["filtered_count"] == payload["evaluated_count"]
 
 
 def test_data_status_api_reports_local_csv(tmp_path: Path, monkeypatch: Any) -> None:

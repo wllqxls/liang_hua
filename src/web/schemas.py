@@ -72,6 +72,13 @@ class BacktestResponse(BaseModel):
     sharpe_ratio: float | None
     num_trades: int
     total_funding_fee: float = 0
+    quality_score: float = 0
+    quality_grade: str = "reject"
+    quality_label: str = "不建议"
+    quality_reasons: list[str] = Field(default_factory=list)
+    profit_factor: float = 0
+    avg_win_loss_ratio: float = 0
+    max_consecutive_losses: int = 0
     result_path: str | None = None
     equity_curve: list[EquityPoint]
     trade_list: list[TradeItem]
@@ -92,6 +99,13 @@ class OptimizationCandidate(BaseModel):
     max_drawdown_pct: float
     win_rate_pct: float
     num_trades: int
+    quality_score: float
+    quality_grade: str
+    quality_label: str
+    quality_reasons: list[str]
+    profit_factor: float
+    avg_win_loss_ratio: float
+    max_consecutive_losses: int
     score: float
 
 
@@ -100,6 +114,8 @@ class OptimizationResponse(BaseModel):
 
     success: bool = True
     candidates: list[OptimizationCandidate]
+    evaluated_count: int = 0
+    filtered_count: int = 0
     error: str | None = None
 
 

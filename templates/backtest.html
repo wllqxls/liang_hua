@@ -182,6 +182,14 @@
                     <span class="metric-label">交易次数</span>
                     <span id="metric-trades" class="metric-value">--</span>
                 </div>
+                <div class="metric-card">
+                    <span class="metric-label">质量评分</span>
+                    <span id="metric-quality-score" class="metric-value">--</span>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-label">评价</span>
+                    <span id="metric-quality-label" class="metric-value">--</span>
+                </div>
             </div>
 
             <!-- 权益曲线 -->
@@ -220,6 +228,7 @@
                         <tr>
                             <th>排名</th>
                             <th>策略</th>
+                            <th>评价</th>
                             <th>回溯</th>
                             <th>杠杆</th>
                             <th>止盈U</th>
@@ -227,19 +236,21 @@
                             <th>收益%</th>
                             <th>回撤%</th>
                             <th>胜率%</th>
+                            <th>盈亏比</th>
+                            <th>连亏</th>
                             <th>交易</th>
-                            <th>稳定评分</th>
+                            <th>质量分</th>
                             <th>操作</th>
                         </tr>
                     </thead>
                     <tbody id="optimization-tbody">
-                        <tr><td colspan="12" class="empty-cell">尚未搜索</td></tr>
+                        <tr><td colspan="15" class="empty-cell">尚未搜索</td></tr>
                     </tbody>
                 </table>
             </div>
         </section>
     </div>
 
-    <script src="/static/js/backtest.js?v=data-collapse-1"></script>
+    <script src="/static/js/backtest.js?v=quality-filter-1"></script>
 </body>
 </html>

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -88,6 +89,25 @@ SYMBOLS = [
     "XRP/USDT", "ADA/USDT", "DOGE/USDT", "AVAX/USDT",
 ]
 
+MIN_QUALITY_TRADES = 5
+MAX_ALLOWED_DRAWDOWN_PCT = -30.0
+MIN_ALLOWED_WIN_RATE_PCT = 28.0
+MIN_ALLOWED_PROFIT_FACTOR = 1.05
+
+
+@dataclass
+class QualityReport:
+    """策略质量评估结果。"""
+
+    score: float
+    grade: str
+    label: str
+    reasons: list[str]
+    profit_factor: float
+    avg_win_loss_ratio: float
+    max_consecutive_losses: int
+    passes_filter: bool
+
 
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
@@ -130,6 +150,12 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
             take_profit_amount=req.take_profit_amount,
             stop_loss_amount=req.stop_loss_amount,
         )
+        quality = _assess_backtest_quality(
+            result=result,
+            take_profit_amount=req.take_profit_amount,
+            stop_loss_amount=req.stop_loss_amount,
+            backtest_days=req.backtest_days,
+        )
 
         return BacktestResponse(
             success=True,
@@ -139,6 +165,13 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
             sharpe_ratio=result.sharpe_ratio,
             num_trades=result.num_trades,
             total_funding_fee=result.total_funding_fee,
+            quality_score=quality.score,
+            quality_grade=quality.grade,
+            quality_label=quality.label,
+            quality_reasons=quality.reasons,
+            profit_factor=quality.profit_factor,
+            avg_win_loss_ratio=quality.avg_win_loss_ratio,
+            max_consecutive_losses=quality.max_consecutive_losses,
             result_path=result.result_path,
             equity_curve=[
                 EquityPoint(timestamp=p["timestamp"], equity=p["equity"])
@@ -176,6 +209,8 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
     engine = BacktestEngine(data_dir="./data")
     candidates: list[OptimizationCandidate] = []
     rankless: list[dict] = []
+    evaluated_count = 0
+    filtered_count = 0
 
     for strategy_name, strategy_info in OPTIMIZATION_STRATEGIES.items():
         for lookback in lookbacks:
@@ -203,14 +238,27 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
                         except Exception:
                             logger.exception("参数搜索候选失败")
                             continue
+                        evaluated_count += 1
                         total_return_pct = _finite_number(result.total_return_pct)
                         max_drawdown_pct = _finite_number(result.max_drawdown_pct)
                         win_rate_pct = _finite_number(result.win_rate_pct)
+                        quality = _assess_backtest_quality(
+                            result=result,
+                            take_profit_amount=take_profit_amount,
+                            stop_loss_amount=stop_loss_amount,
+                            backtest_days=req.backtest_days,
+                        )
+                        if not quality.passes_filter:
+                            filtered_count += 1
+                            continue
                         score = _optimization_score(
                             total_return_pct=total_return_pct,
                             max_drawdown_pct=max_drawdown_pct,
                             win_rate_pct=win_rate_pct,
                             num_trades=result.num_trades,
+                            quality_score=quality.score,
+                            profit_factor=quality.profit_factor,
+                            max_consecutive_losses=quality.max_consecutive_losses,
                         )
                         rankless.append({
                             "strategy": strategy_name,
@@ -223,13 +271,25 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
                             "max_drawdown_pct": max_drawdown_pct,
                             "win_rate_pct": win_rate_pct,
                             "num_trades": result.num_trades,
+                            "quality_score": quality.score,
+                            "quality_grade": quality.grade,
+                            "quality_label": quality.label,
+                            "quality_reasons": quality.reasons,
+                            "profit_factor": quality.profit_factor,
+                            "avg_win_loss_ratio": quality.avg_win_loss_ratio,
+                            "max_consecutive_losses": quality.max_consecutive_losses,
                             "score": score,
                         })
 
     ranked = sorted(rankless, key=lambda item: item["score"], reverse=True)[:10]
     for index, item in enumerate(ranked, start=1):
         candidates.append(OptimizationCandidate(rank=index, **item))
-    return OptimizationResponse(success=True, candidates=candidates)
+    return OptimizationResponse(
+        success=True,
+        candidates=candidates,
+        evaluated_count=evaluated_count,
+        filtered_count=filtered_count,
+    )
 
 
 @router.get("/api/data-status")
@@ -351,16 +411,158 @@ def _optimization_score(
     max_drawdown_pct: float,
     win_rate_pct: float,
     num_trades: int,
+    quality_score: float,
+    profit_factor: float,
+    max_consecutive_losses: int,
 ) -> float:
     """给自动交易候选打稳定性分，避免低胜率单次暴利排太靠前。"""
     low_win_penalty = max(45 - win_rate_pct, 0) * 2
     few_trades_penalty = max(5 - num_trades, 0) * 2
     trade_bonus = min(num_trades, 30) * 0.1
     return (
-        total_return_pct
+        quality_score
+        + total_return_pct * 0.4
         + max_drawdown_pct
         + win_rate_pct * 0.2
+        + min(profit_factor, 3.0) * 3
         + trade_bonus
         - low_win_penalty
         - few_trades_penalty
+        - max_consecutive_losses * 1.5
     )
+
+
+def _assess_backtest_quality(
+    result: object,
+    take_profit_amount: float,
+    stop_loss_amount: float,
+    backtest_days: int,
+) -> QualityReport:
+    """给回测结果做实盘重复执行视角的质量评估。"""
+    total_return_pct = _finite_number(getattr(result, "total_return_pct", 0.0))
+    win_rate_pct = _finite_number(getattr(result, "win_rate_pct", 0.0))
+    max_drawdown_pct = _finite_number(getattr(result, "max_drawdown_pct", 0.0))
+    sharpe_ratio = _finite_number(getattr(result, "sharpe_ratio", 0.0))
+    num_trades = int(getattr(result, "num_trades", 0) or 0)
+    trade_list = list(getattr(result, "trade_list", []) or [])
+    pnl_values = [_finite_number(trade.get("pnl")) for trade in trade_list if isinstance(trade, dict)]
+    wins = [value for value in pnl_values if value > 0]
+    losses = [value for value in pnl_values if value < 0]
+    gross_win = sum(wins)
+    gross_loss = abs(sum(losses))
+    profit_factor = _profit_factor(gross_win, gross_loss)
+    avg_win_loss_ratio = _avg_win_loss_ratio(wins, losses)
+    max_consecutive_losses = _max_consecutive_losses(pnl_values)
+    min_trades = _minimum_quality_trades(backtest_days)
+
+    reasons: list[str] = []
+    hard_reasons: list[str] = []
+
+    if take_profit_amount <= 0 or stop_loss_amount <= 0:
+        hard_reasons.append("必须同时设置止盈和止损")
+    if num_trades < min_trades:
+        hard_reasons.append(f"交易次数少于 {min_trades} 笔，样本不足")
+    if total_return_pct <= 0:
+        hard_reasons.append("扣除成本后总收益不为正")
+    if max_drawdown_pct < MAX_ALLOWED_DRAWDOWN_PCT:
+        hard_reasons.append("最大回撤超过 30%")
+    if win_rate_pct < MIN_ALLOWED_WIN_RATE_PCT:
+        hard_reasons.append("胜率过低，容易依赖少数大行情")
+    if profit_factor < MIN_ALLOWED_PROFIT_FACTOR:
+        hard_reasons.append("盈亏比不足，亏损单吞噬盈利单")
+
+    if max_consecutive_losses >= 5:
+        reasons.append("连续亏损偏多，实盘心理和资金压力较大")
+
+    reasons = hard_reasons + reasons
+    if not reasons:
+        reasons.append("通过严格过滤")
+
+    score = _quality_score(
+        total_return_pct=total_return_pct,
+        win_rate_pct=win_rate_pct,
+        max_drawdown_pct=max_drawdown_pct,
+        sharpe_ratio=sharpe_ratio,
+        num_trades=num_trades,
+        min_trades=min_trades,
+        profit_factor=profit_factor,
+        max_consecutive_losses=max_consecutive_losses,
+        has_take_profit_stop_loss=take_profit_amount > 0 and stop_loss_amount > 0,
+    )
+    passes_filter = len(hard_reasons) == 0
+    if not passes_filter or score < 45:
+        grade = "reject"
+        label = "不建议"
+    elif score < 70:
+        grade = "watch"
+        label = "谨慎"
+    else:
+        grade = "recommend"
+        label = "推荐"
+
+    return QualityReport(
+        score=round(score, 2),
+        grade=grade,
+        label=label,
+        reasons=reasons,
+        profit_factor=round(profit_factor, 2),
+        avg_win_loss_ratio=round(avg_win_loss_ratio, 2),
+        max_consecutive_losses=max_consecutive_losses,
+        passes_filter=passes_filter,
+    )
+
+
+def _minimum_quality_trades(backtest_days: int) -> int:
+    return max(MIN_QUALITY_TRADES, min(30, math.ceil(backtest_days / 10)))
+
+
+def _profit_factor(gross_win: float, gross_loss: float) -> float:
+    if gross_win <= 0:
+        return 0.0
+    if gross_loss <= 0:
+        return 99.0
+    return gross_win / gross_loss
+
+
+def _avg_win_loss_ratio(wins: list[float], losses: list[float]) -> float:
+    if not wins:
+        return 0.0
+    if not losses:
+        return 99.0
+    return (sum(wins) / len(wins)) / abs(sum(losses) / len(losses))
+
+
+def _max_consecutive_losses(pnl_values: list[float]) -> int:
+    max_losses = 0
+    current_losses = 0
+    for pnl in pnl_values:
+        if pnl < 0:
+            current_losses += 1
+            max_losses = max(max_losses, current_losses)
+        else:
+            current_losses = 0
+    return max_losses
+
+
+def _quality_score(
+    total_return_pct: float,
+    win_rate_pct: float,
+    max_drawdown_pct: float,
+    sharpe_ratio: float,
+    num_trades: int,
+    min_trades: int,
+    profit_factor: float,
+    max_consecutive_losses: int,
+    has_take_profit_stop_loss: bool,
+) -> float:
+    score = 50.0
+    score += max(min(total_return_pct, 60), -30) * 0.35
+    score += max(min(win_rate_pct - 35, 35), -25) * 0.45
+    score += max(max_drawdown_pct, -60) * 0.55
+    score += min(profit_factor, 3.0) * 8
+    score += min(num_trades / max(min_trades, 1), 2.0) * 6
+    score += max(min(sharpe_ratio, 3.0), -1.0) * 4
+    score -= max_consecutive_losses * 2
+    if not has_take_profit_stop_loss:
+        score -= 20
+    return max(min(score, 100), 0)
