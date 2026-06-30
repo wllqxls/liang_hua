@@ -35,6 +35,13 @@ async function runBacktest() {
         cash: parseFloat(document.getElementById('cash').value) || 1000000,
         commission: parseFloat(document.getElementById('commission').value) || 0.001,
     };
+    const validationError = validateBacktestPayload(payload);
+    if (validationError) {
+        showError(validationError);
+        btn.disabled = false;
+        btn.textContent = '▶ 开始回测';
+        return;
+    }
 
     try {
         const resp = await fetch('/api/backtest', {
@@ -44,6 +51,11 @@ async function runBacktest() {
         });
 
         const data = await resp.json();
+
+        if (!resp.ok) {
+            showError(formatApiError(data));
+            return;
+        }
 
         if (!data.success) {
             showError(data.error || '回测失败');
@@ -59,6 +71,20 @@ async function runBacktest() {
         btn.disabled = false;
         btn.textContent = '▶ 开始回测';
     }
+}
+
+
+function validateBacktestPayload(payload) {
+    if (payload.lookback < 1 || payload.lookback > 500) {
+        return '回溯窗口必须在 1 到 500 之间';
+    }
+    if (payload.cash < 1000) {
+        return '初始资金不能低于 1000 USDT';
+    }
+    if (payload.commission < 0 || payload.commission > 0.1) {
+        return '手续费率必须在 0 到 0.1 之间';
+    }
+    return '';
 }
 
 
@@ -318,6 +344,21 @@ function formatTime(isoStr) {
     } catch {
         return String(isoStr).slice(0, 16);
     }
+}
+
+
+function formatApiError(data) {
+    if (Array.isArray(data.detail)) {
+        const messages = data.detail.map(item => {
+            const field = Array.isArray(item.loc) ? item.loc.slice(1).join('.') : '';
+            return (field ? field + ': ' : '') + item.msg;
+        });
+        return messages.join('；') || '请求参数不正确';
+    }
+    if (typeof data.detail === 'string') {
+        return data.detail;
+    }
+    return data.error || '请求失败';
 }
 
 
