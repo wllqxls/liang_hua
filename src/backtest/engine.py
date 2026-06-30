@@ -104,6 +104,7 @@ class BacktestEngine:
         symbol: str = "BTC/USDT",
         timeframe: str = "1h",
         context_timeframe: str | None = None,
+        backtest_days: int | None = None,
         cash: float = 1_000_000,
         commission: float = 0.001,
         leverage: float = 1.0,
@@ -121,6 +122,7 @@ class BacktestEngine:
             context_path = self._data_dir / f"{safe_symbol}_{context_timeframe}.csv"
             context_df = self.load_data(context_path)
             df = _merge_context_features(df, context_df)
+        df = _filter_recent_days(df, backtest_days)
 
         bt = FractionalBacktest(
             df,
@@ -290,6 +292,16 @@ def _merge_context_features(entry_df: pd.DataFrame, context_df: pd.DataFrame) ->
         direction="backward",
     )
     return merged
+
+
+def _filter_recent_days(df: pd.DataFrame, days: int | None) -> pd.DataFrame:
+    """按最近 N 天裁剪回测数据。"""
+    if days is None or days <= 0 or df.empty:
+        return df
+    end_time = df.index.max()
+    start_time = end_time - pd.Timedelta(days=days)
+    filtered = df.loc[df.index >= start_time]
+    return filtered if not filtered.empty else df
 
 
 def _estimate_funding_fee(entry_time: str, exit_time: str, notional: float, funding_rate: float) -> float:

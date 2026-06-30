@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.backtest.engine import BacktestEngine, _merge_context_features
+from src.backtest.engine import BacktestEngine, _filter_recent_days, _merge_context_features
 from src.strategies.sr_breakout import SRBreakout
 
 
@@ -93,3 +93,10 @@ def test_context_features_align_to_entry_timeframe(sample_ohlcv: pd.DataFrame) -
     assert "ContextSupport" in merged.columns
     assert "ContextResistance" in merged.columns
     assert merged["ContextTrend"].notna().any()
+
+
+def test_filter_recent_days_keeps_latest_window(sample_ohlcv: pd.DataFrame) -> None:
+    filtered = _filter_recent_days(sample_ohlcv, days=2)
+
+    assert filtered.index.min() >= sample_ohlcv.index.max() - pd.Timedelta(days=2)
+    assert filtered.index.max() == sample_ohlcv.index.max()

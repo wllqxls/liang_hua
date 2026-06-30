@@ -73,6 +73,9 @@ function validateBacktestPayload(payload) {
     if (payload.lookback < 1 || payload.lookback > 500) {
         return '回溯窗口必须在 1 到 500 之间';
     }
+    if (payload.backtest_days < 1 || payload.backtest_days > 3650) {
+        return '回测天数必须在 1 到 3650 之间';
+    }
     if (payload.context_timeframe === payload.timeframe) {
         return '环境周期和入场周期建议分开，例如 15m + 5m';
     }
@@ -119,6 +122,7 @@ function collectBacktestPayload() {
         timeframe: document.getElementById('timeframe').value,
         context_timeframe: document.getElementById('context-timeframe').value,
         strategy: document.getElementById('strategy').value,
+        backtest_days: numberValue('backtest-days', 30),
         lookback: numberValue('lookback', 20),
         cash: numberValue('cash', 1000),
         position_amount: numberValue('position-amount', 3.3),
