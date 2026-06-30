@@ -5,6 +5,7 @@ FastAPI 路由：回测 API 和页面渲染。
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -26,6 +27,8 @@ from src.web.schemas import (
     DataFetchResponse,
     DataStatus,
     EquityPoint,
+    OptimizationCandidate,
+    OptimizationResponse,
     TradeItem,
 )
 
@@ -47,17 +50,17 @@ STRATEGY_OPTIONS = [
     {
         "value": "SRBreakout",
         "label": "支撑阻力突破",
-        "description": "规则策略：价格突破近期高点买入，亏损触发止损。",
+        "description": "规则策略：突破近期高点做多，跌破近期低点做空，方向由策略自动判断。",
     },
     {
         "value": "MovingAverageCross",
         "label": "均线金叉死叉",
-        "description": "规则策略：快线上穿慢线买入，快线下穿慢线平仓。",
+        "description": "规则策略：快线上穿慢线做多，快线下穿慢线做空，方向由策略自动判断。",
     },
     {
         "value": "RSIReversion",
         "label": "RSI 超卖反弹",
-        "description": "规则策略：RSI 低位买入，高位或止损时平仓。",
+        "description": "规则策略：RSI 低位做多，高位做空，方向由策略自动判断。",
     },
 ]
 
@@ -100,6 +103,10 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
             cash=req.cash,
             commission=req.taker_fee,
             leverage=req.leverage,
+            slippage_rate=req.slippage_rate,
+            funding_rate=req.funding_rate,
+            maintenance_margin_rate=req.maintenance_margin_rate,
+            save_result=True,
             position_amount=req.position_amount,
             take_profit_amount=req.take_profit_amount,
             stop_loss_amount=req.stop_loss_amount,
@@ -112,6 +119,8 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
             max_drawdown_pct=result.max_drawdown_pct,
             sharpe_ratio=result.sharpe_ratio,
             num_trades=result.num_trades,
+            total_funding_fee=result.total_funding_fee,
+            result_path=result.result_path,
             equity_curve=[
                 EquityPoint(timestamp=p["timestamp"], equity=p["equity"])
                 for p in result.equity_curve
@@ -124,6 +133,69 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
     except Exception as e:
         logger.exception("回测失败")
         return _error_response(str(e))
+
+
+@router.post("/api/optimize", response_model=OptimizationResponse)
+async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
+    """基于当前选择做一轮小型参数搜索。"""
+    strategy_class = STRATEGIES.get(req.strategy)
+    if strategy_class is None:
+        return OptimizationResponse(success=False, candidates=[], error=f"未知策略: {req.strategy}")
+    if req.position_amount > req.cash:
+        return OptimizationResponse(success=False, candidates=[], error="单笔逐仓金额不能大于初始资金")
+
+    lookbacks = _nearby_ints(req.lookback, [0.5, 1, 2], min_value=2, max_value=500)
+    leverages = _nearby_numbers(req.leverage, [0.5, 1, 2], min_value=1, max_value=150)
+    take_profits = _nearby_numbers(req.take_profit_amount or req.position_amount, [0, 0.5, 1], min_value=0, max_value=req.position_amount * req.leverage)
+    stop_losses = _nearby_numbers(req.stop_loss_amount, [0.5, 1, 1.5], min_value=0.1, max_value=req.position_amount)
+
+    engine = BacktestEngine(data_dir="./data")
+    candidates: list[OptimizationCandidate] = []
+    rankless: list[dict] = []
+
+    for lookback in lookbacks:
+        for leverage in leverages:
+            for take_profit_amount in take_profits:
+                for stop_loss_amount in stop_losses:
+                    try:
+                        result = engine.run(
+                            strategy_class=strategy_class,
+                            symbol=req.symbol,
+                            timeframe=req.timeframe,
+                            lookback=lookback,
+                            cash=req.cash,
+                            commission=req.taker_fee,
+                            leverage=leverage,
+                            slippage_rate=req.slippage_rate,
+                            funding_rate=req.funding_rate,
+                            maintenance_margin_rate=req.maintenance_margin_rate,
+                            position_amount=req.position_amount,
+                            take_profit_amount=take_profit_amount,
+                            stop_loss_amount=stop_loss_amount,
+                        )
+                    except Exception:
+                        logger.exception("参数搜索候选失败")
+                        continue
+                    total_return_pct = _finite_number(result.total_return_pct)
+                    max_drawdown_pct = _finite_number(result.max_drawdown_pct)
+                    win_rate_pct = _finite_number(result.win_rate_pct)
+                    score = total_return_pct + max_drawdown_pct * 0.5 + win_rate_pct * 0.05
+                    rankless.append({
+                        "lookback": lookback,
+                        "leverage": leverage,
+                        "take_profit_amount": take_profit_amount,
+                        "stop_loss_amount": stop_loss_amount,
+                        "total_return_pct": total_return_pct,
+                        "max_drawdown_pct": max_drawdown_pct,
+                        "win_rate_pct": win_rate_pct,
+                        "num_trades": result.num_trades,
+                        "score": score,
+                    })
+
+    ranked = sorted(rankless, key=lambda item: item["score"], reverse=True)[:10]
+    for index, item in enumerate(ranked, start=1):
+        candidates.append(OptimizationCandidate(rank=index, **item))
+    return OptimizationResponse(success=True, candidates=candidates)
 
 
 @router.get("/api/data-status")
@@ -213,3 +285,19 @@ def _error_response(msg: str) -> BacktestResponse:
         total_return_pct=0, win_rate_pct=0, max_drawdown_pct=0,
         sharpe_ratio=None, num_trades=0, equity_curve=[], trade_list=[],
     )
+
+
+def _nearby_ints(value: int, factors: list[float], min_value: int, max_value: int) -> list[int]:
+    values = {min(max(int(round(value * factor)), min_value), max_value) for factor in factors}
+    return sorted(values)
+
+
+def _nearby_numbers(value: float, factors: list[float], min_value: float, max_value: float) -> list[float]:
+    values = {round(min(max(value * factor, min_value), max_value), 4) for factor in factors}
+    return sorted(values)
+
+
+def _finite_number(value: float | None) -> float:
+    if value is None or not math.isfinite(value):
+        return 0.0
+    return float(value)

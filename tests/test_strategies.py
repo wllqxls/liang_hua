@@ -1,7 +1,12 @@
 ﻿from __future__ import annotations
 
 from src.strategies.ma_cross import MovingAverageCross
-from src.strategies.risk import build_long_risk_prices, calculate_fractional_order_size
+from src.strategies.risk import (
+    build_long_risk_prices,
+    build_risk_prices,
+    calculate_fractional_order_size,
+    estimate_liquidation_price,
+)
 from src.strategies.rsi_reversion import RSIReversion
 from src.strategies.sr_breakout import SRBreakout, SupportResistanceBreakout
 
@@ -47,3 +52,22 @@ def test_long_risk_prices_use_usdt_amounts() -> None:
 
     assert round(take_profit, 4) == 109.0909
     assert round(stop_loss, 4) == 96.9697
+
+
+def test_short_risk_prices_use_usdt_amounts_and_liquidation_cap() -> None:
+    take_profit, stop_loss = build_risk_prices(
+        side="short",
+        price=100.0,
+        position_amount=3.3,
+        leverage=20,
+        take_profit_amount=6.0,
+        stop_loss_amount=10.0,
+    )
+
+    assert round(take_profit, 4) == 90.9091
+    assert round(stop_loss, 4) == 104.5
+
+
+def test_liquidation_price_is_side_aware() -> None:
+    assert estimate_liquidation_price("long", 100.0, 20, 0.005) == 95.5
+    assert round(estimate_liquidation_price("short", 100.0, 20, 0.005), 4) == 104.5

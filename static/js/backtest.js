@@ -28,20 +28,7 @@ async function runBacktest() {
     errorMsg.classList.add('hidden');
     results.classList.add('hidden');
 
-    // 收集参数
-    const payload = {
-        symbol: document.getElementById('symbol').value,
-        timeframe: document.getElementById('timeframe').value,
-        strategy: document.getElementById('strategy').value,
-        lookback: numberValue('lookback', 20),
-        cash: numberValue('cash', 1000),
-        position_amount: numberValue('position-amount', 3.3),
-        leverage: numberValue('leverage', 5),
-        take_profit_amount: numberValue('take-profit-amount', 0),
-        stop_loss_amount: numberValue('stop-loss-amount', 2),
-        maker_fee: numberValue('maker-fee', 0.0002),
-        taker_fee: numberValue('taker-fee', 0.0005),
-    };
+    const payload = collectBacktestPayload();
     const validationError = validateBacktestPayload(payload);
     if (validationError) {
         showError(validationError);
@@ -109,7 +96,36 @@ function validateBacktestPayload(payload) {
     if (payload.maker_fee < 0 || payload.taker_fee < 0 || payload.maker_fee > 0.1 || payload.taker_fee > 0.1) {
         return '手续费率必须在 0 到 0.1 之间';
     }
+    if (payload.slippage_rate < 0 || payload.slippage_rate > 0.1) {
+        return '滑点率必须在 0 到 0.1 之间';
+    }
+    if (payload.funding_rate < 0 || payload.funding_rate > 0.1) {
+        return '资金费率必须在 0 到 0.1 之间';
+    }
+    if (payload.maintenance_margin_rate < 0 || payload.maintenance_margin_rate > 0.1) {
+        return '维持保证金率必须在 0 到 0.1 之间';
+    }
     return '';
+}
+
+
+function collectBacktestPayload() {
+    return {
+        symbol: document.getElementById('symbol').value,
+        timeframe: document.getElementById('timeframe').value,
+        strategy: document.getElementById('strategy').value,
+        lookback: numberValue('lookback', 20),
+        cash: numberValue('cash', 1000),
+        position_amount: numberValue('position-amount', 3.3),
+        leverage: numberValue('leverage', 5),
+        take_profit_amount: numberValue('take-profit-amount', 0),
+        stop_loss_amount: numberValue('stop-loss-amount', 2),
+        maker_fee: numberValue('maker-fee', 0.0002),
+        taker_fee: numberValue('taker-fee', 0.0005),
+        slippage_rate: numberValue('slippage-rate', 0.0002),
+        funding_rate: numberValue('funding-rate', 0.0001),
+        maintenance_margin_rate: numberValue('maintenance-margin-rate', 0.005),
+    };
 }
 
 
@@ -124,6 +140,43 @@ function updateStrategyDescription() {
     const note = document.getElementById('strategy-desc');
     const option = select.options[select.selectedIndex];
     note.textContent = option ? option.dataset.desc || '' : '';
+}
+
+
+async function optimizeParams() {
+    const btn = document.getElementById('optimize-btn');
+    const status = document.getElementById('status');
+    const results = document.getElementById('results');
+    const payload = collectBacktestPayload();
+    const validationError = validateBacktestPayload(payload);
+    if (validationError) {
+        showError(validationError);
+        return;
+    }
+
+    btn.disabled = true;
+    status.innerHTML = '<span class="spinner"></span>正在搜索参数...';
+    results.classList.remove('hidden');
+
+    try {
+        const resp = await fetch('/api/optimize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            showError(data.error || formatApiError(data));
+            return;
+        }
+        renderOptimizationTable(data.candidates);
+        status.textContent = '✅ 参数搜索完成';
+        results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (err) {
+        showError('运行错误: ' + err.message);
+    } finally {
+        btn.disabled = false;
+    }
 }
 
 
@@ -236,6 +289,7 @@ function displayResults(data) {
 
     // 交易明细表
     renderTradesTable(data.trade_list);
+    renderOptimizationTable([]);
 
     // 滚动到结果
     results.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -342,7 +396,7 @@ function renderTradesTable(trades) {
     tbody.innerHTML = '';
 
     if (!trades || trades.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#8b949e">无交易记录</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="12" class="empty-cell">无交易记录</td></tr>';
         return;
     }
 
@@ -352,15 +406,57 @@ function renderTradesTable(trades) {
         const row = document.createElement('tr');
         const pnlClass = t.pnl >= 0 ? 'positive' : 'negative';
         const pnlPctClass = t.pnl_pct >= 0 ? 'positive' : 'negative';
+        const sideText = t.side === 'short' ? '做空' : '做多';
+        const sideClass = t.side === 'short' ? 'negative' : 'positive';
 
         row.innerHTML =
+            '<td class="' + sideClass + '">' + sideText + '</td>' +
             '<td>' + formatTime(t.entry_time) + '</td>' +
             '<td>' + formatTime(t.exit_time) + '</td>' +
-            '<td>' + t.entry_price.toFixed(2) + '</td>' +
-            '<td>' + t.exit_price.toFixed(2) + '</td>' +
+            '<td>' + formatNumber(t.entry_price, 2) + '</td>' +
+            '<td>' + formatNumber(t.exit_price, 2) + '</td>' +
+            '<td>' + formatNumber(t.margin_amount, 2) + '</td>' +
+            '<td>' + formatNumber(t.notional_amount, 2) + '</td>' +
+            '<td>' + formatNumber(t.liquidation_price, 2) + '</td>' +
+            '<td>' + formatNumber(t.funding_fee, 4) + '</td>' +
             '<td class="' + pnlClass + '">' + t.pnl.toFixed(2) + '</td>' +
-            '<td class="' + pnlPctClass + '">' + t.pnl_pct.toFixed(2) + '%</td>';
+            '<td class="' + pnlPctClass + '">' + t.pnl_pct.toFixed(2) + '%</td>' +
+            '<td>' + (t.exit_reason || '策略平仓') + '</td>';
 
+        tbody.appendChild(row);
+    }
+}
+
+
+// ============================================================
+// 参数搜索
+// ============================================================
+
+function renderOptimizationTable(candidates) {
+    const tbody = document.getElementById('optimization-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    if (!candidates || candidates.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" class="empty-cell">尚未搜索</td></tr>';
+        return;
+    }
+
+    for (const item of candidates) {
+        const row = document.createElement('tr');
+        const returnClass = item.total_return_pct >= 0 ? 'positive' : 'negative';
+        const drawdownClass = item.max_drawdown_pct >= 0 ? 'positive' : 'negative';
+        row.innerHTML =
+            '<td>' + item.rank + '</td>' +
+            '<td>' + item.lookback + '</td>' +
+            '<td>x' + formatNumber(item.leverage, 0) + '</td>' +
+            '<td>' + formatNumber(item.take_profit_amount, 2) + '</td>' +
+            '<td>' + formatNumber(item.stop_loss_amount, 2) + '</td>' +
+            '<td class="' + returnClass + '">' + formatNumber(item.total_return_pct, 2) + '</td>' +
+            '<td class="' + drawdownClass + '">' + formatNumber(item.max_drawdown_pct, 2) + '</td>' +
+            '<td>' + formatNumber(item.win_rate_pct, 2) + '</td>' +
+            '<td>' + item.num_trades + '</td>' +
+            '<td>' + formatNumber(item.score, 2) + '</td>';
         tbody.appendChild(row);
     }
 }
@@ -392,6 +488,13 @@ function formatChartLabel(isoStr) {
     } catch {
         return String(isoStr).slice(5, 16);
     }
+}
+
+
+function formatNumber(value, decimals) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return '--';
+    return number.toFixed(decimals);
 }
 
 

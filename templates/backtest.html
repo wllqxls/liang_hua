@@ -11,7 +11,7 @@
     <div class="container">
         <header>
             <h1>📊 量化回测系统</h1>
-            <span class="subtitle">规则策略回测，AI 参数优化后续接入</span>
+            <span class="subtitle">策略自动选择多空方向，参数搜索辅助优化</span>
         </header>
 
         <!-- 控制面板 -->
@@ -87,8 +87,21 @@
                     <input type="number" id="taker-fee" value="0.0005" min="0" max="0.1" step="0.0001">
                     <span class="field-note">当前市价回测按 taker 费率扣除</span>
                 </div>
+                <div class="form-group">
+                    <label for="slippage-rate">滑点率</label>
+                    <input type="number" id="slippage-rate" value="0.0002" min="0" max="0.1" step="0.0001">
+                </div>
+                <div class="form-group">
+                    <label for="funding-rate">8小时资金费率</label>
+                    <input type="number" id="funding-rate" value="0.0001" min="0" max="0.1" step="0.0001">
+                </div>
+                <div class="form-group">
+                    <label for="maintenance-margin-rate">维持保证金率</label>
+                    <input type="number" id="maintenance-margin-rate" value="0.005" min="0" max="0.1" step="0.0001">
+                </div>
             </div>
             <button id="run-btn" class="btn-primary" onclick="runBacktest()">▶ 开始回测</button>
+            <button id="optimize-btn" class="btn-secondary" onclick="optimizeParams()">参数搜索</button>
             <span id="status" class="status-text"></span>
         </section>
 
@@ -163,15 +176,44 @@
                 <table id="trades-table">
                     <thead>
                         <tr>
+                            <th>方向</th>
                             <th>入场时间</th>
                             <th>出场时间</th>
                             <th>入场价</th>
                             <th>出场价</th>
+                            <th>保证金</th>
+                            <th>名义仓位</th>
+                            <th>强平价</th>
+                            <th>资金费</th>
                             <th>盈亏</th>
                             <th>盈亏%</th>
+                            <th>原因</th>
                         </tr>
                     </thead>
                     <tbody id="trades-tbody"></tbody>
+                </table>
+            </div>
+
+            <h3>参数搜索</h3>
+            <div class="table-container">
+                <table id="optimization-table">
+                    <thead>
+                        <tr>
+                            <th>排名</th>
+                            <th>回溯</th>
+                            <th>杠杆</th>
+                            <th>止盈U</th>
+                            <th>止损U</th>
+                            <th>收益%</th>
+                            <th>回撤%</th>
+                            <th>胜率%</th>
+                            <th>交易</th>
+                            <th>评分</th>
+                        </tr>
+                    </thead>
+                    <tbody id="optimization-tbody">
+                        <tr><td colspan="10" class="empty-cell">尚未搜索</td></tr>
+                    </tbody>
                 </table>
             </div>
 

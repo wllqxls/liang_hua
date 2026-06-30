@@ -29,12 +29,18 @@ def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
         assert kwargs["take_profit_amount"] == 0
         assert kwargs["stop_loss_amount"] == 2
         assert kwargs["commission"] == 0.0005
+        assert kwargs["slippage_rate"] == 0.0002
+        assert kwargs["funding_rate"] == 0.0001
+        assert kwargs["maintenance_margin_rate"] == 0.005
+        assert kwargs["save_result"] is True
         return BacktestResult(
             total_return_pct=12.5,
             win_rate_pct=50.0,
             max_drawdown_pct=-3.2,
             sharpe_ratio=1.1,
             num_trades=2,
+            total_funding_fee=0.12,
+            result_path="results/demo.json",
             equity_curve=[{"timestamp": "2024-01-01T00:00:00+00:00", "equity": 100_000.0}],
             trade_list=[],
         )
@@ -56,6 +62,9 @@ def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
             "stop_loss_amount": 2,
             "maker_fee": 0.0002,
             "taker_fee": 0.0005,
+            "slippage_rate": 0.0002,
+            "funding_rate": 0.0001,
+            "maintenance_margin_rate": 0.005,
         },
     )
 
@@ -63,6 +72,8 @@ def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
     payload = response.json()
     assert payload["success"] is True
     assert payload["total_return_pct"] == 12.5
+    assert payload["total_funding_fee"] == 0.12
+    assert payload["result_path"] == "results/demo.json"
     assert payload["equity_curve"][0]["equity"] == 100_000.0
 
 
@@ -138,6 +149,53 @@ def test_backtest_api_rejects_position_amount_above_cash() -> None:
     payload = response.json()
     assert payload["success"] is False
     assert "逐仓金额不能大于初始资金" in payload["error"]
+
+
+def test_optimize_api_returns_ranked_candidates(monkeypatch: Any) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_run(self: object, **kwargs: Any) -> BacktestResult:
+        calls.append(kwargs)
+        score_base = kwargs["leverage"] + kwargs["lookback"] * 0.01
+        return BacktestResult(
+            total_return_pct=score_base,
+            win_rate_pct=40.0,
+            max_drawdown_pct=-2.0,
+            sharpe_ratio=None,
+            num_trades=3,
+            equity_curve=[],
+            trade_list=[],
+        )
+
+    monkeypatch.setattr(routes.BacktestEngine, "run", fake_run)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/optimize",
+        json={
+            "symbol": "BTC/USDT",
+            "timeframe": "1h",
+            "strategy": "SRBreakout",
+            "lookback": 20,
+            "cash": 100,
+            "position_amount": 3.3,
+            "leverage": 5,
+            "take_profit_amount": 0,
+            "stop_loss_amount": 2,
+            "maker_fee": 0.0002,
+            "taker_fee": 0.0005,
+            "slippage_rate": 0.0002,
+            "funding_rate": 0.0001,
+            "maintenance_margin_rate": 0.005,
+        },
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["success"] is True
+    assert len(payload["candidates"]) == 10
+    assert payload["candidates"][0]["rank"] == 1
+    assert calls[0]["slippage_rate"] == 0.0002
 
 
 def test_data_status_api_reports_local_csv(tmp_path: Path, monkeypatch: Any) -> None:

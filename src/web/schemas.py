@@ -21,6 +21,9 @@ class BacktestRequest(BaseModel):
     stop_loss_amount: float = Field(default=2, ge=0, description="止损金额")
     maker_fee: float = Field(default=0.0002, ge=0, le=0.1, description="Maker 手续费率")
     taker_fee: float = Field(default=0.0005, ge=0, le=0.1, description="Taker 手续费率")
+    slippage_rate: float = Field(default=0.0002, ge=0, le=0.1, description="滑点率")
+    funding_rate: float = Field(default=0.0001, ge=0, le=0.1, description="8 小时资金费率")
+    maintenance_margin_rate: float = Field(default=0.005, ge=0, le=0.1, description="维持保证金率")
 
 
 class DataFetchRequest(BaseModel):
@@ -36,11 +39,18 @@ class TradeItem(BaseModel):
 
     entry_time: str
     exit_time: str
+    side: str = "long"
     entry_price: float
     exit_price: float
     size: float
+    margin_amount: float = 0
+    notional_amount: float = 0
+    leverage: float = 1
+    liquidation_price: float = 0
+    funding_fee: float = 0
     pnl: float
     pnl_pct: float
+    exit_reason: str = "策略平仓"
 
 
 class EquityPoint(BaseModel):
@@ -59,8 +69,33 @@ class BacktestResponse(BaseModel):
     max_drawdown_pct: float
     sharpe_ratio: float | None
     num_trades: int
+    total_funding_fee: float = 0
+    result_path: str | None = None
     equity_curve: list[EquityPoint]
     trade_list: list[TradeItem]
+    error: str | None = None
+
+
+class OptimizationCandidate(BaseModel):
+    """参数搜索候选结果。"""
+
+    rank: int
+    lookback: int
+    leverage: float
+    take_profit_amount: float
+    stop_loss_amount: float
+    total_return_pct: float
+    max_drawdown_pct: float
+    win_rate_pct: float
+    num_trades: int
+    score: float
+
+
+class OptimizationResponse(BaseModel):
+    """参数搜索响应。"""
+
+    success: bool = True
+    candidates: list[OptimizationCandidate]
     error: str | None = None
 
 

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +17,7 @@ from backtesting import Strategy
 from backtesting.lib import FractionalBacktest
 
 from src.data.fetcher import DataFetcher, _COLUMNS
+from src.strategies.risk import estimate_liquidation_price
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,8 @@ class BacktestResult:
     num_trades: int
     equity_curve: list[dict[str, Any]]
     trade_list: list[dict[str, Any]]
+    total_funding_fee: float = 0.0
+    result_path: str | None = None
 
     def summary(self) -> str:
         return (
@@ -101,6 +106,10 @@ class BacktestEngine:
         cash: float = 1_000_000,
         commission: float = 0.001,
         leverage: float = 1.0,
+        slippage_rate: float = 0.0,
+        funding_rate: float = 0.0,
+        maintenance_margin_rate: float = 0.005,
+        save_result: bool = False,
         **strategy_kwargs: Any,
     ) -> BacktestResult:
         """运行回测。"""
@@ -112,6 +121,7 @@ class BacktestEngine:
             df,
             strategy_class,
             cash=cash,
+            spread=slippage_rate,
             commission=commission,
             margin=1 / max(leverage, 1),
             hedging=False,
@@ -124,6 +134,7 @@ class BacktestEngine:
         )
 
         strategy_kwargs.setdefault("leverage", leverage)
+        strategy_kwargs.setdefault("maintenance_margin_rate", maintenance_margin_rate)
         stats = bt.run(**strategy_kwargs)
 
         # 权益曲线
@@ -144,18 +155,41 @@ class BacktestEngine:
 
         # 交易记录
         trade_list: list[dict] = []
+        total_funding_fee = 0.0
         if hasattr(stats, "_trades") and stats._trades is not None:
             trades_df = stats._trades
             if hasattr(trades_df, "iterrows"):
                 for _, t in trades_df.iterrows():
+                    size = float(t.get("Size", 0))
+                    entry_price = float(t.get("EntryPrice", 0))
+                    exit_price = float(t.get("ExitPrice", 0))
+                    side = "short" if size < 0 else "long"
+                    notional = abs(size) * entry_price
+                    margin_amount = notional / max(leverage, 1)
+                    entry_time = str(t.get("EntryTime", ""))
+                    exit_time = str(t.get("ExitTime", ""))
+                    funding_fee = _estimate_funding_fee(entry_time, exit_time, notional, funding_rate)
+                    total_funding_fee += funding_fee
                     trade_list.append({
-                        "entry_time": str(t.get("EntryTime", "")),
-                        "exit_time": str(t.get("ExitTime", "")),
-                        "entry_price": float(t.get("EntryPrice", 0)),
-                        "exit_price": float(t.get("ExitPrice", 0)),
-                        "size": float(t.get("Size", 0)),
-                        "pnl": float(t.get("PnL", 0)),
+                        "entry_time": entry_time,
+                        "exit_time": exit_time,
+                        "entry_price": entry_price,
+                        "exit_price": exit_price,
+                        "side": side,
+                        "size": size,
+                        "margin_amount": margin_amount,
+                        "notional_amount": notional,
+                        "leverage": leverage,
+                        "liquidation_price": estimate_liquidation_price(
+                            side=side,
+                            entry_price=entry_price,
+                            leverage=leverage,
+                            maintenance_margin_rate=maintenance_margin_rate,
+                        ),
+                        "funding_fee": funding_fee,
+                        "pnl": float(t.get("PnL", 0)) - funding_fee,
                         "pnl_pct": float(t.get("ReturnPct", 0)) * 100,
+                        "exit_reason": _infer_exit_reason(side, exit_price, t.get("TP"), t.get("SL")),
                     })
 
         # 夏普比率
@@ -175,7 +209,67 @@ class BacktestEngine:
             num_trades=int(stats["# Trades"]),
             equity_curve=equity_curve,
             trade_list=trade_list,
+            total_funding_fee=total_funding_fee,
         )
+        if save_result:
+            result.result_path = self.save_result(result, symbol=symbol, timeframe=timeframe, strategy=strategy_class.__name__)
 
         logger.info("Backtest result: %s", result.summary())
         return result
+
+    def save_result(self, result: BacktestResult, symbol: str, timeframe: str, strategy: str) -> str:
+        """保存回测记录到 results/ 目录。"""
+        results_dir = Path("./results")
+        results_dir.mkdir(parents=True, exist_ok=True)
+        safe_symbol = symbol.replace("/", "_")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        path = results_dir / f"{stamp}_{safe_symbol}_{timeframe}_{strategy}.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "strategy": strategy,
+                    "summary": {
+                        "total_return_pct": result.total_return_pct,
+                        "win_rate_pct": result.win_rate_pct,
+                        "max_drawdown_pct": result.max_drawdown_pct,
+                        "sharpe_ratio": result.sharpe_ratio,
+                        "num_trades": result.num_trades,
+                        "total_funding_fee": result.total_funding_fee,
+                    },
+                    "equity_curve": result.equity_curve,
+                    "trade_list": result.trade_list,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return str(path)
+
+
+def _estimate_funding_fee(entry_time: str, exit_time: str, notional: float, funding_rate: float) -> float:
+    if funding_rate <= 0 or notional <= 0:
+        return 0.0
+    try:
+        entry = pd.to_datetime(entry_time)
+        exit_ = pd.to_datetime(exit_time)
+    except (TypeError, ValueError):
+        return 0.0
+    hours = max((exit_ - entry).total_seconds() / 3600, 0)
+    periods = hours / 8
+    return notional * funding_rate * periods
+
+
+def _infer_exit_reason(side: str, exit_price: float, take_profit: Any, stop_loss: Any) -> str:
+    try:
+        tp = float(take_profit)
+        sl = float(stop_loss)
+    except (TypeError, ValueError):
+        return "策略平仓"
+    if pd.notna(tp) and ((side == "long" and exit_price >= tp) or (side == "short" and exit_price <= tp)):
+        return "止盈"
+    if pd.notna(sl) and ((side == "long" and exit_price <= sl) or (side == "short" and exit_price >= sl)):
+        return "止损/强平保护"
+    return "策略平仓"

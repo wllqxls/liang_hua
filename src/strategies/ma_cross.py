@@ -11,7 +11,7 @@
 from backtesting import Strategy
 import pandas as pd
 
-from src.strategies.risk import build_long_risk_prices, calculate_fractional_order_size
+from src.strategies.risk import build_risk_prices, calculate_fractional_order_size
 
 
 class MovingAverageCross(Strategy):
@@ -22,6 +22,7 @@ class MovingAverageCross(Strategy):
     leverage = 1.0
     take_profit_amount = 0.0
     stop_loss_amount = 0.0
+    maintenance_margin_rate = 0.005
 
     def init(self) -> None:
         """策略初始化——计算快慢均线。"""
@@ -42,25 +43,42 @@ class MovingAverageCross(Strategy):
 
     def next(self) -> None:
         """每根 K 线触发一次——决策买卖。"""
-        if self.fast_ma[-2] <= self.slow_ma[-2] and self.fast_ma[-1] > self.slow_ma[-1]:
-            if not self.position:
-                price = self.data.Close[-1]
-                take_profit, stop_loss = build_long_risk_prices(
-                    price,
-                    self.position_amount,
-                    self.leverage,
-                    self.take_profit_amount,
-                    self.stop_loss_amount,
-                )
-                size = calculate_fractional_order_size(
-                    price=price,
-                    equity=self.equity,
-                    position_amount=self.position_amount,
-                    leverage=self.leverage,
-                )
-                if size is None:
-                    self.buy(tp=take_profit, sl=stop_loss)
-                else:
-                    self.buy(size=size, tp=take_profit, sl=stop_loss)
-        elif self.position and self.fast_ma[-2] >= self.slow_ma[-2] and self.fast_ma[-1] < self.slow_ma[-1]:
-            self.position.close()
+        crossed_up = self.fast_ma[-2] <= self.slow_ma[-2] and self.fast_ma[-1] > self.slow_ma[-1]
+        crossed_down = self.fast_ma[-2] >= self.slow_ma[-2] and self.fast_ma[-1] < self.slow_ma[-1]
+
+        if self.position:
+            if (self.position.is_long and crossed_down) or (self.position.is_short and crossed_up):
+                self.position.close()
+            return
+
+        if crossed_up:
+            self._open("long")
+        elif crossed_down:
+            self._open("short")
+
+    def _open(self, side: str) -> None:
+        price = self.data.Close[-1]
+        take_profit, stop_loss = build_risk_prices(
+            side=side,
+            price=price,
+            position_amount=self.position_amount,
+            leverage=self.leverage,
+            take_profit_amount=self.take_profit_amount,
+            stop_loss_amount=self.stop_loss_amount,
+            maintenance_margin_rate=self.maintenance_margin_rate,
+        )
+        size = calculate_fractional_order_size(
+            price=price,
+            equity=self.equity,
+            position_amount=self.position_amount,
+            leverage=self.leverage,
+        )
+        if side == "short":
+            if size is None:
+                self.sell(tp=take_profit, sl=stop_loss)
+            else:
+                self.sell(size=size, tp=take_profit, sl=stop_loss)
+        elif size is None:
+            self.buy(tp=take_profit, sl=stop_loss)
+        else:
+            self.buy(size=size, tp=take_profit, sl=stop_loss)
