@@ -97,6 +97,8 @@ MIN_QUALITY_TRADES = 5
 MAX_ALLOWED_DRAWDOWN_PCT = -30.0
 MIN_ALLOWED_WIN_RATE_PCT = 28.0
 MIN_ALLOWED_PROFIT_FACTOR = 1.05
+VALIDATION_POOL_SIZE = 10
+RANDOM_VALIDATION_WINDOWS = 2
 
 
 @dataclass
@@ -213,9 +215,9 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
     if req.position_amount > req.cash:
         return OptimizationResponse(success=False, candidates=[], error="单笔逐仓金额不能大于初始资金")
 
-    context_lookbacks = _nearby_options(req.context_lookback, CONTEXT_LOOKBACK_OPTIONS)
+    context_lookbacks = [_nearest_option(req.context_lookback, CONTEXT_LOOKBACK_OPTIONS)]
     entry_lookbacks = _nearby_options(req.entry_lookback, ENTRY_LOOKBACK_OPTIONS)
-    leverages = _nearby_leverages(req.leverage)
+    leverages = [float(_nearest_option(int(req.leverage), LEVERAGE_OPTIONS))]
     take_profit_base = req.take_profit_amount if req.take_profit_amount > 0 else req.position_amount * 0.5
     take_profits = _nearby_numbers(
         take_profit_base,
@@ -320,7 +322,7 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
                                 "score": score,
                             })
 
-    validation_pool = sorted(rankless, key=lambda item: item["score"], reverse=True)[:20]
+    validation_pool = sorted(rankless, key=lambda item: item["score"], reverse=True)[:VALIDATION_POOL_SIZE]
     for item in validation_pool:
         validation = _validate_candidate(
             engine=engine,
@@ -462,11 +464,15 @@ def _nearby_leverages(value: float) -> list[float]:
 
 def _nearby_options(value: int, options: list[int]) -> list[int]:
     """返回当前选项及左右相邻选项，控制参数搜索规模。"""
-    nearest = min(options, key=lambda option: abs(option - value))
+    nearest = _nearest_option(value, options)
     index = options.index(nearest)
     start = max(index - 1, 0)
     end = min(index + 2, len(options))
     return options[start:end]
+
+
+def _nearest_option(value: int, options: list[int]) -> int:
+    return min(options, key=lambda option: abs(option - value))
 
 
 def _load_data_bounds(engine: BacktestEngine, symbol: str, timeframe: str) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -599,7 +605,7 @@ def _random_validation_windows(
     data_end: pd.Timestamp,
     days: int,
     item: dict,
-    count: int = 3,
+    count: int = RANDOM_VALIDATION_WINDOWS,
 ) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
     window = pd.Timedelta(days=days)
     if data_end - data_start <= window:

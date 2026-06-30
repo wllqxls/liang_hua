@@ -248,8 +248,8 @@ async function optimizeParams() {
             return;
         }
         renderOptimizationTable(data.candidates, data);
-        status.textContent = '✅ 参数搜索完成，通过 ' + (data.candidates || []).length +
-            ' 个，过滤 ' + (data.filtered_count || 0) + ' 个';
+        status.textContent = '✅ 参数搜索完成，评估 ' + (data.evaluated_count || 0) +
+            ' 个，通过 ' + (data.candidates || []).length + ' 个，过滤 ' + (data.filtered_count || 0) + ' 个';
         results.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (err) {
         showError('运行错误: ' + err.message);
