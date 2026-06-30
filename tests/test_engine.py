@@ -86,7 +86,7 @@ def test_context_features_align_to_entry_timeframe(sample_ohlcv: pd.DataFrame) -
     entry = sample_ohlcv.resample("15min").ffill()
     context = sample_ohlcv
 
-    merged = _merge_context_features(entry, context)
+    merged = _merge_context_features(entry, context, lookback=5)
 
     assert len(merged) == len(entry)
     assert "ContextTrend" in merged.columns

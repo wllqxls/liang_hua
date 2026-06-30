@@ -104,6 +104,7 @@ class BacktestEngine:
         symbol: str = "BTC/USDT",
         timeframe: str = "1h",
         context_timeframe: str | None = None,
+        context_lookback: int = 192,
         backtest_days: int | None = None,
         cash: float = 1_000_000,
         commission: float = 0.001,
@@ -121,7 +122,7 @@ class BacktestEngine:
         if context_timeframe and context_timeframe != timeframe:
             context_path = self._data_dir / f"{safe_symbol}_{context_timeframe}.csv"
             context_df = self.load_data(context_path)
-            df = _merge_context_features(df, context_df)
+            df = _merge_context_features(df, context_df, lookback=context_lookback)
         df = _filter_recent_days(df, backtest_days)
 
         bt = FractionalBacktest(
@@ -256,13 +257,17 @@ class BacktestEngine:
         return str(path)
 
 
-def _merge_context_features(entry_df: pd.DataFrame, context_df: pd.DataFrame) -> pd.DataFrame:
+def _merge_context_features(
+    entry_df: pd.DataFrame,
+    context_df: pd.DataFrame,
+    lookback: int = 192,
+) -> pd.DataFrame:
     """把高周期环境指标对齐到入场周期 K 线。"""
     entry = entry_df.copy()
     context = context_df.copy()
-    lookback = 20
-    fast_window = 10
-    slow_window = 30
+    lookback = max(int(lookback), 2)
+    fast_window = max(10, lookback // 4)
+    slow_window = max(fast_window + 1, lookback // 2)
     atr_window = 14
 
     context_features = pd.DataFrame(index=context.index)

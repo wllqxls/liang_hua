@@ -15,12 +15,14 @@ class BacktestRequest(BaseModel):
     context_timeframe: str = Field(default="15m", description="环境 K 线周期")
     strategy: str = Field(default="KeyLevelScoring", description="策略名称")
     backtest_days: int = Field(default=30, ge=1, le=3650, description="回测天数")
-    lookback: int = Field(default=20, ge=1, le=500, description="回溯窗口")
-    cash: float = Field(default=1_000, ge=10, description="初始资金")
-    position_amount: float = Field(default=3.3, ge=0.1, description="单笔逐仓保证金")
+    context_lookback: int = Field(default=192, ge=1, le=500, description="环境回溯窗口")
+    entry_lookback: int = Field(default=30, ge=1, le=500, description="入场回溯窗口")
+    lookback: int = Field(default=30, ge=1, le=500, description="兼容旧版回溯窗口")
+    cash: float = Field(default=100, ge=10, description="初始资金")
+    position_amount: float = Field(default=10, ge=0.1, description="单笔逐仓保证金")
     leverage: float = Field(default=5, ge=1, le=150, description="杠杆倍数")
     take_profit_amount: float = Field(default=1, ge=0, description="止盈金额")
-    stop_loss_amount: float = Field(default=2, ge=0, description="止损金额")
+    stop_loss_amount: float = Field(default=1, ge=0, description="止损金额")
     maker_fee: float = Field(default=0.0002, ge=0, le=0.1, description="Maker 手续费率")
     taker_fee: float = Field(default=0.0005, ge=0, le=0.1, description="Taker 手续费率")
     slippage_rate: float = Field(default=0.0002, ge=0, le=0.1, description="滑点率")
@@ -92,6 +94,8 @@ class OptimizationCandidate(BaseModel):
     strategy: str
     strategy_label: str
     lookback: int
+    context_lookback: int
+    entry_lookback: int
     leverage: float
     take_profit_amount: float
     stop_loss_amount: float

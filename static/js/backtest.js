@@ -83,8 +83,11 @@ async function runBacktest() {
 
 
 function validateBacktestPayload(payload) {
-    if (payload.lookback < 1 || payload.lookback > 500) {
-        return '回溯窗口必须在 1 到 500 之间';
+    if (payload.context_lookback < 1 || payload.context_lookback > 500) {
+        return '环境回溯窗口必须在 1 到 500 之间';
+    }
+    if (payload.entry_lookback < 1 || payload.entry_lookback > 500) {
+        return '入场回溯窗口必须在 1 到 500 之间';
     }
     if (payload.backtest_days < 1 || payload.backtest_days > 3650) {
         return '回测天数必须在 1 到 3650 之间';
@@ -187,12 +190,14 @@ function collectBacktestPayload() {
         context_timeframe: document.getElementById('context-timeframe').value,
         strategy: document.getElementById('strategy').value,
         backtest_days: numberValue('backtest-days', 30),
-        lookback: numberValue('lookback', 20),
-        cash: numberValue('cash', 1000),
-        position_amount: numberValue('position-amount', 3.3),
+        context_lookback: numberValue('context-lookback', 192),
+        entry_lookback: numberValue('entry-lookback', 30),
+        lookback: numberValue('entry-lookback', 30),
+        cash: numberValue('cash', 100),
+        position_amount: numberValue('position-amount', 10),
         leverage: numberValue('leverage', 5),
         take_profit_amount: numberValue('take-profit-amount', 1),
-        stop_loss_amount: numberValue('stop-loss-amount', 2),
+        stop_loss_amount: numberValue('stop-loss-amount', 1),
         maker_fee: numberValue('maker-fee', 0.0002),
         taker_fee: numberValue('taker-fee', 0.0005),
         slippage_rate: numberValue('slippage-rate', 0.0002),
@@ -525,7 +530,7 @@ function renderOptimizationTable(candidates, summary) {
         const text = evaluated > 0
             ? '没有通过严格过滤的组合，已过滤 ' + filtered + ' / ' + evaluated + ' 个'
             : '尚未搜索';
-        tbody.innerHTML = '<tr><td colspan="15" class="empty-cell">' + text + '</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="16" class="empty-cell">' + text + '</td></tr>';
         return;
     }
 
@@ -538,7 +543,8 @@ function renderOptimizationTable(candidates, summary) {
             '<td>' + item.rank + '</td>' +
             '<td>' + (item.strategy_label || item.strategy || '--') + '</td>' +
             '<td>' + badge + '</td>' +
-            '<td>' + item.lookback + '</td>' +
+            '<td>' + item.context_lookback + '</td>' +
+            '<td>' + (item.entry_lookback || item.lookback) + '</td>' +
             '<td>x' + formatNumber(item.leverage, 0) + '</td>' +
             '<td>' + formatNumber(item.take_profit_amount, 2) + '</td>' +
             '<td>' + formatNumber(item.stop_loss_amount, 2) + '</td>' +
@@ -560,7 +566,8 @@ function applyOptimizationCandidate(index) {
     if (!item) return;
 
     document.getElementById('strategy').value = item.strategy;
-    document.getElementById('lookback').value = item.lookback;
+    document.getElementById('context-lookback').value = item.context_lookback;
+    document.getElementById('entry-lookback').value = item.entry_lookback || item.lookback;
     document.getElementById('leverage').value = String(item.leverage);
     document.getElementById('take-profit-amount').value = item.take_profit_amount;
     document.getElementById('stop-loss-amount').value = item.stop_loss_amount;

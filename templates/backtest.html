@@ -89,20 +89,37 @@
                     <span id="strategy-desc" class="field-note"></span>
                 </div>
                 <div class="form-group">
-                    <label for="lookback">回溯窗口</label>
-                    <input type="number" id="lookback" value="20" min="1" max="500">
+                    <label for="context-lookback">环境回溯窗口</label>
+                    <select id="context-lookback">
+                        <option value="96">96</option>
+                        <option value="192" selected>192</option>
+                        <option value="288">288</option>
+                    </select>
+                    <span class="field-note">15m 支撑阻力、趋势</span>
+                </div>
+                <div class="form-group">
+                    <label for="entry-lookback">入场回溯窗口</label>
+                    <select id="entry-lookback">
+                        <option value="10">10</option>
+                        <option value="20">20</option>
+                        <option value="30" selected>30</option>
+                        <option value="40">40</option>
+                        <option value="50">50</option>
+                        <option value="60">60</option>
+                    </select>
+                    <span class="field-note">5m 入场信号</span>
                 </div>
                 <div class="form-group">
                     <label for="backtest-days">回测天数</label>
-                    <input type="number" id="backtest-days" value="30" min="1" max="3650">
-                </div>
-                <div class="form-group">
-                    <label for="cash">初始资金 (USDT)</label>
-                    <input type="number" id="cash" value="1000" min="10" step="10">
-                </div>
-                <div class="form-group">
-                    <label for="position-amount">单笔逐仓金额 (USDT)</label>
-                    <input type="number" id="position-amount" value="3.3" min="0.1" step="0.1">
+                    <select id="backtest-days">
+                        <option value="7">7</option>
+                        <option value="15">15</option>
+                        <option value="30" selected>30</option>
+                        <option value="60">60</option>
+                        <option value="90">90</option>
+                        <option value="120">120</option>
+                        <option value="180">180</option>
+                    </select>
                 </div>
                 <div class="form-group">
                     <label for="leverage">杠杆</label>
@@ -120,35 +137,48 @@
                     </select>
                 </div>
                 <div class="form-group">
+                    <label for="cash">初始资金 (USDT)</label>
+                    <input type="number" id="cash" value="100" min="10" step="10">
+                </div>
+                <div class="form-group">
+                    <label for="position-amount">单笔逐仓金额 (USDT)</label>
+                    <input type="number" id="position-amount" value="10" min="0.1" step="0.1">
+                </div>
+                <div class="form-group">
                     <label for="take-profit-amount">止盈金额 (USDT)</label>
                     <input type="number" id="take-profit-amount" value="1" min="0" step="0.1">
                 </div>
                 <div class="form-group">
                     <label for="stop-loss-amount">止损金额 (USDT)</label>
-                    <input type="number" id="stop-loss-amount" value="2" min="0" step="0.1">
-                </div>
-                <div class="form-group">
-                    <label for="maker-fee">Maker 手续费率</label>
-                    <input type="number" id="maker-fee" value="0.0002" min="0" max="0.1" step="0.0001">
-                </div>
-                <div class="form-group">
-                    <label for="taker-fee">Taker 手续费率</label>
-                    <input type="number" id="taker-fee" value="0.0005" min="0" max="0.1" step="0.0001">
-                    <span class="field-note">当前市价回测按 taker 费率扣除</span>
-                </div>
-                <div class="form-group">
-                    <label for="slippage-rate">滑点率</label>
-                    <input type="number" id="slippage-rate" value="0.0002" min="0" max="0.1" step="0.0001">
-                </div>
-                <div class="form-group">
-                    <label for="funding-rate">8小时资金费率</label>
-                    <input type="number" id="funding-rate" value="0.0001" min="0" max="0.1" step="0.0001">
-                </div>
-                <div class="form-group">
-                    <label for="maintenance-margin-rate">维持保证金率</label>
-                    <input type="number" id="maintenance-margin-rate" value="0.005" min="0" max="0.1" step="0.0001">
+                    <input type="number" id="stop-loss-amount" value="1" min="0" step="0.1">
                 </div>
             </div>
+            <details class="advanced-options">
+                <summary>高级成本参数</summary>
+                <div class="form-grid advanced-grid">
+                    <div class="form-group">
+                        <label for="maker-fee">Maker 手续费率</label>
+                        <input type="number" id="maker-fee" value="0.0002" min="0" max="0.1" step="0.0001">
+                    </div>
+                    <div class="form-group">
+                        <label for="taker-fee">Taker 手续费率</label>
+                        <input type="number" id="taker-fee" value="0.0005" min="0" max="0.1" step="0.0001">
+                        <span class="field-note">当前市价回测按 taker 费率扣除</span>
+                    </div>
+                    <div class="form-group">
+                        <label for="slippage-rate">滑点率</label>
+                        <input type="number" id="slippage-rate" value="0.0002" min="0" max="0.1" step="0.0001">
+                    </div>
+                    <div class="form-group">
+                        <label for="funding-rate">8小时资金费率</label>
+                        <input type="number" id="funding-rate" value="0.0001" min="0" max="0.1" step="0.0001">
+                    </div>
+                    <div class="form-group">
+                        <label for="maintenance-margin-rate">维持保证金率</label>
+                        <input type="number" id="maintenance-margin-rate" value="0.005" min="0" max="0.1" step="0.0001">
+                    </div>
+                </div>
+            </details>
             <div id="order-check-msg" class="notice-msg hidden"></div>
             <div id="error-msg" class="error-msg hidden"></div>
             <button id="run-btn" class="btn-primary" onclick="runBacktest()">▶ 开始回测</button>
@@ -229,7 +259,8 @@
                             <th>排名</th>
                             <th>策略</th>
                             <th>评价</th>
-                            <th>回溯</th>
+                            <th>环境回溯</th>
+                            <th>入场回溯</th>
                             <th>杠杆</th>
                             <th>止盈U</th>
                             <th>止损U</th>
@@ -244,13 +275,13 @@
                         </tr>
                     </thead>
                     <tbody id="optimization-tbody">
-                        <tr><td colspan="15" class="empty-cell">尚未搜索</td></tr>
+                        <tr><td colspan="16" class="empty-cell">尚未搜索</td></tr>
                     </tbody>
                 </table>
             </div>
         </section>
     </div>
 
-    <script src="/static/js/backtest.js?v=quality-filter-1"></script>
+    <script src="/static/js/backtest.js?v=lookback-layout-1"></script>
 </body>
 </html>

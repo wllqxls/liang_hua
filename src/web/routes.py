@@ -83,6 +83,8 @@ OPTIMIZATION_STRATEGIES = {
 TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
 
 LEVERAGE_OPTIONS = [1, 2, 3, 5, 10, 20, 50, 100, 125, 150]
+CONTEXT_LOOKBACK_OPTIONS = [96, 192, 288]
+ENTRY_LOOKBACK_OPTIONS = [10, 20, 30, 40, 50, 60]
 
 SYMBOLS = [
     "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT",
@@ -137,8 +139,9 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
             symbol=req.symbol,
             timeframe=req.timeframe,
             context_timeframe=req.context_timeframe,
+            context_lookback=req.context_lookback,
             backtest_days=req.backtest_days,
-            lookback=req.lookback,
+            lookback=req.entry_lookback,
             cash=req.cash,
             commission=req.taker_fee,
             leverage=req.leverage,
@@ -195,7 +198,8 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
     if req.position_amount > req.cash:
         return OptimizationResponse(success=False, candidates=[], error="单笔逐仓金额不能大于初始资金")
 
-    lookbacks = _nearby_ints(req.lookback, [1, 1.5], min_value=2, max_value=500)
+    context_lookbacks = _nearby_options(req.context_lookback, CONTEXT_LOOKBACK_OPTIONS)
+    entry_lookbacks = _nearby_options(req.entry_lookback, ENTRY_LOOKBACK_OPTIONS)
     leverages = _nearby_leverages(req.leverage)
     take_profit_base = req.take_profit_amount if req.take_profit_amount > 0 else req.position_amount * 0.5
     take_profits = _nearby_numbers(
@@ -213,73 +217,77 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
     filtered_count = 0
 
     for strategy_name, strategy_info in OPTIMIZATION_STRATEGIES.items():
-        for lookback in lookbacks:
-            for leverage in leverages:
-                for take_profit_amount in take_profits:
-                    for stop_loss_amount in stop_losses:
-                        try:
-                            result = engine.run(
-                                strategy_class=strategy_info["class"],
-                                symbol=req.symbol,
-                                timeframe=req.timeframe,
-                                context_timeframe=req.context_timeframe,
-                                backtest_days=req.backtest_days,
-                                lookback=lookback,
-                                cash=req.cash,
-                                commission=req.taker_fee,
-                                leverage=leverage,
-                                slippage_rate=req.slippage_rate,
-                                funding_rate=req.funding_rate,
-                                maintenance_margin_rate=req.maintenance_margin_rate,
-                                position_amount=req.position_amount,
+        for context_lookback in context_lookbacks:
+            for entry_lookback in entry_lookbacks:
+                for leverage in leverages:
+                    for take_profit_amount in take_profits:
+                        for stop_loss_amount in stop_losses:
+                            try:
+                                result = engine.run(
+                                    strategy_class=strategy_info["class"],
+                                    symbol=req.symbol,
+                                    timeframe=req.timeframe,
+                                    context_timeframe=req.context_timeframe,
+                                    context_lookback=context_lookback,
+                                    backtest_days=req.backtest_days,
+                                    lookback=entry_lookback,
+                                    cash=req.cash,
+                                    commission=req.taker_fee,
+                                    leverage=leverage,
+                                    slippage_rate=req.slippage_rate,
+                                    funding_rate=req.funding_rate,
+                                    maintenance_margin_rate=req.maintenance_margin_rate,
+                                    position_amount=req.position_amount,
+                                    take_profit_amount=take_profit_amount,
+                                    stop_loss_amount=stop_loss_amount,
+                                )
+                            except Exception:
+                                logger.exception("参数搜索候选失败")
+                                continue
+                            evaluated_count += 1
+                            total_return_pct = _finite_number(result.total_return_pct)
+                            max_drawdown_pct = _finite_number(result.max_drawdown_pct)
+                            win_rate_pct = _finite_number(result.win_rate_pct)
+                            quality = _assess_backtest_quality(
+                                result=result,
                                 take_profit_amount=take_profit_amount,
                                 stop_loss_amount=stop_loss_amount,
+                                backtest_days=req.backtest_days,
                             )
-                        except Exception:
-                            logger.exception("参数搜索候选失败")
-                            continue
-                        evaluated_count += 1
-                        total_return_pct = _finite_number(result.total_return_pct)
-                        max_drawdown_pct = _finite_number(result.max_drawdown_pct)
-                        win_rate_pct = _finite_number(result.win_rate_pct)
-                        quality = _assess_backtest_quality(
-                            result=result,
-                            take_profit_amount=take_profit_amount,
-                            stop_loss_amount=stop_loss_amount,
-                            backtest_days=req.backtest_days,
-                        )
-                        if not quality.passes_filter:
-                            filtered_count += 1
-                            continue
-                        score = _optimization_score(
-                            total_return_pct=total_return_pct,
-                            max_drawdown_pct=max_drawdown_pct,
-                            win_rate_pct=win_rate_pct,
-                            num_trades=result.num_trades,
-                            quality_score=quality.score,
-                            profit_factor=quality.profit_factor,
-                            max_consecutive_losses=quality.max_consecutive_losses,
-                        )
-                        rankless.append({
-                            "strategy": strategy_name,
-                            "strategy_label": strategy_info["label"],
-                            "lookback": lookback,
-                            "leverage": leverage,
-                            "take_profit_amount": take_profit_amount,
-                            "stop_loss_amount": stop_loss_amount,
-                            "total_return_pct": total_return_pct,
-                            "max_drawdown_pct": max_drawdown_pct,
-                            "win_rate_pct": win_rate_pct,
-                            "num_trades": result.num_trades,
-                            "quality_score": quality.score,
-                            "quality_grade": quality.grade,
-                            "quality_label": quality.label,
-                            "quality_reasons": quality.reasons,
-                            "profit_factor": quality.profit_factor,
-                            "avg_win_loss_ratio": quality.avg_win_loss_ratio,
-                            "max_consecutive_losses": quality.max_consecutive_losses,
-                            "score": score,
-                        })
+                            if not quality.passes_filter:
+                                filtered_count += 1
+                                continue
+                            score = _optimization_score(
+                                total_return_pct=total_return_pct,
+                                max_drawdown_pct=max_drawdown_pct,
+                                win_rate_pct=win_rate_pct,
+                                num_trades=result.num_trades,
+                                quality_score=quality.score,
+                                profit_factor=quality.profit_factor,
+                                max_consecutive_losses=quality.max_consecutive_losses,
+                            )
+                            rankless.append({
+                                "strategy": strategy_name,
+                                "strategy_label": strategy_info["label"],
+                                "lookback": entry_lookback,
+                                "context_lookback": context_lookback,
+                                "entry_lookback": entry_lookback,
+                                "leverage": leverage,
+                                "take_profit_amount": take_profit_amount,
+                                "stop_loss_amount": stop_loss_amount,
+                                "total_return_pct": total_return_pct,
+                                "max_drawdown_pct": max_drawdown_pct,
+                                "win_rate_pct": win_rate_pct,
+                                "num_trades": result.num_trades,
+                                "quality_score": quality.score,
+                                "quality_grade": quality.grade,
+                                "quality_label": quality.label,
+                                "quality_reasons": quality.reasons,
+                                "profit_factor": quality.profit_factor,
+                                "avg_win_loss_ratio": quality.avg_win_loss_ratio,
+                                "max_consecutive_losses": quality.max_consecutive_losses,
+                                "score": score,
+                            })
 
     ranked = sorted(rankless, key=lambda item: item["score"], reverse=True)[:10]
     for index, item in enumerate(ranked, start=1):
@@ -398,6 +406,15 @@ def _nearby_leverages(value: float) -> list[float]:
         for target in targets
     }
     return [float(item) for item in sorted(selected)]
+
+
+def _nearby_options(value: int, options: list[int]) -> list[int]:
+    """返回当前选项及左右相邻选项，控制参数搜索规模。"""
+    nearest = min(options, key=lambda option: abs(option - value))
+    index = options.index(nearest)
+    start = max(index - 1, 0)
+    end = min(index + 2, len(options))
+    return options[start:end]
 
 
 def _finite_number(value: float | None) -> float:
