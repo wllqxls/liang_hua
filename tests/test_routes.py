@@ -25,6 +25,7 @@ def test_backtest_api_returns_error_for_unknown_strategy() -> None:
 def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
     def fake_run(self: object, **kwargs: Any) -> BacktestResult:
         assert kwargs["position_amount"] == 3.3
+        assert kwargs["context_timeframe"] == "15m"
         assert kwargs["leverage"] == 5
         assert kwargs["take_profit_amount"] == 0
         assert kwargs["stop_loss_amount"] == 2
@@ -53,6 +54,7 @@ def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
         json={
             "symbol": "BTC/USDT",
             "timeframe": "1h",
+            "context_timeframe": "15m",
             "strategy": "SRBreakout",
             "lookback": 20,
             "cash": 100_000,
@@ -110,6 +112,7 @@ def test_backtest_api_accepts_ten_usdt_cash(monkeypatch: Any) -> None:
         json={
             "symbol": "BTC/USDT",
             "timeframe": "1h",
+            "context_timeframe": "15m",
             "strategy": "SRBreakout",
             "lookback": 20,
             "cash": 10,
@@ -134,6 +137,7 @@ def test_backtest_api_rejects_position_amount_above_cash() -> None:
         json={
             "symbol": "BTC/USDT",
             "timeframe": "1h",
+            "context_timeframe": "15m",
             "strategy": "SRBreakout",
             "lookback": 20,
             "cash": 10,
@@ -176,6 +180,7 @@ def test_optimize_api_returns_ranked_candidates(monkeypatch: Any) -> None:
         json={
             "symbol": "BTC/USDT",
             "timeframe": "1h",
+            "context_timeframe": "15m",
             "strategy": "SRBreakout",
             "lookback": 20,
             "cash": 100,
@@ -199,6 +204,7 @@ def test_optimize_api_returns_ranked_candidates(monkeypatch: Any) -> None:
     assert "strategy" in payload["candidates"][0]
     assert "strategy_label" in payload["candidates"][0]
     assert calls[0]["slippage_rate"] == 0.0002
+    assert calls[0]["context_timeframe"] == "15m"
     assert all(candidate["take_profit_amount"] > 0 for candidate in payload["candidates"])
     assert all(candidate["leverage"] in routes.LEVERAGE_OPTIONS for candidate in payload["candidates"])
     assert all(call["take_profit_amount"] > 0 for call in calls)

@@ -11,8 +11,9 @@ class BacktestRequest(BaseModel):
     """回测请求参数。"""
 
     symbol: str = Field(default="BTC/USDT", description="交易对")
-    timeframe: str = Field(default="1h", description="K 线周期")
-    strategy: str = Field(default="SRBreakout", description="策略名称")
+    timeframe: str = Field(default="5m", description="入场 K 线周期")
+    context_timeframe: str = Field(default="15m", description="环境 K 线周期")
+    strategy: str = Field(default="KeyLevelScoring", description="策略名称")
     lookback: int = Field(default=20, ge=1, le=500, description="回溯窗口")
     cash: float = Field(default=1_000, ge=10, description="初始资金")
     position_amount: float = Field(default=3.3, ge=0.1, description="单笔逐仓保证金")

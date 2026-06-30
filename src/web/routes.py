@@ -116,6 +116,7 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
             strategy_class=strategy_class,
             symbol=req.symbol,
             timeframe=req.timeframe,
+            context_timeframe=req.context_timeframe,
             lookback=req.lookback,
             cash=req.cash,
             commission=req.taker_fee,
@@ -160,16 +161,16 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
     if req.position_amount > req.cash:
         return OptimizationResponse(success=False, candidates=[], error="单笔逐仓金额不能大于初始资金")
 
-    lookbacks = _nearby_ints(req.lookback, [0.5, 1, 2], min_value=2, max_value=500)
+    lookbacks = _nearby_ints(req.lookback, [1, 1.5], min_value=2, max_value=500)
     leverages = _nearby_leverages(req.leverage)
     take_profit_base = req.take_profit_amount if req.take_profit_amount > 0 else req.position_amount * 0.5
     take_profits = _nearby_numbers(
         take_profit_base,
-        [0.75, 1, 1.5],
+        [1, 1.5],
         min_value=0.1,
         max_value=req.position_amount * req.leverage,
     )
-    stop_losses = _nearby_numbers(req.stop_loss_amount, [0.5, 1, 1.5], min_value=0.1, max_value=req.position_amount)
+    stop_losses = _nearby_numbers(req.stop_loss_amount, [0.75, 1], min_value=0.1, max_value=req.position_amount)
 
     engine = BacktestEngine(data_dir="./data")
     candidates: list[OptimizationCandidate] = []
@@ -185,6 +186,7 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
                                 strategy_class=strategy_info["class"],
                                 symbol=req.symbol,
                                 timeframe=req.timeframe,
+                                context_timeframe=req.context_timeframe,
                                 lookback=lookback,
                                 cash=req.cash,
                                 commission=req.taker_fee,
@@ -235,7 +237,7 @@ async def data_status() -> list[DataStatus]:
     results: list[DataStatus] = []
 
     for symbol in SYMBOLS[:4]:
-        for tf in ["1h", "4h", "1d"]:
+        for tf in ["5m", "15m", "1h", "4h"]:
             results.append(_inspect_data_file(data_dir, symbol, tf))
     return results
 

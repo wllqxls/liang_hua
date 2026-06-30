@@ -17,7 +17,7 @@
 from backtesting import Strategy
 import pandas as pd
 
-from src.strategies.risk import build_risk_prices, calculate_fractional_order_size
+from src.strategies.risk import build_risk_prices, calculate_fractional_order_size, context_allows_side
 
 
 class SRBreakout(Strategy):
@@ -57,6 +57,8 @@ class SRBreakout(Strategy):
             return
 
         if price > self.resistance[-1]:
+            if not context_allows_side(self.data, "long", price):
+                return
             take_profit, stop_loss = build_risk_prices(
                 side="long",
                 price=price,
@@ -77,6 +79,8 @@ class SRBreakout(Strategy):
             else:
                 self.buy(size=size, tp=take_profit, sl=stop_loss)
         elif price < self.support[-1]:
+            if not context_allows_side(self.data, "short", price):
+                return
             take_profit, stop_loss = build_risk_prices(
                 side="short",
                 price=price,

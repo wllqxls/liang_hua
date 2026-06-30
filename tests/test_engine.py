@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.backtest.engine import BacktestEngine
+from src.backtest.engine import BacktestEngine, _merge_context_features
 from src.strategies.sr_breakout import SRBreakout
 
 
@@ -80,3 +80,16 @@ def test_run_returns_backtest_result(tmp_path: Path, sample_ohlcv: pd.DataFrame)
     assert isinstance(result.win_rate_pct, float)
     assert result.num_trades >= 0
     assert len(result.equity_curve) == len(sample_ohlcv)
+
+
+def test_context_features_align_to_entry_timeframe(sample_ohlcv: pd.DataFrame) -> None:
+    entry = sample_ohlcv.resample("15min").ffill()
+    context = sample_ohlcv
+
+    merged = _merge_context_features(entry, context)
+
+    assert len(merged) == len(entry)
+    assert "ContextTrend" in merged.columns
+    assert "ContextSupport" in merged.columns
+    assert "ContextResistance" in merged.columns
+    assert merged["ContextTrend"].notna().any()

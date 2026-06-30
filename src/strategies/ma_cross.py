@@ -11,7 +11,7 @@
 from backtesting import Strategy
 import pandas as pd
 
-from src.strategies.risk import build_risk_prices, calculate_fractional_order_size
+from src.strategies.risk import build_risk_prices, calculate_fractional_order_size, context_allows_side
 
 
 class MovingAverageCross(Strategy):
@@ -58,6 +58,8 @@ class MovingAverageCross(Strategy):
 
     def _open(self, side: str) -> None:
         price = self.data.Close[-1]
+        if not context_allows_side(self.data, side, price):
+            return
         take_profit, stop_loss = build_risk_prices(
             side=side,
             price=price,

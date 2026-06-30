@@ -73,6 +73,9 @@ function validateBacktestPayload(payload) {
     if (payload.lookback < 1 || payload.lookback > 500) {
         return '回溯窗口必须在 1 到 500 之间';
     }
+    if (payload.context_timeframe === payload.timeframe) {
+        return '环境周期和入场周期建议分开，例如 15m + 5m';
+    }
     if (payload.cash < 10) {
         return '初始资金不能低于 10 USDT';
     }
@@ -114,6 +117,7 @@ function collectBacktestPayload() {
     return {
         symbol: document.getElementById('symbol').value,
         timeframe: document.getElementById('timeframe').value,
+        context_timeframe: document.getElementById('context-timeframe').value,
         strategy: document.getElementById('strategy').value,
         lookback: numberValue('lookback', 20),
         cash: numberValue('cash', 1000),
@@ -209,30 +213,35 @@ async function loadDataStatus(successMessage) {
 async function fetchSelectedData() {
     const btn = document.getElementById('fetch-data-btn');
     const statusText = document.getElementById('data-status-text');
-    const payload = {
-        symbol: document.getElementById('symbol').value,
-        timeframe: document.getElementById('timeframe').value,
-        days: parseInt(document.getElementById('fetch-days').value) || 365,
-    };
+    const symbol = document.getElementById('symbol').value;
+    const days = parseInt(document.getElementById('fetch-days').value) || 365;
+    const timeframes = Array.from(new Set([
+        document.getElementById('context-timeframe').value,
+        document.getElementById('timeframe').value,
+    ]));
 
     btn.disabled = true;
-    statusText.innerHTML = '<span class="spinner"></span>正在拉取 ' + payload.symbol + ' ' + payload.timeframe + '...';
+    statusText.innerHTML = '<span class="spinner"></span>正在拉取 ' + symbol + ' ' + timeframes.join(' + ') + '...';
 
     try {
-        const resp = await fetch('/api/fetch-data', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-        });
-        const data = await resp.json();
+        const saved = [];
+        for (const timeframe of timeframes) {
+            const resp = await fetch('/api/fetch-data', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ symbol, timeframe, days }),
+            });
+            const data = await resp.json();
 
-        if (!data.success) {
-            statusText.textContent = data.error || '数据拉取失败';
-            return;
+            if (!data.success) {
+                statusText.textContent = data.error || '数据拉取失败';
+                return;
+            }
+            const rows = data.rows == null ? '--' : data.rows.toLocaleString();
+            saved.push(data.timeframe + ' ' + rows + ' 行');
         }
 
-        const rows = data.rows == null ? '--' : data.rows.toLocaleString();
-        await loadDataStatus('已保存 ' + data.symbol + ' ' + data.timeframe + '，共 ' + rows + ' 行');
+        await loadDataStatus('已保存 ' + symbol + '：' + saved.join('，'));
     } catch (err) {
         statusText.textContent = '数据拉取失败: ' + err.message;
     } finally {

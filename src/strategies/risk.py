@@ -88,3 +88,38 @@ def estimate_liquidation_price(
     if side == "short":
         return entry_price * (1 + (1 / max(leverage, 1)) - maintenance_margin_rate)
     return entry_price * (1 - (1 / max(leverage, 1)) + maintenance_margin_rate)
+
+
+def context_allows_side(data: object, side: str, price: float) -> bool:
+    """根据高周期环境过滤方向；没有高周期字段时默认放行。"""
+    trend = _latest_data_value(data, "ContextTrend")
+    support = _latest_data_value(data, "ContextSupport")
+    resistance = _latest_data_value(data, "ContextResistance")
+    atr = _latest_data_value(data, "ContextATR")
+    if trend is None:
+        return True
+
+    if side == "long" and trend > 0:
+        return True
+    if side == "short" and trend < 0:
+        return True
+
+    if support is None or resistance is None or atr is None or atr <= 0:
+        return trend == 0
+
+    near_support = abs(price - support) <= atr * 0.6
+    near_resistance = abs(price - resistance) <= atr * 0.6
+    if side == "long":
+        return trend == 0 or near_support
+    return trend == 0 or near_resistance
+
+
+def _latest_data_value(data: object, column: str) -> float | None:
+    try:
+        values = getattr(data, column)
+        value = float(values[-1])
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return None
+    if value != value:
+        return None
+    return value

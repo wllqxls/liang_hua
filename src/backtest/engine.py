@@ -103,6 +103,7 @@ class BacktestEngine:
         strategy_class: type[Strategy],
         symbol: str = "BTC/USDT",
         timeframe: str = "1h",
+        context_timeframe: str | None = None,
         cash: float = 1_000_000,
         commission: float = 0.001,
         leverage: float = 1.0,
@@ -116,6 +117,10 @@ class BacktestEngine:
         safe_symbol = symbol.replace("/", "_")
         filepath = self._data_dir / f"{safe_symbol}_{timeframe}.csv"
         df = self.load_data(filepath)
+        if context_timeframe and context_timeframe != timeframe:
+            context_path = self._data_dir / f"{safe_symbol}_{context_timeframe}.csv"
+            context_df = self.load_data(context_path)
+            df = _merge_context_features(df, context_df)
 
         bt = FractionalBacktest(
             df,
@@ -247,6 +252,44 @@ class BacktestEngine:
             encoding="utf-8",
         )
         return str(path)
+
+
+def _merge_context_features(entry_df: pd.DataFrame, context_df: pd.DataFrame) -> pd.DataFrame:
+    """把高周期环境指标对齐到入场周期 K 线。"""
+    entry = entry_df.copy()
+    context = context_df.copy()
+    lookback = 20
+    fast_window = 10
+    slow_window = 30
+    atr_window = 14
+
+    context_features = pd.DataFrame(index=context.index)
+    context_features["ContextResistance"] = context["High"].rolling(lookback).max().shift(1)
+    context_features["ContextSupport"] = context["Low"].rolling(lookback).min().shift(1)
+    fast_ma = context["Close"].rolling(fast_window).mean()
+    slow_ma = context["Close"].rolling(slow_window).mean()
+    context_features["ContextTrend"] = 0
+    context_features.loc[fast_ma > slow_ma, "ContextTrend"] = 1
+    context_features.loc[fast_ma < slow_ma, "ContextTrend"] = -1
+    true_range = pd.concat(
+        [
+            context["High"] - context["Low"],
+            (context["High"] - context["Close"].shift(1)).abs(),
+            (context["Low"] - context["Close"].shift(1)).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    context_features["ContextATR"] = true_range.rolling(atr_window).mean()
+    context_features["ContextClose"] = context["Close"]
+
+    merged = pd.merge_asof(
+        entry.sort_index(),
+        context_features.sort_index(),
+        left_index=True,
+        right_index=True,
+        direction="backward",
+    )
+    return merged
 
 
 def _estimate_funding_fee(entry_time: str, exit_time: str, notional: float, funding_rate: float) -> float:
