@@ -66,7 +66,7 @@ async function runBacktest() {
         status.textContent = '✅ 回测完成';
 
     } catch (err) {
-        showError('网络错误: ' + err.message);
+        showError('运行错误: ' + err.message);
     } finally {
         btn.disabled = false;
         btn.textContent = '▶ 开始回测';
@@ -239,7 +239,7 @@ function drawEquityChart(equityCurve) {
     const validPoints = equityCurve.filter(p => p.timestamp && p.equity != null);
     if (validPoints.length === 0) return;
 
-    const labels = validPoints.map(p => p.timestamp);
+    const labels = validPoints.map(p => formatChartLabel(p.timestamp));
     const equity = validPoints.map(p => p.equity);
     const initial = equity[0] || 1;
 
@@ -278,11 +278,6 @@ function drawEquityChart(equityCurve) {
             },
             scales: {
                 x: {
-                    type: 'time',
-                    time: {
-                        unit: 'day',
-                        displayFormats: { day: 'MM-dd' },
-                    },
                     grid: { color: 'rgba(255,255,255,0.04)' },
                     ticks: { color: '#8b949e', maxTicksLimit: 15 },
                 },
@@ -343,6 +338,20 @@ function formatTime(isoStr) {
         return d.toISOString().slice(0, 16).replace('T', ' ');
     } catch {
         return String(isoStr).slice(0, 16);
+    }
+}
+
+
+function formatChartLabel(isoStr) {
+    if (!isoStr) return '';
+    try {
+        const d = new Date(isoStr);
+        const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(d.getUTCDate()).padStart(2, '0');
+        const hour = String(d.getUTCHours()).padStart(2, '0');
+        return month + '-' + day + ' ' + hour + ':00';
+    } catch {
+        return String(isoStr).slice(5, 16);
     }
 }
 
