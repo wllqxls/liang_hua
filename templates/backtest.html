@@ -52,8 +52,40 @@
                     <input type="number" id="cash" value="1000" min="10" step="10">
                 </div>
                 <div class="form-group">
-                    <label for="commission">手续费率</label>
-                    <input type="number" id="commission" value="0.001" min="0" max="0.1" step="0.0001">
+                    <label for="position-amount">单笔逐仓金额 (USDT)</label>
+                    <input type="number" id="position-amount" value="3.3" min="0.1" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="leverage">杠杆</label>
+                    <select id="leverage">
+                        <option value="1">x1</option>
+                        <option value="2">x2</option>
+                        <option value="3">x3</option>
+                        <option value="5" selected>x5</option>
+                        <option value="10">x10</option>
+                        <option value="20">x20</option>
+                        <option value="50">x50</option>
+                        <option value="100">x100</option>
+                        <option value="125">x125</option>
+                        <option value="150">x150</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="take-profit-pct">止盈 (%)</label>
+                    <input type="number" id="take-profit-pct" value="0" min="0" max="1000" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="stop-loss-pct">止损 (%)</label>
+                    <input type="number" id="stop-loss-pct" value="3" min="0" max="100" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="maker-fee">Maker 手续费率</label>
+                    <input type="number" id="maker-fee" value="0.0002" min="0" max="0.1" step="0.0001">
+                </div>
+                <div class="form-group">
+                    <label for="taker-fee">Taker 手续费率</label>
+                    <input type="number" id="taker-fee" value="0.0005" min="0" max="0.1" step="0.0001">
+                    <span class="field-note">当前市价回测按 taker 费率扣除</span>
                 </div>
             </div>
             <button id="run-btn" class="btn-primary" onclick="runBacktest()">▶ 开始回测</button>

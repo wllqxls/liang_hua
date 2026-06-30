@@ -100,6 +100,7 @@ class BacktestEngine:
         timeframe: str = "1h",
         cash: float = 1_000_000,
         commission: float = 0.001,
+        leverage: float = 1.0,
         **strategy_kwargs: Any,
     ) -> BacktestResult:
         """运行回测。"""
@@ -112,6 +113,7 @@ class BacktestEngine:
             strategy_class,
             cash=cash,
             commission=commission,
+            margin=1 / max(leverage, 1),
             hedging=False,
             finalize_trades=True,
         )
@@ -121,6 +123,7 @@ class BacktestEngine:
             strategy_class.__name__, symbol, timeframe, cash,
         )
 
+        strategy_kwargs.setdefault("leverage", leverage)
         stats = bt.run(**strategy_kwargs)
 
         # 权益曲线
@@ -152,7 +155,7 @@ class BacktestEngine:
                         "exit_price": float(t.get("ExitPrice", 0)),
                         "size": float(t.get("Size", 0)),
                         "pnl": float(t.get("PnL", 0)),
-                        "pnl_pct": float(t.get("ReturnPct", 0)),
+                        "pnl_pct": float(t.get("ReturnPct", 0)) * 100,
                     })
 
         # 夏普比率

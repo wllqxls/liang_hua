@@ -87,6 +87,8 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
     strategy_class = STRATEGIES.get(req.strategy)
     if strategy_class is None:
         return _error_response(f"未知策略: {req.strategy}")
+    if req.position_amount > req.cash:
+        return _error_response("单笔逐仓金额不能大于初始资金")
 
     try:
         engine = BacktestEngine(data_dir="./data")
@@ -96,7 +98,11 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
             timeframe=req.timeframe,
             lookback=req.lookback,
             cash=req.cash,
-            commission=req.commission,
+            commission=req.taker_fee,
+            leverage=req.leverage,
+            position_amount=req.position_amount,
+            take_profit_pct=req.take_profit_pct,
+            stop_loss_pct=req.stop_loss_pct,
         )
 
         return BacktestResponse(

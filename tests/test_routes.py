@@ -24,6 +24,11 @@ def test_backtest_api_returns_error_for_unknown_strategy() -> None:
 
 def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
     def fake_run(self: object, **kwargs: Any) -> BacktestResult:
+        assert kwargs["position_amount"] == 3.3
+        assert kwargs["leverage"] == 5
+        assert kwargs["take_profit_pct"] == 0
+        assert kwargs["stop_loss_pct"] == 3
+        assert kwargs["commission"] == 0.0005
         return BacktestResult(
             total_return_pct=12.5,
             win_rate_pct=50.0,
@@ -45,7 +50,12 @@ def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
             "strategy": "SRBreakout",
             "lookback": 20,
             "cash": 100_000,
-            "commission": 0.001,
+            "position_amount": 3.3,
+            "leverage": 5,
+            "take_profit_pct": 0,
+            "stop_loss_pct": 3,
+            "maker_fee": 0.0002,
+            "taker_fee": 0.0005,
         },
     )
 
@@ -91,12 +101,43 @@ def test_backtest_api_accepts_ten_usdt_cash(monkeypatch: Any) -> None:
             "strategy": "SRBreakout",
             "lookback": 20,
             "cash": 10,
-            "commission": 0.001,
+            "position_amount": 3.3,
+            "leverage": 5,
+            "take_profit_pct": 0,
+            "stop_loss_pct": 3,
+            "maker_fee": 0.0002,
+            "taker_fee": 0.0005,
         },
     )
 
     assert response.status_code == 200
     assert response.json()["success"] is True
+
+
+def test_backtest_api_rejects_position_amount_above_cash() -> None:
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/backtest",
+        json={
+            "symbol": "BTC/USDT",
+            "timeframe": "1h",
+            "strategy": "SRBreakout",
+            "lookback": 20,
+            "cash": 10,
+            "position_amount": 20,
+            "leverage": 5,
+            "take_profit_pct": 0,
+            "stop_loss_pct": 3,
+            "maker_fee": 0.0002,
+            "taker_fee": 0.0005,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is False
+    assert "逐仓金额不能大于初始资金" in payload["error"]
 
 
 def test_data_status_api_reports_local_csv(tmp_path: Path, monkeypatch: Any) -> None:

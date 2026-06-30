@@ -15,7 +15,12 @@ class BacktestRequest(BaseModel):
     strategy: str = Field(default="SRBreakout", description="策略名称")
     lookback: int = Field(default=20, ge=1, le=500, description="回溯窗口")
     cash: float = Field(default=1_000, ge=10, description="初始资金")
-    commission: float = Field(default=0.001, ge=0, le=0.1, description="手续费率")
+    position_amount: float = Field(default=3.3, ge=0.1, description="单笔逐仓保证金")
+    leverage: float = Field(default=5, ge=1, le=150, description="杠杆倍数")
+    take_profit_pct: float = Field(default=0, ge=0, le=1000, description="止盈比例")
+    stop_loss_pct: float = Field(default=3, ge=0, le=100, description="止损比例")
+    maker_fee: float = Field(default=0.0002, ge=0, le=0.1, description="Maker 手续费率")
+    taker_fee: float = Field(default=0.0005, ge=0, le=0.1, description="Taker 手续费率")
 
 
 class DataFetchRequest(BaseModel):

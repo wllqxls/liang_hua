@@ -33,9 +33,14 @@ async function runBacktest() {
         symbol: document.getElementById('symbol').value,
         timeframe: document.getElementById('timeframe').value,
         strategy: document.getElementById('strategy').value,
-        lookback: parseInt(document.getElementById('lookback').value) || 20,
-        cash: parseFloat(document.getElementById('cash').value) || 1000000,
-        commission: parseFloat(document.getElementById('commission').value) || 0.001,
+        lookback: numberValue('lookback', 20),
+        cash: numberValue('cash', 1000),
+        position_amount: numberValue('position-amount', 3.3),
+        leverage: numberValue('leverage', 5),
+        take_profit_pct: numberValue('take-profit-pct', 0),
+        stop_loss_pct: numberValue('stop-loss-pct', 0),
+        maker_fee: numberValue('maker-fee', 0.0002),
+        taker_fee: numberValue('taker-fee', 0.0005),
     };
     const validationError = validateBacktestPayload(payload);
     if (validationError) {
@@ -83,10 +88,28 @@ function validateBacktestPayload(payload) {
     if (payload.cash < 10) {
         return '初始资金不能低于 10 USDT';
     }
-    if (payload.commission < 0 || payload.commission > 0.1) {
+    if (payload.position_amount <= 0) {
+        return '单笔逐仓金额必须大于 0';
+    }
+    if (payload.position_amount > payload.cash) {
+        return '单笔逐仓金额不能大于初始资金';
+    }
+    if (payload.leverage < 1 || payload.leverage > 150) {
+        return '杠杆必须在 x1 到 x150 之间';
+    }
+    if (payload.take_profit_pct < 0 || payload.stop_loss_pct < 0) {
+        return '止盈止损不能为负数';
+    }
+    if (payload.maker_fee < 0 || payload.taker_fee < 0 || payload.maker_fee > 0.1 || payload.taker_fee > 0.1) {
         return '手续费率必须在 0 到 0.1 之间';
     }
     return '';
+}
+
+
+function numberValue(id, fallback) {
+    const value = parseFloat(document.getElementById(id).value);
+    return Number.isFinite(value) ? value : fallback;
 }
 
 
