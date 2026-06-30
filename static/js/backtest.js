@@ -6,6 +6,8 @@ let equityChart = null;
 let chartData = null;
 
 window.addEventListener('DOMContentLoaded', () => {
+    updateStrategyDescription();
+    document.getElementById('strategy').addEventListener('change', updateStrategyDescription);
     loadDataStatus();
 });
 
@@ -78,13 +80,21 @@ function validateBacktestPayload(payload) {
     if (payload.lookback < 1 || payload.lookback > 500) {
         return '回溯窗口必须在 1 到 500 之间';
     }
-    if (payload.cash < 1000) {
-        return '初始资金不能低于 1000 USDT';
+    if (payload.cash < 10) {
+        return '初始资金不能低于 10 USDT';
     }
     if (payload.commission < 0 || payload.commission > 0.1) {
         return '手续费率必须在 0 到 0.1 之间';
     }
     return '';
+}
+
+
+function updateStrategyDescription() {
+    const select = document.getElementById('strategy');
+    const note = document.getElementById('strategy-desc');
+    const option = select.options[select.selectedIndex];
+    note.textContent = option ? option.dataset.desc || '' : '';
 }
 
 

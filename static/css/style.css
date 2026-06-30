@@ -110,6 +110,12 @@ header h1 {
     font-weight: 500;
 }
 
+.field-note {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
 .form-group.compact {
     width: 140px;
 }

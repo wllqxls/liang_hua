@@ -56,6 +56,49 @@ def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
     assert payload["equity_curve"][0]["equity"] == 100_000.0
 
 
+def test_index_renders_chinese_strategy_names() -> None:
+    client = TestClient(app)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "支撑阻力突破" in response.text
+    assert "均线金叉死叉" in response.text
+    assert "RSI 超卖反弹" in response.text
+
+
+def test_backtest_api_accepts_ten_usdt_cash(monkeypatch: Any) -> None:
+    def fake_run(self: object, **kwargs: Any) -> BacktestResult:
+        assert kwargs["cash"] == 10
+        return BacktestResult(
+            total_return_pct=0.0,
+            win_rate_pct=0.0,
+            max_drawdown_pct=0.0,
+            sharpe_ratio=None,
+            num_trades=0,
+            equity_curve=[],
+            trade_list=[],
+        )
+
+    monkeypatch.setattr(routes.BacktestEngine, "run", fake_run)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/backtest",
+        json={
+            "symbol": "BTC/USDT",
+            "timeframe": "1h",
+            "strategy": "SRBreakout",
+            "lookback": 20,
+            "cash": 10,
+            "commission": 0.001,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+
+
 def test_data_status_api_reports_local_csv(tmp_path: Path, monkeypatch: Any) -> None:
     monkeypatch.chdir(tmp_path)
     data_dir = tmp_path / "data"

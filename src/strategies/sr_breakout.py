@@ -15,7 +15,6 @@
 """
 
 from backtesting import Strategy
-from backtesting.lib import crossover
 import pandas as pd
 
 
@@ -33,12 +32,14 @@ class SRBreakout(Strategy):
             lambda x: pd.Series(x).rolling(self.lookback).max().shift(1),
             self.data.High,
             name="resistance",
+            overlay=False,
         )
         # 支撑位（过去 N 根 K 线的最低价，不包括当前）
         self.support = self.I(
             lambda x: pd.Series(x).rolling(self.lookback).min().shift(1),
             self.data.Low,
             name="support",
+            overlay=False,
         )
 
     def next(self) -> None:

@@ -16,6 +16,8 @@ from fastapi.templating import Jinja2Templates
 
 from src.backtest.engine import BacktestEngine
 from src.data.fetcher import DataFetcher
+from src.strategies.ma_cross import MovingAverageCross
+from src.strategies.rsi_reversion import RSIReversion
 from src.strategies.sr_breakout import SRBreakout
 from src.web.schemas import (
     BacktestRequest,
@@ -37,7 +39,27 @@ templates = Jinja2Templates(directory=str(_templates_dir))
 STRATEGIES: dict[str, type] = {
     "SRBreakout": SRBreakout,
     "SupportResistanceBreakout": SRBreakout,
+    "MovingAverageCross": MovingAverageCross,
+    "RSIReversion": RSIReversion,
 }
+
+STRATEGY_OPTIONS = [
+    {
+        "value": "SRBreakout",
+        "label": "支撑阻力突破",
+        "description": "规则策略：价格突破近期高点买入，亏损触发止损。",
+    },
+    {
+        "value": "MovingAverageCross",
+        "label": "均线金叉死叉",
+        "description": "规则策略：快线上穿慢线买入，快线下穿慢线平仓。",
+    },
+    {
+        "value": "RSIReversion",
+        "label": "RSI 超卖反弹",
+        "description": "规则策略：RSI 低位买入，高位或止损时平仓。",
+    },
+]
 
 TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
 
@@ -54,7 +76,7 @@ async def index(request: Request) -> HTMLResponse:
         "request": request,
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
-        "strategies": list(STRATEGIES.keys()),
+        "strategies": STRATEGY_OPTIONS,
     }
     return templates.TemplateResponse(request, "backtest.html", context)
 

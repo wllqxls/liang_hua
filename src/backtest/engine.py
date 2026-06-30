@@ -11,7 +11,8 @@ from typing import Any
 
 import ccxt
 import pandas as pd
-from backtesting import Backtest, Strategy
+from backtesting import Strategy
+from backtesting.lib import FractionalBacktest
 
 from src.data.fetcher import DataFetcher, _COLUMNS
 
@@ -106,7 +107,7 @@ class BacktestEngine:
         filepath = self._data_dir / f"{safe_symbol}_{timeframe}.csv"
         df = self.load_data(filepath)
 
-        bt = Backtest(
+        bt = FractionalBacktest(
             df,
             strategy_class,
             cash=cash,

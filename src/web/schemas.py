@@ -14,7 +14,7 @@ class BacktestRequest(BaseModel):
     timeframe: str = Field(default="1h", description="K 线周期")
     strategy: str = Field(default="SRBreakout", description="策略名称")
     lookback: int = Field(default=20, ge=1, le=500, description="回溯窗口")
-    cash: float = Field(default=1_000_000, ge=1000, description="初始资金")
+    cash: float = Field(default=1_000, ge=10, description="初始资金")
     commission: float = Field(default=0.001, ge=0, le=0.1, description="手续费率")
 
 
