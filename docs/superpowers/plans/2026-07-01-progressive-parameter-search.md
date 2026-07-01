@@ -18,7 +18,7 @@
 
 - [ ] Write failing tests proving that available timeframe pairs only use existing CSV files and require `context > entry`, that identical inputs produce identical stratified samples, and that position amount/backtest days are absent from candidate dimensions.
 - [ ] Run `.\.venv\Scripts\python.exe -m pytest tests\test_optimizer.py -q` and confirm failure because the module does not exist.
-- [ ] Implement `SearchCandidate`, `SearchProgress`, `available_timeframe_pairs()`, `build_stage_one_candidates()`, and `build_stage_two_candidates()` with budgets `120 / 72 / 36`, fixed SHA-256-derived random seeds, and the approved risk multipliers.
+- [ ] Implement `SearchCandidate`, `SearchProgress`, `available_timeframe_pairs()`, `build_stage_one_candidates()`, and `build_stage_two_candidates()` with budgets `120 / 84 / 36`, fixed SHA-256-derived random seeds, and the approved risk multipliers.
 - [ ] Re-run the focused tests and confirm they pass.
 
 ### Task 2: Add progressive orchestration and background job APIs
@@ -56,3 +56,15 @@
 - [ ] Run `.\.venv\Scripts\python.exe -m pytest -q` and require zero failures.
 - [ ] Review `git diff` to ensure no secrets, data CSVs, or result JSONs are staged.
 - [ ] Commit the plan, optimizer, schemas, routes, frontend, and tests with focused commit messages; do not push without a separate explicit request.
+
+### Task 5: Expand leverage coverage for the top three candidates
+
+**Files:**
+- Modify: `src/backtest/optimizer.py`
+- Modify: `tests/test_optimizer.py`
+
+- [ ] Add a failing test proving ranks 1–3 each cover every value in `LEVERAGE_OPTIONS`, while ranks 4–12 only use the base leverage and its adjacent options.
+- [ ] Change the stage-two budget from 72 to 84.
+- [ ] Generate exactly one deterministic local mutation per leverage for each of the top three candidates, then generate at most six adjacent-leverage mutations for each remaining candidate.
+- [ ] Run optimizer tests and the complete test suite.
+- [ ] Commit and automatically push the verified change to the current GitHub branch.

@@ -24,7 +24,7 @@ CONTEXT_LOOKBACK_OPTIONS = [96, 192, 288]
 ENTRY_LOOKBACK_OPTIONS = [10, 20, 30, 40, 50, 60]
 LEVERAGE_OPTIONS = [1, 2, 3, 5, 10, 20, 50, 100, 125, 150]
 STAGE_ONE_BUDGET = 120
-STAGE_TWO_BUDGET = 72
+STAGE_TWO_BUDGET = 84
 VALIDATION_BUDGET = 36
 
 
@@ -117,12 +117,14 @@ def build_stage_two_candidates(
     ranked: list[SearchCandidate],
     *,
     seed_key: str,
+    position_amount: float,
     per_candidate: int = 6,
 ) -> list[SearchCandidate]:
     """Create deterministic local mutations around the best stage-one candidates."""
     selected: list[SearchCandidate] = []
     seen: set[SearchCandidate] = set(ranked)
     for index, base in enumerate(ranked[:12]):
+        leverage_options = LEVERAGE_OPTIONS if index < 3 else _nearby(base.leverage, LEVERAGE_OPTIONS)
         pool = [
             SearchCandidate(
                 strategy=base.strategy,
@@ -131,28 +133,47 @@ def build_stage_two_candidates(
                 context_lookback=context_lookback,
                 entry_lookback=entry_lookback,
                 leverage=float(leverage),
-                take_profit_amount=_bounded(base.take_profit_amount * tp_factor, 0.1, float('inf')),
-                stop_loss_amount=_bounded(base.stop_loss_amount * sl_factor, 0.1, float('inf')),
+                take_profit_amount=_bounded(
+                    base.take_profit_amount * tp_factor,
+                    0.1,
+                    position_amount * leverage,
+                ),
+                stop_loss_amount=_bounded(
+                    base.stop_loss_amount * sl_factor,
+                    0.1,
+                    position_amount,
+                ),
             )
             for context_lookback, entry_lookback, leverage, tp_factor, sl_factor in product(
                 _nearby(base.context_lookback, CONTEXT_LOOKBACK_OPTIONS),
                 _nearby(base.entry_lookback, ENTRY_LOOKBACK_OPTIONS),
-                _nearby(base.leverage, LEVERAGE_OPTIONS),
+                leverage_options,
                 [0.75, 1.0, 1.25],
                 [0.75, 1.0, 1.25],
             )
         ]
         pool = list(dict.fromkeys(pool))
-        _rng(f'{seed_key}|stage2|{index}|{base}').shuffle(pool)
         added = 0
-        for candidate in pool:
-            if candidate in seen:
-                continue
-            selected.append(candidate)
-            seen.add(candidate)
-            added += 1
-            if added >= per_candidate or len(selected) >= STAGE_TWO_BUDGET:
-                break
+        if index < 3:
+            for leverage in LEVERAGE_OPTIONS:
+                leverage_pool = [candidate for candidate in pool if candidate.leverage == float(leverage)]
+                _rng(f'{seed_key}|stage2|{index}|{base}|{leverage}').shuffle(leverage_pool)
+                candidate = next((item for item in leverage_pool if item not in seen), None)
+                if candidate is None:
+                    continue
+                selected.append(candidate)
+                seen.add(candidate)
+                added += 1
+        else:
+            _rng(f'{seed_key}|stage2|{index}|{base}').shuffle(pool)
+            for candidate in pool:
+                if candidate in seen:
+                    continue
+                selected.append(candidate)
+                seen.add(candidate)
+                added += 1
+                if added >= per_candidate:
+                    break
         if len(selected) >= STAGE_TWO_BUDGET:
             break
     return selected

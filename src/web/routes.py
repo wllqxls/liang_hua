@@ -535,7 +535,11 @@ def _progressive_optimize(
 
     stage_one_best = sorted(rankless, key=lambda item: item['score'], reverse=True)[:12]
     stage_two_bases = [_search_candidate_from_item(item) for item in stage_one_best]
-    stage_two = build_stage_two_candidates(stage_two_bases, seed_key=seed_key)
+    stage_two = build_stage_two_candidates(
+        stage_two_bases,
+        seed_key=seed_key,
+        position_amount=req.position_amount,
+    )
     total_budget = len(stage_one) + len(stage_two) + VALIDATION_BUDGET
     for candidate in stage_two:
         if _candidate_budget_exhausted(started_at, evaluated_count):

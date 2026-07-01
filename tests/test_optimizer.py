@@ -1,6 +1,7 @@
 from dataclasses import asdict
 
 from src.backtest.optimizer import (
+    LEVERAGE_OPTIONS,
     SearchCandidate,
     available_timeframe_pairs,
     build_stage_one_candidates,
@@ -48,13 +49,30 @@ def test_stage_one_sampling_is_deterministic_and_stratified() -> None:
 
 def test_stage_two_search_is_bounded_and_deterministic() -> None:
     ranked = [
-        SearchCandidate('A', '15m', '5m', 192, 30, 5, 1, 1),
-        SearchCandidate('B', '1h', '15m', 96, 20, 10, 1.5, 0.75),
+        SearchCandidate(f'S{index}', '15m', '5m', 192, 30, 5, 1, 1)
+        for index in range(12)
     ]
 
-    first = build_stage_two_candidates(ranked, seed_key='BTC/USDT|fees', per_candidate=6)
-    second = build_stage_two_candidates(ranked, seed_key='BTC/USDT|fees', per_candidate=6)
+    first = build_stage_two_candidates(
+        ranked,
+        seed_key='BTC/USDT|fees',
+        position_amount=10,
+        per_candidate=6,
+    )
+    second = build_stage_two_candidates(
+        ranked,
+        seed_key='BTC/USDT|fees',
+        position_amount=10,
+        per_candidate=6,
+    )
 
     assert first == second
-    assert len(first) <= 12
-    assert all(item in first for item in set(first))
+    assert len(first) == 84
+    for index in range(3):
+        assert {item.leverage for item in first if item.strategy == f'S{index}'} == {
+            float(value) for value in LEVERAGE_OPTIONS
+        }
+    for index in range(3, 12):
+        candidates = [item for item in first if item.strategy == f'S{index}']
+        assert len(candidates) == 6
+        assert {item.leverage for item in candidates} <= {3.0, 5.0, 10.0}
