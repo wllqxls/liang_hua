@@ -7,6 +7,11 @@ from __future__ import annotations
 import logging
 import math
 import random
+import threading
+import time
+import uuid
+from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
@@ -19,6 +24,15 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from src.backtest.engine import BacktestEngine
+from src.backtest.optimizer import (
+    STAGE_ONE_BUDGET,
+    STAGE_TWO_BUDGET,
+    VALIDATION_BUDGET,
+    SearchCandidate,
+    available_timeframe_pairs,
+    build_stage_one_candidates,
+    build_stage_two_candidates,
+)
 from src.data.fetcher import DataFetcher
 from src.strategies.key_level_scoring import KeyLevelScoring
 from src.strategies.ma_cross import MovingAverageCross
@@ -32,6 +46,8 @@ from src.web.schemas import (
     DataStatus,
     EquityPoint,
     OptimizationCandidate,
+    OptimizationJobCreated,
+    OptimizationJobStatus,
     OptimizationResponse,
     TradeItem,
 )
@@ -99,6 +115,13 @@ MIN_ALLOWED_WIN_RATE_PCT = 28.0
 MIN_ALLOWED_PROFIT_FACTOR = 1.05
 VALIDATION_POOL_SIZE = 10
 RANDOM_VALIDATION_WINDOWS = 2
+SEARCH_SOFT_LIMIT_SECONDS = 480.0
+SEARCH_HARD_LIMIT_SECONDS = 600.0
+SEARCH_TOTAL_BUDGET = STAGE_ONE_BUDGET + STAGE_TWO_BUDGET + VALIDATION_BUDGET
+MAX_STORED_OPTIMIZATION_JOBS = 20
+
+_optimization_jobs: OrderedDict[str, dict] = OrderedDict()
+_optimization_jobs_lock = threading.Lock()
 
 
 @dataclass
@@ -207,6 +230,47 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
         return _error_response(str(e))
 
 
+@router.post('/api/optimize/jobs', response_model=OptimizationJobCreated)
+async def create_optimization_job(req: BacktestRequest) -> OptimizationJobCreated:
+    """Start one progressive optimization job in a background thread."""
+    if req.position_amount > req.cash:
+        return OptimizationJobCreated(success=False, error='单笔逐仓金额不能大于初始资金')
+    pairs = available_timeframe_pairs(Path('./data'), req.symbol)
+    if not pairs:
+        return OptimizationJobCreated(
+            success=False,
+            error='没有可用的环境周期+入场周期组合，请先拉取同一币种至少两个周期的数据',
+        )
+
+    with _optimization_jobs_lock:
+        if any(job['state'] in {'queued', 'running'} for job in _optimization_jobs.values()):
+            return OptimizationJobCreated(success=False, error='已有搜索任务正在运行，请等待完成')
+        job_id = uuid.uuid4().hex
+        _optimization_jobs[job_id] = _new_optimization_job(job_id)
+        while len(_optimization_jobs) > MAX_STORED_OPTIMIZATION_JOBS:
+            _optimization_jobs.popitem(last=False)
+
+    worker = threading.Thread(
+        target=_run_optimization_job,
+        args=(job_id, req),
+        daemon=True,
+        name=f'optimization-{job_id[:8]}',
+    )
+    worker.start()
+    return OptimizationJobCreated(success=True, job_id=job_id)
+
+
+@router.get('/api/optimize/jobs/{job_id}', response_model=OptimizationJobStatus)
+async def get_optimization_job(job_id: str) -> OptimizationJobStatus:
+    """Return a snapshot of one progressive optimization job."""
+    with _optimization_jobs_lock:
+        job = _optimization_jobs.get(job_id)
+        if job is None:
+            return OptimizationJobStatus(success=False, job_id=job_id, state='missing', error='搜索任务不存在')
+        snapshot = dict(job)
+    return OptimizationJobStatus(**snapshot)
+
+
 @router.post("/api/optimize", response_model=OptimizationResponse)
 async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
     """基于当前参数，对多个策略和参数组合做一轮小型搜索。"""
@@ -295,6 +359,8 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
                             rankless.append({
                                 "strategy": strategy_name,
                                 "strategy_label": strategy_info["label"],
+                                "context_timeframe": req.context_timeframe,
+                                "timeframe": req.timeframe,
                                 "lookback": entry_lookback,
                                 "context_lookback": context_lookback,
                                 "entry_lookback": entry_lookback,
@@ -352,6 +418,353 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
         evaluated_count=evaluated_count,
         filtered_count=filtered_count,
     )
+
+
+def _new_optimization_job(job_id: str) -> dict:
+    now = time.monotonic()
+    return {
+        'success': True,
+        'job_id': job_id,
+        'state': 'queued',
+        'stage': '等待',
+        'evaluated_count': 0,
+        'total_budget': SEARCH_TOTAL_BUDGET,
+        'filtered_count': 0,
+        'elapsed_seconds': 0.0,
+        'estimated_remaining_seconds': 0.0,
+        'partial': False,
+        'candidates': [],
+        'error': None,
+        '_started_at': now,
+    }
+
+
+def _reset_optimization_jobs_for_tests() -> None:
+    """Clear process-local jobs between tests."""
+    with _optimization_jobs_lock:
+        _optimization_jobs.clear()
+
+
+def _update_optimization_job(job_id: str, **values: object) -> None:
+    with _optimization_jobs_lock:
+        job = _optimization_jobs.get(job_id)
+        if job is None:
+            return
+        job.update(values)
+        started_at = float(job['_started_at'])
+        elapsed = max(0.0, time.monotonic() - started_at)
+        job['elapsed_seconds'] = round(elapsed, 1)
+        evaluated = int(job.get('evaluated_count', 0))
+        total = int(job.get('total_budget', SEARCH_TOTAL_BUDGET))
+        if evaluated > 0:
+            job['estimated_remaining_seconds'] = round(max(0.0, elapsed / evaluated * (total - evaluated)), 1)
+
+
+def _run_optimization_job(job_id: str, req: BacktestRequest) -> None:
+    _update_optimization_job(job_id, state='running', stage='粗筛')
+
+    def progress(**values: object) -> None:
+        _update_optimization_job(job_id, **values)
+
+    try:
+        response = _progressive_optimize(req, progress)
+        _update_optimization_job(
+            job_id,
+            state='completed' if response.success else 'failed',
+            stage='完成' if response.success else '失败',
+            evaluated_count=response.evaluated_count,
+            filtered_count=response.filtered_count,
+            partial=response.partial,
+            candidates=[candidate.model_dump() for candidate in response.candidates],
+            error=response.error,
+        )
+    except Exception as exc:
+        logger.exception('渐进式参数搜索失败')
+        _update_optimization_job(job_id, state='failed', stage='失败', error=str(exc))
+
+
+def _progressive_optimize(
+    req: BacktestRequest,
+    progress: Callable[..., None],
+) -> OptimizationResponse:
+    """Run deterministic coarse, local, and robustness search stages."""
+    started_at = time.monotonic()
+    pairs = available_timeframe_pairs(Path('./data'), req.symbol)
+    if not pairs:
+        return OptimizationResponse(success=False, candidates=[], error='没有可用周期组合')
+    seed_key = '|'.join([
+        req.symbol,
+        str(req.position_amount),
+        str(req.taker_fee),
+        str(req.slippage_rate),
+        str(req.funding_rate),
+    ])
+    stage_one = build_stage_one_candidates(
+        timeframe_pairs=pairs,
+        strategies=list(OPTIMIZATION_STRATEGIES),
+        current_leverage=req.leverage,
+        take_profit_amount=req.take_profit_amount,
+        stop_loss_amount=req.stop_loss_amount,
+        position_amount=req.position_amount,
+        seed_key=seed_key,
+    )
+    total_budget = len(stage_one) + STAGE_TWO_BUDGET + VALIDATION_BUDGET
+    engine = BacktestEngine(data_dir='./data')
+    bounds_cache: dict[str, tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp, int]] = {}
+    rankless: list[dict] = []
+    evaluated_count = 0
+    filtered_count = 0
+    partial = False
+
+    for candidate in stage_one:
+        if _candidate_budget_exhausted(started_at, evaluated_count):
+            partial = True
+            break
+        item, filtered = _evaluate_progressive_candidate(engine, req, candidate, bounds_cache)
+        evaluated_count += 1
+        filtered_count += int(filtered)
+        if item is not None:
+            rankless.append(item)
+        progress(
+            stage='粗筛',
+            evaluated_count=evaluated_count,
+            total_budget=total_budget,
+            filtered_count=filtered_count,
+            partial=partial,
+        )
+
+    stage_one_best = sorted(rankless, key=lambda item: item['score'], reverse=True)[:12]
+    stage_two_bases = [_search_candidate_from_item(item) for item in stage_one_best]
+    stage_two = build_stage_two_candidates(stage_two_bases, seed_key=seed_key)
+    total_budget = len(stage_one) + len(stage_two) + VALIDATION_BUDGET
+    for candidate in stage_two:
+        if _candidate_budget_exhausted(started_at, evaluated_count):
+            partial = True
+            break
+        if candidate.stop_loss_amount > req.position_amount:
+            continue
+        if candidate.take_profit_amount > req.position_amount * candidate.leverage:
+            continue
+        item, filtered = _evaluate_progressive_candidate(engine, req, candidate, bounds_cache)
+        evaluated_count += 1
+        filtered_count += int(filtered)
+        if item is not None:
+            rankless.append(item)
+        progress(
+            stage='精搜',
+            evaluated_count=evaluated_count,
+            total_budget=total_budget,
+            filtered_count=filtered_count,
+            partial=partial,
+        )
+
+    validation_pool = sorted(rankless, key=lambda item: item['score'], reverse=True)[:VALIDATION_POOL_SIZE]
+    validated_pool: list[dict] = []
+    for item in validation_pool:
+        if time.monotonic() - started_at >= SEARCH_HARD_LIMIT_SECONDS:
+            partial = True
+            break
+        data_start, data_end = _load_data_bounds(engine, req.symbol, item['timeframe'])
+        _, _, out_start, out_end = _split_validation_bounds(data_start, data_end, 30)
+        out_sample_days = max(1, math.ceil((out_end - out_start).total_seconds() / 86400))
+        validation = _validate_candidate(
+            engine=engine,
+            req=req,
+            item=item,
+            out_start=out_start,
+            out_end=out_end,
+            out_sample_days=out_sample_days,
+            data_start=data_start,
+            data_end=data_end,
+        )
+        item.update({
+            'out_sample_return_pct': validation.out_sample_return_pct,
+            'out_sample_quality_score': validation.out_sample_quality_score,
+            'random_pass_rate_pct': validation.random_pass_rate_pct,
+            'random_avg_return_pct': validation.random_avg_return_pct,
+            'random_worst_return_pct': validation.random_worst_return_pct,
+            'robustness_score': validation.robustness_score,
+            'robustness_label': validation.robustness_label,
+        })
+        item['score'] += validation.robustness_score * 0.8
+        validated_pool.append(item)
+        evaluated_count += 1 + RANDOM_VALIDATION_WINDOWS
+        progress(
+            stage='稳健验证',
+            evaluated_count=evaluated_count,
+            total_budget=total_budget,
+            filtered_count=filtered_count,
+            partial=partial,
+        )
+
+    ranked = sorted(validated_pool, key=lambda item: item['score'], reverse=True)[:10]
+    for item in ranked[:3]:
+        if time.monotonic() - started_at >= SEARCH_HARD_LIMIT_SECONDS:
+            partial = True
+            break
+        long_return, long_days, calls = _long_window_validation(engine, req, item)
+        item['long_window_return_pct'] = long_return
+        item['long_window_days'] = long_days
+        evaluated_count += calls
+        progress(
+            stage='长窗口验证',
+            evaluated_count=evaluated_count,
+            total_budget=total_budget,
+            filtered_count=filtered_count,
+            partial=partial,
+        )
+
+    candidates = [
+        OptimizationCandidate(rank=index, **item)
+        for index, item in enumerate(ranked, start=1)
+    ]
+    return OptimizationResponse(
+        success=True,
+        candidates=candidates,
+        evaluated_count=evaluated_count,
+        filtered_count=filtered_count,
+        partial=partial,
+    )
+
+
+def _candidate_budget_exhausted(
+    started_at: float,
+    evaluated_count: int,
+    *,
+    now: float | None = None,
+) -> bool:
+    """Stop candidate generation early enough to reserve validation time."""
+    elapsed = max(0.0, (time.monotonic() if now is None else now) - started_at)
+    if elapsed >= SEARCH_SOFT_LIMIT_SECONDS:
+        return True
+    if evaluated_count < 3:
+        return False
+    average_seconds = elapsed / evaluated_count
+    return elapsed + average_seconds * VALIDATION_BUDGET >= SEARCH_HARD_LIMIT_SECONDS
+
+
+def _evaluate_progressive_candidate(
+    engine: BacktestEngine,
+    req: BacktestRequest,
+    candidate: SearchCandidate,
+    bounds_cache: dict[str, tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp, int]],
+) -> tuple[dict | None, bool]:
+    if candidate.timeframe not in bounds_cache:
+        data_start, data_end = _load_data_bounds(engine, req.symbol, candidate.timeframe)
+        in_start, in_end, _, _ = _split_validation_bounds(data_start, data_end, 30)
+        in_days = max(1, math.ceil((in_end - in_start).total_seconds() / 86400))
+        bounds_cache[candidate.timeframe] = (data_start, data_end, in_start, in_end, in_days)
+    _, _, in_start, in_end, in_days = bounds_cache[candidate.timeframe]
+    strategy_info = OPTIMIZATION_STRATEGIES[candidate.strategy]
+    try:
+        result = engine.run(
+            strategy_class=strategy_info['class'],
+            symbol=req.symbol,
+            timeframe=candidate.timeframe,
+            context_timeframe=candidate.context_timeframe,
+            context_lookback=candidate.context_lookback,
+            window_start=in_start,
+            window_end=in_end,
+            lookback=candidate.entry_lookback,
+            cash=req.cash,
+            commission=req.taker_fee,
+            leverage=candidate.leverage,
+            slippage_rate=req.slippage_rate,
+            funding_rate=req.funding_rate,
+            maintenance_margin_rate=req.maintenance_margin_rate,
+            position_amount=req.position_amount,
+            take_profit_amount=candidate.take_profit_amount,
+            stop_loss_amount=candidate.stop_loss_amount,
+        )
+    except Exception:
+        logger.exception('渐进搜索候选失败')
+        return None, False
+    quality = _assess_backtest_quality(
+        result=result,
+        take_profit_amount=candidate.take_profit_amount,
+        stop_loss_amount=candidate.stop_loss_amount,
+        backtest_days=in_days,
+    )
+    if not quality.passes_filter:
+        return None, True
+    total_return_pct = _finite_number(result.total_return_pct)
+    max_drawdown_pct = _finite_number(result.max_drawdown_pct)
+    win_rate_pct = _finite_number(result.win_rate_pct)
+    score = _optimization_score(
+        total_return_pct=total_return_pct,
+        max_drawdown_pct=max_drawdown_pct,
+        win_rate_pct=win_rate_pct,
+        num_trades=result.num_trades,
+        quality_score=quality.score,
+        profit_factor=quality.profit_factor,
+        max_consecutive_losses=quality.max_consecutive_losses,
+    )
+    return {
+        'strategy': candidate.strategy,
+        'strategy_label': strategy_info['label'],
+        'context_timeframe': candidate.context_timeframe,
+        'timeframe': candidate.timeframe,
+        'lookback': candidate.entry_lookback,
+        'context_lookback': candidate.context_lookback,
+        'entry_lookback': candidate.entry_lookback,
+        'leverage': candidate.leverage,
+        'take_profit_amount': candidate.take_profit_amount,
+        'stop_loss_amount': candidate.stop_loss_amount,
+        'total_return_pct': total_return_pct,
+        'max_drawdown_pct': max_drawdown_pct,
+        'win_rate_pct': win_rate_pct,
+        'out_sample_return_pct': 0.0,
+        'out_sample_quality_score': 0.0,
+        'random_pass_rate_pct': 0.0,
+        'random_avg_return_pct': 0.0,
+        'random_worst_return_pct': 0.0,
+        'long_window_return_pct': 0.0,
+        'long_window_days': 0,
+        'robustness_score': 0.0,
+        'robustness_label': '未验证',
+        'num_trades': result.num_trades,
+        'quality_score': quality.score,
+        'quality_grade': quality.grade,
+        'quality_label': quality.label,
+        'quality_reasons': quality.reasons,
+        'profit_factor': quality.profit_factor,
+        'avg_win_loss_ratio': quality.avg_win_loss_ratio,
+        'max_consecutive_losses': quality.max_consecutive_losses,
+        'score': score,
+        'search_backtest_days': 30,
+    }, False
+
+
+def _search_candidate_from_item(item: dict) -> SearchCandidate:
+    return SearchCandidate(
+        strategy=item['strategy'],
+        context_timeframe=item['context_timeframe'],
+        timeframe=item['timeframe'],
+        context_lookback=item['context_lookback'],
+        entry_lookback=item['entry_lookback'],
+        leverage=item['leverage'],
+        take_profit_amount=item['take_profit_amount'],
+        stop_loss_amount=item['stop_loss_amount'],
+    )
+
+
+def _long_window_validation(
+    engine: BacktestEngine,
+    req: BacktestRequest,
+    item: dict,
+) -> tuple[float, int, int]:
+    data_start, data_end = _load_data_bounds(engine, req.symbol, item['timeframe'])
+    returns: list[float] = []
+    longest = 0
+    for days in [90, 180]:
+        start = max(data_start, data_end - pd.Timedelta(days=days))
+        actual_days = max(1, math.ceil((data_end - start).total_seconds() / 86400))
+        result = _run_candidate_window(engine, req, item, start, data_end)
+        returns.append(_finite_number(result.total_return_pct))
+        longest = max(longest, actual_days)
+        if start == data_start:
+            break
+    return (min(returns) if returns else 0.0), longest, len(returns)
 
 
 @router.get("/api/data-status")
@@ -526,7 +939,8 @@ def _validate_candidate(
 
     random_returns: list[float] = []
     random_passes = 0
-    windows = _random_validation_windows(data_start, data_end, req.backtest_days, item)
+    validation_days = int(item.get('search_backtest_days', req.backtest_days))
+    windows = _random_validation_windows(data_start, data_end, validation_days, item)
     for start, end in windows:
         try:
             random_result = _run_candidate_window(engine, req, item, start, end)
@@ -534,7 +948,7 @@ def _validate_candidate(
                 result=random_result,
                 take_profit_amount=item["take_profit_amount"],
                 stop_loss_amount=item["stop_loss_amount"],
-                backtest_days=req.backtest_days,
+                backtest_days=validation_days,
             )
         except Exception:
             logger.exception("随机窗口验证失败")
@@ -582,8 +996,8 @@ def _run_candidate_window(
     return engine.run(
         strategy_class=strategy_info["class"],
         symbol=req.symbol,
-        timeframe=req.timeframe,
-        context_timeframe=req.context_timeframe,
+        timeframe=item.get('timeframe', req.timeframe),
+        context_timeframe=item.get('context_timeframe', req.context_timeframe),
         context_lookback=item["context_lookback"],
         window_start=start,
         window_end=end,
@@ -612,7 +1026,10 @@ def _random_validation_windows(
         return [(max(data_start, data_end - window), data_end)]
     seed_text = "|".join(
         str(item[key])
-        for key in ["strategy", "context_lookback", "entry_lookback", "leverage", "take_profit_amount", "stop_loss_amount"]
+        for key in [
+            'strategy', 'context_timeframe', 'timeframe', 'context_lookback',
+            'entry_lookback', 'leverage', 'take_profit_amount', 'stop_loss_amount',
+        ]
     )
     seed = int(sha256(seed_text.encode("utf-8")).hexdigest()[:12], 16)
     rng = random.Random(seed)

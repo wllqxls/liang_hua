@@ -96,6 +96,8 @@ class OptimizationCandidate(BaseModel):
     rank: int
     strategy: str
     strategy_label: str
+    context_timeframe: str = '15m'
+    timeframe: str = '5m'
     lookback: int
     context_lookback: int
     entry_lookback: int
@@ -110,6 +112,8 @@ class OptimizationCandidate(BaseModel):
     random_pass_rate_pct: float = 0
     random_avg_return_pct: float = 0
     random_worst_return_pct: float = 0
+    long_window_return_pct: float = 0
+    long_window_days: int = 0
     robustness_score: float = 0
     robustness_label: str = "未验证"
     num_trades: int
@@ -130,6 +134,32 @@ class OptimizationResponse(BaseModel):
     candidates: list[OptimizationCandidate]
     evaluated_count: int = 0
     filtered_count: int = 0
+    partial: bool = False
+    error: str | None = None
+
+
+class OptimizationJobCreated(BaseModel):
+    """Background optimization job creation response."""
+
+    success: bool = True
+    job_id: str | None = None
+    error: str | None = None
+
+
+class OptimizationJobStatus(BaseModel):
+    """Progress and result for one background optimization job."""
+
+    success: bool = True
+    job_id: str
+    state: str = 'queued'
+    stage: str = '等待'
+    evaluated_count: int = 0
+    total_budget: int = 228
+    filtered_count: int = 0
+    elapsed_seconds: float = 0
+    estimated_remaining_seconds: float = 0
+    partial: bool = False
+    candidates: list[OptimizationCandidate] = Field(default_factory=list)
     error: str | None = None
 
 
