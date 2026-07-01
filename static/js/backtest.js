@@ -442,6 +442,26 @@ function setMetric(id, value, suffix, colored, decimals) {
 // 权益曲线图
 // ============================================================
 
+function formatEquityTick(value) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return '';
+
+    const absoluteValue = Math.abs(numericValue);
+    if (absoluteValue >= 1_000_000) {
+        return (numericValue / 1_000_000).toLocaleString('zh-CN', {
+            maximumFractionDigits: 1,
+        }) + 'M';
+    }
+    if (absoluteValue >= 1_000) {
+        return (numericValue / 1_000).toLocaleString('zh-CN', {
+            maximumFractionDigits: 1,
+        }) + 'k';
+    }
+    return numericValue.toLocaleString('zh-CN', {
+        maximumFractionDigits: absoluteValue < 10 ? 2 : 1,
+    });
+}
+
 function drawEquityChart(equityCurve) {
     const ctx = document.getElementById('equity-chart').getContext('2d');
 
@@ -499,7 +519,7 @@ function drawEquityChart(equityCurve) {
                     grid: { color: 'rgba(255,255,255,0.04)' },
                     ticks: {
                         color: '#8b949e',
-                        callback: v => (v / 1000).toFixed(0) + 'k',
+                        callback: formatEquityTick,
                     },
                 },
             },

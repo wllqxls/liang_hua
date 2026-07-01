@@ -29,3 +29,11 @@ def test_optimizer_frontend_uses_jobs_and_applies_timeframes() -> None:
     assert '<th>环境周期</th>' in template
     assert '<th>入场周期</th>' in template
     assert '<th>长窗口%</th>' in template
+
+
+def test_equity_chart_uses_value_aware_tick_labels() -> None:
+    script = SCRIPT_PATH.read_text(encoding='utf-8')
+
+    assert 'function formatEquityTick(value)' in script
+    assert 'callback: formatEquityTick' in script
+    assert "(v / 1000).toFixed(0) + 'k'" not in script
