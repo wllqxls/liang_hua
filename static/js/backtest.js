@@ -136,6 +136,18 @@ function validateBacktestPayload(payload) {
 }
 
 
+function validateOptimizationPayload(payload) {
+    return validateBacktestPayload({
+        ...payload,
+        context_timeframe: '15m',
+        timeframe: '5m',
+        backtest_days: 30,
+        context_lookback: 192,
+        entry_lookback: 30,
+    });
+}
+
+
 function bindRealtimeChecks() {
     const ids = ['symbol', 'position-amount', 'leverage'];
     for (const id of ids) {
@@ -226,7 +238,7 @@ async function optimizeParams() {
     const status = document.getElementById('status');
     const results = document.getElementById('results');
     const payload = collectBacktestPayload();
-    const validationError = validateBacktestPayload(payload);
+    const validationError = validateOptimizationPayload(payload);
     if (validationError) {
         showError(validationError);
         return;
@@ -237,20 +249,43 @@ async function optimizeParams() {
     results.classList.remove('hidden');
 
     try {
-        const resp = await fetch('/api/optimize', {
+        const resp = await fetch('/api/optimize/jobs', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
         });
-        const data = await resp.json();
-        if (!resp.ok || !data.success) {
-            showError(data.error || formatApiError(data));
+        const created = await resp.json();
+        if (!resp.ok || !created.success) {
+            showError(created.error || formatApiError(created));
             return;
         }
-        renderOptimizationTable(data.candidates, data);
-        status.textContent = '✅ 参数搜索完成，评估 ' + (data.evaluated_count || 0) +
-            ' 个，通过 ' + (data.candidates || []).length + ' 个，过滤 ' + (data.filtered_count || 0) + ' 个';
-        results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        const jobId = created.job_id;
+        while (true) {
+            const jobResp = await fetch('/api/optimize/jobs/' + jobId);
+            const data = await jobResp.json();
+            if (!jobResp.ok || !data.success) {
+                throw new Error(data.error || formatApiError(data));
+            }
+            const evaluated = data.evaluated_count || 0;
+            const total = data.total_budget || 0;
+            const percent = total > 0 ? Math.min(100, Math.round(evaluated / total * 100)) : 0;
+            status.innerHTML = '<span class="spinner"></span>' + (data.stage || '搜索') +
+                '：' + evaluated + ' / ' + total + '（' + percent + '%），已用 ' +
+                formatDuration(data.elapsed_seconds || 0);
+
+            if (data.state === 'completed') {
+                renderOptimizationTable(data.candidates, data);
+                status.textContent = '✅ 智能搜索完成，评估 ' + evaluated +
+                    ' 个，通过 ' + (data.candidates || []).length + ' 个，过滤 ' +
+                    (data.filtered_count || 0) + ' 个' + (data.partial ? '（达到时间预算，已提前结束）' : '');
+                results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                break;
+            }
+            if (data.state === 'failed') {
+                throw new Error(data.error || '智能搜索失败');
+            }
+            await delay(1000);
+        }
     } catch (err) {
         showError('运行错误: ' + err.message);
     } finally {
@@ -532,7 +567,7 @@ function renderOptimizationTable(candidates, summary) {
         const text = evaluated > 0
             ? '没有通过严格过滤的组合，已过滤 ' + filtered + ' / ' + evaluated + ' 个'
             : '尚未搜索';
-        tbody.innerHTML = '<tr><td colspan="20" class="empty-cell">' + text + '</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="23" class="empty-cell">' + text + '</td></tr>';
         return;
     }
 
@@ -548,6 +583,8 @@ function renderOptimizationTable(candidates, summary) {
             '<td>' + item.rank + '</td>' +
             '<td>' + (item.strategy_label || item.strategy || '--') + '</td>' +
             '<td>' + badge + '</td>' +
+            '<td>' + (item.context_timeframe || '--') + '</td>' +
+            '<td>' + (item.timeframe || '--') + '</td>' +
             '<td>' + item.context_lookback + '</td>' +
             '<td>' + (item.entry_lookback || item.lookback) + '</td>' +
             '<td>x' + formatNumber(item.leverage, 0) + '</td>' +
@@ -557,6 +594,8 @@ function renderOptimizationTable(candidates, summary) {
             '<td class="' + outReturnClass + '">' + formatNumber(item.out_sample_return_pct, 2) + '</td>' +
             '<td>' + formatNumber(item.random_pass_rate_pct, 0) + '%</td>' +
             '<td class="' + randomWorstClass + '">' + formatNumber(item.random_worst_return_pct, 2) + '</td>' +
+            '<td>' + formatNumber(item.long_window_return_pct, 2) +
+                (item.long_window_days ? ' (' + item.long_window_days + '天)' : '') + '</td>' +
             '<td>' + robustness + '</td>' +
             '<td class="' + drawdownClass + '">' + formatNumber(item.max_drawdown_pct, 2) + '</td>' +
             '<td>' + formatNumber(item.win_rate_pct, 2) + '</td>' +
@@ -575,6 +614,8 @@ function applyOptimizationCandidate(index) {
     if (!item) return;
 
     document.getElementById('strategy').value = item.strategy;
+    document.getElementById('context-timeframe').value = item.context_timeframe;
+    document.getElementById('timeframe').value = item.timeframe;
     document.getElementById('context-lookback').value = item.context_lookback;
     document.getElementById('entry-lookback').value = item.entry_lookback || item.lookback;
     document.getElementById('leverage').value = String(item.leverage);
@@ -601,6 +642,19 @@ function formatTime(isoStr) {
     } catch {
         return String(isoStr).slice(0, 16);
     }
+}
+
+
+function delay(milliseconds) {
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+
+function formatDuration(seconds) {
+    const value = Math.max(0, Math.round(seconds));
+    const minutes = Math.floor(value / 60);
+    const remaining = value % 60;
+    return minutes > 0 ? minutes + '分' + remaining + '秒' : remaining + '秒';
 }
 
 

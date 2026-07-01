@@ -182,7 +182,7 @@
             <div id="order-check-msg" class="notice-msg hidden"></div>
             <div id="error-msg" class="error-msg hidden"></div>
             <button id="run-btn" class="btn-primary" onclick="runBacktest()">▶ 开始回测</button>
-            <button id="optimize-btn" class="btn-secondary" onclick="optimizeParams()">策略参数搜索</button>
+            <button id="optimize-btn" class="btn-secondary" onclick="optimizeParams()">智能参数搜索</button>
             <span id="status" class="status-text"></span>
         </section>
 
@@ -261,6 +261,8 @@
                             <th>排名</th>
                             <th>策略</th>
                             <th>评价</th>
+                            <th>环境周期</th>
+                            <th>入场周期</th>
                             <th>环境回溯</th>
                             <th>入场回溯</th>
                             <th>杠杆</th>
@@ -270,6 +272,7 @@
                             <th>样本外%</th>
                             <th>随机通过</th>
                             <th>随机最差%</th>
+                            <th>长窗口%</th>
                             <th>稳健</th>
                             <th>回撤%</th>
                             <th>胜率%</th>
@@ -281,13 +284,13 @@
                         </tr>
                     </thead>
                     <tbody id="optimization-tbody">
-                        <tr><td colspan="20" class="empty-cell">尚未搜索</td></tr>
+                        <tr><td colspan="23" class="empty-cell">尚未搜索</td></tr>
                     </tbody>
                 </table>
             </div>
         </section>
     </div>
 
-    <script src="/static/js/backtest.js?v=fast-search-1"></script>
+    <script src="/static/js/backtest.js?v=progressive-search-1"></script>
 </body>
 </html>
