@@ -121,6 +121,8 @@ python -m src.data.fetcher
 3. 在 `src/web/routes.py` 加 API 端点
 4. 在 `templates/` 和 `static/` 加前端页面
 5. 验证：`pytest` 全绿 + 浏览器手动测试
+6. 每次更改完成并验证通过后，主动创建内容明确的 Git commit
+7. 用户已持续授权：每次提交后自动 push 到 GitHub 当前分支，不再逐次询问；禁止 force push，推送失败时停止并报告
 
 ## 禁止事项
 
