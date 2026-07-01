@@ -300,6 +300,12 @@ def _merge_context_features(
     context_features["ContextATR"] = true_range.rolling(atr_window).mean()
     context_features["ContextClose"] = context["Close"]
 
+    # CCXT timestamps identify the opening time of each candle. At an entry
+    # timestamp inside that candle, its final OHLCV values are not known yet.
+    # Delay every context feature by one complete context candle so the merge
+    # can only expose information that was available at decision time.
+    context_features = context_features.shift(1)
+
     merged = pd.merge_asof(
         entry.sort_index(),
         context_features.sort_index(),

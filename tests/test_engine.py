@@ -95,6 +95,29 @@ def test_context_features_align_to_entry_timeframe(sample_ohlcv: pd.DataFrame) -
     assert merged["ContextTrend"].notna().any()
 
 
+def test_context_features_do_not_use_an_unclosed_context_candle() -> None:
+    context_index = pd.date_range('2026-01-01', periods=20, freq='15min', tz='UTC')
+    context = pd.DataFrame(
+        {
+            'Open': [100.0] * 20,
+            'High': [101.0] * 20,
+            'Low': [99.0] * 20,
+            'Close': [100.0] * 19 + [999.0],
+            'Volume': [1.0] * 20,
+        },
+        index=context_index,
+    )
+    entry_time = context_index[-1] + pd.Timedelta(minutes=5)
+    entry = pd.DataFrame(
+        {'Open': [1.0], 'High': [1.0], 'Low': [1.0], 'Close': [1.0], 'Volume': [1.0]},
+        index=pd.DatetimeIndex([entry_time]),
+    )
+
+    merged = _merge_context_features(entry, context, lookback=5)
+
+    assert merged.loc[entry_time, 'ContextClose'] == 100.0
+
+
 def test_filter_recent_days_keeps_latest_window(sample_ohlcv: pd.DataFrame) -> None:
     filtered = _filter_recent_days(sample_ohlcv, days=2)
 
