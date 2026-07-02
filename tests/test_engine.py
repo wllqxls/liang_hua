@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 
@@ -265,11 +266,23 @@ def test_run_signal_mode_maps_enriched_trade_and_costs(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(engine_module, 'build_market_snapshots', lambda *args, **kwargs: pd.Series([object()], index=[signal_time]))
 
+    losing_trade = replace(
+        trade,
+        signal=replace(signal, side='SELL'),
+        funding=0.02,
+        pnl=-2,
+        pnl_percent=-20,
+        exit_reason='STOP',
+    )
+
     class FakeSimulator:
         def run(self, snapshots: pd.Series, **kwargs: Any) -> SimpleNamespace:
             return SimpleNamespace(
-                trades=(trade,),
-                equity_curve=pd.Series([100.0, 101.939], index=[signal_time, trade.exit_time]),
+                trades=(trade, losing_trade),
+                equity_curve=pd.Series(
+                    [100.0, 110.0, 99.0, 105.0],
+                    index=pd.date_range(signal_time, periods=4, freq='5min'),
+                ),
             )
 
     monkeypatch.setattr(engine_module, 'SignalSimulator', FakeSimulator)
@@ -286,4 +299,31 @@ def test_run_signal_mode_maps_enriched_trade_and_costs(tmp_path: Path, monkeypat
     assert item['entry_commission'] == 0.025
     assert item['exit_commission'] == 0.026
     assert item['funding_fee'] == -0.01
-    assert result.total_funding_fee == -0.01
+    expected_returns = pd.Series([100.0, 110.0, 99.0, 105.0]).pct_change().dropna()
+    expected_sharpe = expected_returns.mean() / expected_returns.std() * (288 * 365) ** 0.5
+    assert result.total_return_pct == pytest.approx(5.0)
+    assert result.win_rate_pct == pytest.approx(50.0)
+    assert result.max_drawdown_pct == pytest.approx(-10.0)
+    assert result.sharpe_ratio == pytest.approx(expected_sharpe)
+    assert result.num_trades == 2
+    assert [point['equity'] for point in result.equity_curve] == [100.0, 110.0, 99.0, 105.0]
+    assert result.total_funding_fee == pytest.approx(0.01)
+
+
+def test_signal_result_zero_trade_constant_equity_metrics() -> None:
+    simulation = SimpleNamespace(
+        trades=(),
+        equity_curve=pd.Series(
+            [100.0, 100.0],
+            index=pd.date_range('2026-01-01', periods=2, freq='5min', tz='UTC'),
+        ),
+    )
+
+    result = engine_module._map_signal_result(simulation, cash=100, timeframe='5m')
+
+    assert result.total_return_pct == 0
+    assert result.win_rate_pct == 0
+    assert result.max_drawdown_pct == 0
+    assert result.sharpe_ratio is None
+    assert result.num_trades == 0
+    assert result.total_funding_fee == 0

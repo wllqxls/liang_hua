@@ -34,6 +34,8 @@ class BacktestRequest(BaseModel):
 class OptimizationRequest(BaseModel):
     """Task 7 前的旧优化器兼容请求；不得用于 /api/backtest。"""
 
+    model_config = ConfigDict(extra='forbid')
+
     symbol: str = 'BTC/USDT'
     timeframe: str = '5m'
     context_timeframe: str = '15m'

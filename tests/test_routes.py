@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Any
+import logging
 
 import pandas as pd
 from fastapi.testclient import TestClient
@@ -145,10 +146,8 @@ def test_backtest_api_rejects_opening_amount_above_cash() -> None:
         },
     )
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["success"] is False
-    assert "开仓金额不能大于账户总金额" in payload["error"]
+    assert response.status_code == 422
+    assert "开仓金额不能大于账户总金额" in response.json()['detail']
 
 
 def test_backtest_api_rejects_cash_that_cannot_cover_entry_fee() -> None:
@@ -157,9 +156,67 @@ def test_backtest_api_rejects_cash_that_cannot_cover_entry_fee() -> None:
         json={'cash': 10, 'opening_amount': 10, 'leverage': 5, 'taker_fee': 0.001},
     )
 
-    assert response.status_code == 200
-    assert response.json()['success'] is False
-    assert '开仓手续费' in response.json()['error']
+    assert response.status_code == 422
+    assert '开仓手续费' in response.json()['detail']
+
+
+def test_backtest_api_returns_404_for_missing_market_data(monkeypatch: Any) -> None:
+    def missing(self: object, **kwargs: Any) -> BacktestResult:
+        raise FileNotFoundError('回测缺少必要数据文件: BTC_USDT_4h.csv')
+
+    monkeypatch.setattr(routes.BacktestEngine, 'run_signal_mode', missing)
+    response = TestClient(app).post('/api/backtest', json={})
+
+    assert response.status_code == 404
+    assert 'BTC_USDT_4h.csv' in response.json()['detail']
+
+
+def test_backtest_api_returns_422_without_leaking_value_error_details(monkeypatch: Any) -> None:
+    def invalid(self: object, **kwargs: Any) -> BacktestResult:
+        raise ValueError(r'invalid data at C:\secret\market.csv')
+
+    monkeypatch.setattr(routes.BacktestEngine, 'run_signal_mode', invalid)
+    response = TestClient(app).post('/api/backtest', json={})
+
+    assert response.status_code == 422
+    assert response.json()['detail'] == '回测参数或数据格式无效'
+    assert 'secret' not in response.text
+
+
+def test_backtest_api_returns_generic_500_and_logs_internal_error(
+    monkeypatch: Any,
+    caplog: Any,
+) -> None:
+    def broken(self: object, **kwargs: Any) -> BacktestResult:
+        raise RuntimeError('database password leaked')
+
+    monkeypatch.setattr(routes.BacktestEngine, 'run_signal_mode', broken)
+    with caplog.at_level(logging.ERROR, logger=routes.__name__):
+        response = TestClient(app).post('/api/backtest', json={})
+
+    assert response.status_code == 500
+    assert response.json()['detail'] == '回测服务内部错误，请稍后重试'
+    assert 'password' not in response.text
+    assert 'database password leaked' in caplog.text
+
+
+def test_optimization_request_rejects_typo_and_new_backtest_fields() -> None:
+    client = TestClient(app)
+    routes._reset_optimization_jobs_for_tests()
+    base = {
+        'symbol': 'BTC/USDT',
+        'timeframe': '5m',
+        'context_timeframe': '15m',
+        'strategy': 'KeyLevelScoring',
+        'cash': 100,
+        'position_amount': 10,
+    }
+
+    typo = client.post('/api/optimize/jobs', json={**base, 'positon_amount': 10})
+    mixed = client.post('/api/optimize/jobs', json={**base, 'mode': 'KEY_LEVEL'})
+
+    assert typo.status_code == 422
+    assert mixed.status_code == 422
 
 
 def test_optimize_api_returns_ranked_candidates(monkeypatch: Any) -> None:

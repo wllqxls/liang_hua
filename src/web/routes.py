@@ -19,7 +19,7 @@ from pathlib import Path
 
 import ccxt
 import pandas as pd
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
@@ -186,10 +186,10 @@ async def index(request: Request) -> HTMLResponse:
 async def run_backtest(req: BacktestRequest) -> BacktestResponse:
     """运行回测。"""
     if req.opening_amount > req.cash:
-        return _error_response('开仓金额不能大于账户总金额')
+        raise HTTPException(status_code=422, detail='开仓金额不能大于账户总金额')
     entry_fee = req.opening_amount * req.leverage * req.taker_fee
     if req.opening_amount + entry_fee > req.cash:
-        return _error_response('账户余额必须覆盖开仓金额和开仓手续费')
+        raise HTTPException(status_code=422, detail='账户余额必须覆盖开仓金额和开仓手续费')
 
     try:
         engine = BacktestEngine(data_dir="./data")
@@ -240,10 +240,13 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
         )
 
     except FileNotFoundError as e:
-        return _error_response(f"数据文件不存在: {e}")
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        logger.warning('回测参数或数据格式无效: %s', e)
+        raise HTTPException(status_code=422, detail='回测参数或数据格式无效') from e
     except Exception as e:
-        logger.exception("回测失败")
-        return _error_response(str(e))
+        logger.exception('回测服务内部错误')
+        raise HTTPException(status_code=500, detail='回测服务内部错误，请稍后重试') from e
 
 
 @router.post('/api/optimize/jobs', response_model=OptimizationJobCreated)
