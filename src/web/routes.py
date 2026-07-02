@@ -243,7 +243,10 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
         _log_safe_backtest_error('backtest_data_missing', e)
         raise HTTPException(
             status_code=404,
-            detail='回测所需数据不存在，请先补齐数据',
+            detail=(
+                f'缺少回测所需数据文件（入场周期 {req.timeframe}、1h、4h），'
+                '请先补齐数据'
+            ),
         ) from None
     except ValueError as e:
         _log_safe_backtest_error('backtest_invalid_input', e)

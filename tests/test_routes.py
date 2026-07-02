@@ -169,10 +169,13 @@ def test_backtest_api_returns_safe_404_for_missing_market_data(
 
     monkeypatch.setattr(routes.BacktestEngine, 'run_signal_mode', missing)
     with caplog.at_level(logging.ERROR, logger=routes.__name__):
-        response = TestClient(app).post('/api/backtest', json={})
+        response = TestClient(app).post('/api/backtest', json={'timeframe': '5m'})
 
     assert response.status_code == 404
-    assert response.json()['detail'] == '回测所需数据不存在，请先补齐数据'
+    detail = response.json()['detail']
+    assert '入场周期 5m' in detail
+    assert '1h' in detail
+    assert '4h' in detail
     assert 'secret' not in response.text
     assert 'secret' not in caplog.text
     assert 'event=backtest_data_missing' in caplog.text
