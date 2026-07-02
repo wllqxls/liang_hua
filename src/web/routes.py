@@ -29,15 +29,12 @@ from src.backtest.optimizer import (
     STAGE_TWO_BUDGET,
     VALIDATION_BUDGET,
     SearchCandidate,
-    available_timeframe_pairs,
+    available_entry_timeframes,
     build_stage_one_candidates,
     build_stage_two_candidates,
 )
 from src.data.fetcher import DataFetcher
-from src.strategies.key_level_scoring import KeyLevelScoring
-from src.strategies.ma_cross import MovingAverageCross
-from src.strategies.rsi_reversion import RSIReversion
-from src.strategies.sr_breakout import SRBreakout
+from src.strategies.signal_models import SignalMode
 from src.web.schemas import (
     BacktestRequest,
     BacktestResponse,
@@ -48,7 +45,6 @@ from src.web.schemas import (
     OptimizationCandidate,
     OptimizationJobCreated,
     OptimizationJobStatus,
-    OptimizationRequest,
     OptimizationResponse,
     TradeItem,
 )
@@ -59,37 +55,6 @@ router = APIRouter()
 
 _templates_dir = Path(__file__).parent.parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_templates_dir))
-
-STRATEGIES: dict[str, type] = {
-    "KeyLevelScoring": KeyLevelScoring,
-    "SRBreakout": SRBreakout,
-    "SupportResistanceBreakout": SRBreakout,
-    "MovingAverageCross": MovingAverageCross,
-    "RSIReversion": RSIReversion,
-}
-
-STRATEGY_OPTIONS = [
-    {
-        "value": "KeyLevelScoring",
-        "label": "关键位评分",
-        "description": "评分策略：支撑阻力只定位关键位，结合影线、成交量、趋势判断做多、做空或不交易。",
-    },
-    {
-        "value": "SRBreakout",
-        "label": "支撑阻力突破",
-        "description": "规则策略：只在高周期强趋势中交易，向上突破做多、向下突破做空，震荡时不交易。",
-    },
-    {
-        "value": "MovingAverageCross",
-        "label": "均线金叉死叉",
-        "description": "规则策略：快线上穿慢线做多，快线下穿慢线做空，方向由策略自动判断。",
-    },
-    {
-        "value": "RSIReversion",
-        "label": "RSI 超卖反弹",
-        "description": "规则策略：RSI 低位做多，高位做空，方向由策略自动判断。",
-    },
-]
 
 MODE_OPTIONS = [
     {
@@ -108,20 +73,9 @@ MODE_OPTIONS = [
         'description': '关键位优先，RSI 仅作兜底',
     },
 ]
-
-OPTIMIZATION_STRATEGIES = {
-    option["value"]: {
-        "class": STRATEGIES[option["value"]],
-        "label": option["label"],
-    }
-    for option in STRATEGY_OPTIONS
-}
+MODE_LABELS = {option['value']: option['label'] for option in MODE_OPTIONS}
 
 TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
-
-LEVERAGE_OPTIONS = [1, 2, 3, 5, 10, 20, 50, 100, 125, 150]
-CONTEXT_LOOKBACK_OPTIONS = [96, 192, 288]
-ENTRY_LOOKBACK_OPTIONS = [10, 20, 30, 40, 50, 60]
 
 SYMBOLS = [
     "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT",
@@ -211,8 +165,6 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
         )
         quality = _assess_backtest_quality(
             result=result,
-            take_profit_amount=1,
-            stop_loss_amount=1,
             backtest_days=req.backtest_days,
         )
 
@@ -262,15 +214,15 @@ def _log_safe_backtest_error(event: str, error: Exception) -> None:
 
 
 @router.post('/api/optimize/jobs', response_model=OptimizationJobCreated)
-async def create_optimization_job(req: OptimizationRequest) -> OptimizationJobCreated:
+async def create_optimization_job(req: BacktestRequest) -> OptimizationJobCreated:
     """Start one progressive optimization job in a background thread."""
-    if req.position_amount > req.cash:
-        return OptimizationJobCreated(success=False, error='单笔逐仓金额不能大于初始资金')
-    pairs = available_timeframe_pairs(Path('./data'), req.symbol)
-    if not pairs:
+    if req.opening_amount > req.cash:
+        return OptimizationJobCreated(success=False, error='开仓金额不能大于初始资金')
+    timeframes = available_entry_timeframes(Path('./data'), req.symbol)
+    if not timeframes:
         return OptimizationJobCreated(
             success=False,
-            error='没有可用的环境周期+入场周期组合，请先拉取同一币种至少两个周期的数据',
+            error='没有可用入场周期，请补齐同一币种的 5m/15m 入场数据及 1h、4h 数据',
         )
 
     with _optimization_jobs_lock:
@@ -303,152 +255,11 @@ async def get_optimization_job(job_id: str) -> OptimizationJobStatus:
 
 
 @router.post("/api/optimize", response_model=OptimizationResponse)
-async def optimize_backtest(req: OptimizationRequest) -> OptimizationResponse:
-    """基于当前参数，对多个策略和参数组合做一轮小型搜索。"""
-    if req.strategy not in STRATEGIES:
-        return OptimizationResponse(success=False, candidates=[], error=f"未知策略: {req.strategy}")
-    if req.position_amount > req.cash:
-        return OptimizationResponse(success=False, candidates=[], error="单笔逐仓金额不能大于初始资金")
-
-    context_lookbacks = [_nearest_option(req.context_lookback, CONTEXT_LOOKBACK_OPTIONS)]
-    entry_lookbacks = _nearby_options(req.entry_lookback, ENTRY_LOOKBACK_OPTIONS)
-    leverages = [float(_nearest_option(int(req.leverage), LEVERAGE_OPTIONS))]
-    take_profit_base = req.take_profit_amount if req.take_profit_amount > 0 else req.position_amount * 0.5
-    take_profits = _nearby_numbers(
-        take_profit_base,
-        [1, 1.5],
-        min_value=0.1,
-        max_value=req.position_amount * req.leverage,
-    )
-    stop_losses = _nearby_numbers(req.stop_loss_amount, [0.75, 1], min_value=0.1, max_value=req.position_amount)
-
-    engine = BacktestEngine(data_dir="./data")
-    try:
-        data_start, data_end = _load_data_bounds(engine, req.symbol, req.timeframe)
-    except Exception as e:
-        logger.exception("参数搜索读取数据范围失败")
-        return OptimizationResponse(success=False, candidates=[], error=str(e))
-    in_start, in_end, out_start, out_end = _split_validation_bounds(data_start, data_end, req.backtest_days)
-    in_sample_days = max(1, math.ceil((in_end - in_start).total_seconds() / 86400))
-    out_sample_days = max(1, math.ceil((out_end - out_start).total_seconds() / 86400))
-    candidates: list[OptimizationCandidate] = []
-    rankless: list[dict] = []
-    evaluated_count = 0
-    filtered_count = 0
-
-    for strategy_name, strategy_info in OPTIMIZATION_STRATEGIES.items():
-        for context_lookback in context_lookbacks:
-            for entry_lookback in entry_lookbacks:
-                for leverage in leverages:
-                    for take_profit_amount in take_profits:
-                        for stop_loss_amount in stop_losses:
-                            try:
-                                result = engine.run(
-                                    strategy_class=strategy_info["class"],
-                                    symbol=req.symbol,
-                                    timeframe=req.timeframe,
-                                    context_timeframe=req.context_timeframe,
-                                    context_lookback=context_lookback,
-                                    window_start=in_start,
-                                    window_end=in_end,
-                                    lookback=entry_lookback,
-                                    cash=req.cash,
-                                    commission=req.taker_fee,
-                                    leverage=leverage,
-                                    slippage_rate=req.slippage_rate,
-                                    funding_rate=req.funding_rate,
-                                    maintenance_margin_rate=req.maintenance_margin_rate,
-                                    position_amount=req.position_amount,
-                                    take_profit_amount=take_profit_amount,
-                                    stop_loss_amount=stop_loss_amount,
-                                )
-                            except Exception:
-                                logger.exception("参数搜索候选失败")
-                                continue
-                            evaluated_count += 1
-                            total_return_pct = _finite_number(result.total_return_pct)
-                            max_drawdown_pct = _finite_number(result.max_drawdown_pct)
-                            win_rate_pct = _finite_number(result.win_rate_pct)
-                            quality = _assess_backtest_quality(
-                                result=result,
-                                take_profit_amount=take_profit_amount,
-                                stop_loss_amount=stop_loss_amount,
-                                backtest_days=in_sample_days,
-                            )
-                            if not quality.passes_filter:
-                                filtered_count += 1
-                                continue
-                            score = _optimization_score(
-                                total_return_pct=total_return_pct,
-                                max_drawdown_pct=max_drawdown_pct,
-                                win_rate_pct=win_rate_pct,
-                                num_trades=result.num_trades,
-                                quality_score=quality.score,
-                                profit_factor=quality.profit_factor,
-                                max_consecutive_losses=quality.max_consecutive_losses,
-                            )
-                            rankless.append({
-                                "strategy": strategy_name,
-                                "strategy_label": strategy_info["label"],
-                                "context_timeframe": req.context_timeframe,
-                                "timeframe": req.timeframe,
-                                "lookback": entry_lookback,
-                                "context_lookback": context_lookback,
-                                "entry_lookback": entry_lookback,
-                                "leverage": leverage,
-                                "take_profit_amount": take_profit_amount,
-                                "stop_loss_amount": stop_loss_amount,
-                                "total_return_pct": total_return_pct,
-                                "max_drawdown_pct": max_drawdown_pct,
-                                "win_rate_pct": win_rate_pct,
-                                "out_sample_return_pct": 0.0,
-                                "out_sample_quality_score": 0.0,
-                                "random_pass_rate_pct": 0.0,
-                                "random_avg_return_pct": 0.0,
-                                "random_worst_return_pct": 0.0,
-                                "robustness_score": 0.0,
-                                "robustness_label": "未验证",
-                                "num_trades": result.num_trades,
-                                "quality_score": quality.score,
-                                "quality_grade": quality.grade,
-                                "quality_label": quality.label,
-                                "quality_reasons": quality.reasons,
-                                "profit_factor": quality.profit_factor,
-                                "avg_win_loss_ratio": quality.avg_win_loss_ratio,
-                                "max_consecutive_losses": quality.max_consecutive_losses,
-                                "score": score,
-                            })
-
-    validation_pool = sorted(rankless, key=lambda item: item["score"], reverse=True)[:VALIDATION_POOL_SIZE]
-    for item in validation_pool:
-        validation = _validate_candidate(
-            engine=engine,
-            req=req,
-            item=item,
-            out_start=out_start,
-            out_end=out_end,
-            out_sample_days=out_sample_days,
-            data_start=data_start,
-            data_end=data_end,
-        )
-        item["out_sample_return_pct"] = validation.out_sample_return_pct
-        item["out_sample_quality_score"] = validation.out_sample_quality_score
-        item["random_pass_rate_pct"] = validation.random_pass_rate_pct
-        item["random_avg_return_pct"] = validation.random_avg_return_pct
-        item["random_worst_return_pct"] = validation.random_worst_return_pct
-        item["robustness_score"] = validation.robustness_score
-        item["robustness_label"] = validation.robustness_label
-        item["score"] += validation.robustness_score * 0.8
-
-    ranked = sorted(validation_pool, key=lambda item: item["score"], reverse=True)[:10]
-    for index, item in enumerate(ranked, start=1):
-        candidates.append(OptimizationCandidate(rank=index, **item))
-    return OptimizationResponse(
-        success=True,
-        candidates=candidates,
-        evaluated_count=evaluated_count,
-        filtered_count=filtered_count,
-    )
+async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
+    """Run the same deterministic pipeline synchronously."""
+    if req.opening_amount > req.cash:
+        return OptimizationResponse(success=False, candidates=[], error='开仓金额不能大于初始资金')
+    return _progressive_optimize(req, lambda **_: None)
 
 
 def _new_optimization_job(job_id: str) -> dict:
@@ -491,7 +302,7 @@ def _update_optimization_job(job_id: str, **values: object) -> None:
             job['estimated_remaining_seconds'] = round(max(0.0, elapsed / evaluated * (total - evaluated)), 1)
 
 
-def _run_optimization_job(job_id: str, req: OptimizationRequest) -> None:
+def _run_optimization_job(job_id: str, req: BacktestRequest) -> None:
     _update_optimization_job(job_id, state='running', stage='粗筛')
 
     def progress(**values: object) -> None:
@@ -515,28 +326,26 @@ def _run_optimization_job(job_id: str, req: OptimizationRequest) -> None:
 
 
 def _progressive_optimize(
-    req: OptimizationRequest,
+    req: BacktestRequest,
     progress: Callable[..., None],
 ) -> OptimizationResponse:
     """Run deterministic coarse, local, and robustness search stages."""
     started_at = time.monotonic()
-    pairs = available_timeframe_pairs(Path('./data'), req.symbol)
-    if not pairs:
-        return OptimizationResponse(success=False, candidates=[], error='没有可用周期组合')
+    entry_timeframes = available_entry_timeframes(Path('./data'), req.symbol)
+    if not entry_timeframes:
+        return OptimizationResponse(success=False, candidates=[], error='没有可用入场周期')
     seed_key = '|'.join([
         req.symbol,
-        str(req.position_amount),
+        req.margin_mode.value,
         str(req.taker_fee),
         str(req.slippage_rate),
         str(req.funding_rate),
     ])
     stage_one = build_stage_one_candidates(
-        timeframe_pairs=pairs,
-        strategies=list(OPTIMIZATION_STRATEGIES),
+        entry_timeframes=entry_timeframes,
+        modes=list(SignalMode),
+        margin_mode=req.margin_mode,
         current_leverage=req.leverage,
-        take_profit_amount=req.take_profit_amount,
-        stop_loss_amount=req.stop_loss_amount,
-        position_amount=req.position_amount,
         seed_key=seed_key,
     )
     total_budget = len(stage_one) + STAGE_TWO_BUDGET + VALIDATION_BUDGET
@@ -569,17 +378,12 @@ def _progressive_optimize(
     stage_two = build_stage_two_candidates(
         stage_two_bases,
         seed_key=seed_key,
-        position_amount=req.position_amount,
     )
     total_budget = len(stage_one) + len(stage_two) + VALIDATION_BUDGET
     for candidate in stage_two:
         if _candidate_budget_exhausted(started_at, evaluated_count):
             partial = True
             break
-        if candidate.stop_loss_amount > req.position_amount:
-            continue
-        if candidate.take_profit_amount > req.position_amount * candidate.leverage:
-            continue
         item, filtered = _evaluate_progressive_candidate(engine, req, candidate, bounds_cache)
         evaluated_count += 1
         filtered_count += int(filtered)
@@ -600,7 +404,7 @@ def _progressive_optimize(
             partial = True
             break
         data_start, data_end = _load_data_bounds(engine, req.symbol, item['timeframe'])
-        _, _, out_start, out_end = _split_validation_bounds(data_start, data_end, 30)
+        _, _, out_start, out_end = _split_validation_bounds(data_start, data_end, req.backtest_days)
         out_sample_days = max(1, math.ceil((out_end - out_start).total_seconds() / 86400))
         validation = _validate_candidate(
             engine=engine,
@@ -680,44 +484,38 @@ def _candidate_budget_exhausted(
 
 def _evaluate_progressive_candidate(
     engine: BacktestEngine,
-    req: OptimizationRequest,
+    req: BacktestRequest,
     candidate: SearchCandidate,
     bounds_cache: dict[str, tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp, int]],
 ) -> tuple[dict | None, bool]:
     if candidate.timeframe not in bounds_cache:
         data_start, data_end = _load_data_bounds(engine, req.symbol, candidate.timeframe)
-        in_start, in_end, _, _ = _split_validation_bounds(data_start, data_end, 30)
+        in_start, in_end, _, _ = _split_validation_bounds(data_start, data_end, req.backtest_days)
         in_days = max(1, math.ceil((in_end - in_start).total_seconds() / 86400))
         bounds_cache[candidate.timeframe] = (data_start, data_end, in_start, in_end, in_days)
     _, _, in_start, in_end, in_days = bounds_cache[candidate.timeframe]
-    strategy_info = OPTIMIZATION_STRATEGIES[candidate.strategy]
     try:
-        result = engine.run(
-            strategy_class=strategy_info['class'],
+        result = engine.run_signal_mode(
             symbol=req.symbol,
             timeframe=candidate.timeframe,
-            context_timeframe=candidate.context_timeframe,
-            context_lookback=candidate.context_lookback,
+            mode=candidate.mode,
             window_start=in_start,
             window_end=in_end,
-            lookback=candidate.entry_lookback,
             cash=req.cash,
-            commission=req.taker_fee,
+            opening_amount=req.opening_amount,
+            margin_mode=candidate.margin_mode,
             leverage=candidate.leverage,
+            maker_fee=req.maker_fee,
+            taker_fee=req.taker_fee,
             slippage_rate=req.slippage_rate,
             funding_rate=req.funding_rate,
             maintenance_margin_rate=req.maintenance_margin_rate,
-            position_amount=req.position_amount,
-            take_profit_amount=candidate.take_profit_amount,
-            stop_loss_amount=candidate.stop_loss_amount,
         )
     except Exception:
         logger.exception('渐进搜索候选失败')
         return None, False
     quality = _assess_backtest_quality(
         result=result,
-        take_profit_amount=candidate.take_profit_amount,
-        stop_loss_amount=candidate.stop_loss_amount,
         backtest_days=in_days,
     )
     if not quality.passes_filter:
@@ -735,16 +533,11 @@ def _evaluate_progressive_candidate(
         max_consecutive_losses=quality.max_consecutive_losses,
     )
     return {
-        'strategy': candidate.strategy,
-        'strategy_label': strategy_info['label'],
-        'context_timeframe': candidate.context_timeframe,
+        'mode': candidate.mode,
+        'mode_label': MODE_LABELS[candidate.mode.value],
         'timeframe': candidate.timeframe,
-        'lookback': candidate.entry_lookback,
-        'context_lookback': candidate.context_lookback,
-        'entry_lookback': candidate.entry_lookback,
+        'margin_mode': candidate.margin_mode,
         'leverage': candidate.leverage,
-        'take_profit_amount': candidate.take_profit_amount,
-        'stop_loss_amount': candidate.stop_loss_amount,
         'total_return_pct': total_return_pct,
         'max_drawdown_pct': max_drawdown_pct,
         'win_rate_pct': win_rate_pct,
@@ -766,26 +559,21 @@ def _evaluate_progressive_candidate(
         'avg_win_loss_ratio': quality.avg_win_loss_ratio,
         'max_consecutive_losses': quality.max_consecutive_losses,
         'score': score,
-        'search_backtest_days': 30,
     }, False
 
 
 def _search_candidate_from_item(item: dict) -> SearchCandidate:
     return SearchCandidate(
-        strategy=item['strategy'],
-        context_timeframe=item['context_timeframe'],
+        mode=item['mode'],
         timeframe=item['timeframe'],
-        context_lookback=item['context_lookback'],
-        entry_lookback=item['entry_lookback'],
         leverage=item['leverage'],
-        take_profit_amount=item['take_profit_amount'],
-        stop_loss_amount=item['stop_loss_amount'],
+        margin_mode=item['margin_mode'],
     )
 
 
 def _long_window_validation(
     engine: BacktestEngine,
-    req: OptimizationRequest,
+    req: BacktestRequest,
     item: dict,
 ) -> tuple[float, int, int]:
     data_start, data_end = _load_data_bounds(engine, req.symbol, item['timeframe'])
@@ -891,38 +679,6 @@ def _error_response(msg: str) -> BacktestResponse:
     )
 
 
-def _nearby_ints(value: int, factors: list[float], min_value: int, max_value: int) -> list[int]:
-    values = {min(max(int(round(value * factor)), min_value), max_value) for factor in factors}
-    return sorted(values)
-
-
-def _nearby_numbers(value: float, factors: list[float], min_value: float, max_value: float) -> list[float]:
-    values = {round(min(max(value * factor, min_value), max_value), 4) for factor in factors}
-    return sorted(values)
-
-
-def _nearby_leverages(value: float) -> list[float]:
-    targets = [min(max(value * factor, 1), 150) for factor in [0.5, 1, 2]]
-    selected = {
-        min(LEVERAGE_OPTIONS, key=lambda option: abs(option - target))
-        for target in targets
-    }
-    return [float(item) for item in sorted(selected)]
-
-
-def _nearby_options(value: int, options: list[int]) -> list[int]:
-    """返回当前选项及左右相邻选项，控制参数搜索规模。"""
-    nearest = _nearest_option(value, options)
-    index = options.index(nearest)
-    start = max(index - 1, 0)
-    end = min(index + 2, len(options))
-    return options[start:end]
-
-
-def _nearest_option(value: int, options: list[int]) -> int:
-    return min(options, key=lambda option: abs(option - value))
-
-
 def _load_data_bounds(engine: BacktestEngine, symbol: str, timeframe: str) -> tuple[pd.Timestamp, pd.Timestamp]:
     safe_symbol = symbol.replace("/", "_")
     filepath = Path("./data") / f"{safe_symbol}_{timeframe}.csv"
@@ -949,7 +705,7 @@ def _split_validation_bounds(
 
 def _validate_candidate(
     engine: BacktestEngine,
-    req: OptimizationRequest,
+    req: BacktestRequest,
     item: dict,
     out_start: pd.Timestamp,
     out_end: pd.Timestamp,
@@ -961,8 +717,6 @@ def _validate_candidate(
         out_result = _run_candidate_window(engine, req, item, out_start, out_end)
         out_quality = _assess_backtest_quality(
             result=out_result,
-            take_profit_amount=item["take_profit_amount"],
-            stop_loss_amount=item["stop_loss_amount"],
             backtest_days=out_sample_days,
         )
         out_return = _finite_number(out_result.total_return_pct)
@@ -974,15 +728,13 @@ def _validate_candidate(
 
     random_returns: list[float] = []
     random_passes = 0
-    validation_days = int(item.get('search_backtest_days', req.backtest_days))
+    validation_days = req.backtest_days
     windows = _random_validation_windows(data_start, data_end, validation_days, item)
     for start, end in windows:
         try:
             random_result = _run_candidate_window(engine, req, item, start, end)
             random_quality = _assess_backtest_quality(
                 result=random_result,
-                take_profit_amount=item["take_profit_amount"],
-                stop_loss_amount=item["stop_loss_amount"],
                 backtest_days=validation_days,
             )
         except Exception:
@@ -1022,30 +774,26 @@ def _validate_candidate(
 
 def _run_candidate_window(
     engine: BacktestEngine,
-    req: OptimizationRequest,
+    req: BacktestRequest,
     item: dict,
     start: pd.Timestamp,
     end: pd.Timestamp,
 ) -> object:
-    strategy_info = OPTIMIZATION_STRATEGIES[item["strategy"]]
-    return engine.run(
-        strategy_class=strategy_info["class"],
+    return engine.run_signal_mode(
         symbol=req.symbol,
         timeframe=item.get('timeframe', req.timeframe),
-        context_timeframe=item.get('context_timeframe', req.context_timeframe),
-        context_lookback=item["context_lookback"],
+        mode=item['mode'],
         window_start=start,
         window_end=end,
-        lookback=item["entry_lookback"],
         cash=req.cash,
-        commission=req.taker_fee,
+        opening_amount=req.opening_amount,
+        margin_mode=item['margin_mode'],
         leverage=item["leverage"],
+        maker_fee=req.maker_fee,
+        taker_fee=req.taker_fee,
         slippage_rate=req.slippage_rate,
         funding_rate=req.funding_rate,
         maintenance_margin_rate=req.maintenance_margin_rate,
-        position_amount=req.position_amount,
-        take_profit_amount=item["take_profit_amount"],
-        stop_loss_amount=item["stop_loss_amount"],
     )
 
 
@@ -1061,10 +809,7 @@ def _random_validation_windows(
         return [(max(data_start, data_end - window), data_end)]
     seed_text = "|".join(
         str(item[key])
-        for key in [
-            'strategy', 'context_timeframe', 'timeframe', 'context_lookback',
-            'entry_lookback', 'leverage', 'take_profit_amount', 'stop_loss_amount',
-        ]
+        for key in ['mode', 'timeframe', 'margin_mode', 'leverage']
     )
     seed = int(sha256(seed_text.encode("utf-8")).hexdigest()[:12], 16)
     rng = random.Random(seed)
@@ -1136,8 +881,6 @@ def _optimization_score(
 
 def _assess_backtest_quality(
     result: object,
-    take_profit_amount: float,
-    stop_loss_amount: float,
     backtest_days: int,
 ) -> QualityReport:
     """给回测结果做实盘重复执行视角的质量评估。"""
@@ -1160,8 +903,6 @@ def _assess_backtest_quality(
     reasons: list[str] = []
     hard_reasons: list[str] = []
 
-    if take_profit_amount <= 0 or stop_loss_amount <= 0:
-        hard_reasons.append("必须同时设置止盈和止损")
     if num_trades < min_trades:
         hard_reasons.append(f"交易次数少于 {min_trades} 笔，样本不足")
     if total_return_pct <= 0:
@@ -1189,7 +930,6 @@ def _assess_backtest_quality(
         min_trades=min_trades,
         profit_factor=profit_factor,
         max_consecutive_losses=max_consecutive_losses,
-        has_take_profit_stop_loss=take_profit_amount > 0 and stop_loss_amount > 0,
     )
     passes_filter = len(hard_reasons) == 0
     if not passes_filter or score < 45:
@@ -1255,7 +995,6 @@ def _quality_score(
     min_trades: int,
     profit_factor: float,
     max_consecutive_losses: int,
-    has_take_profit_stop_loss: bool,
 ) -> float:
     score = 50.0
     score += max(min(total_return_pct, 60), -30) * 0.35
@@ -1265,6 +1004,4 @@ def _quality_score(
     score += min(num_trades / max(min_trades, 1), 2.0) * 6
     score += max(min(sharpe_ratio, 3.0), -1.0) * 4
     score -= max_consecutive_losses * 2
-    if not has_take_profit_stop_loss:
-        score -= 20
     return max(min(score, 100), 0)

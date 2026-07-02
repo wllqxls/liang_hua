@@ -31,31 +31,6 @@ class BacktestRequest(BaseModel):
     maintenance_margin_rate: float = Field(default=0.005, ge=0, le=0.1, description="维持保证金率")
 
 
-class OptimizationRequest(BaseModel):
-    """Task 7 前的旧优化器兼容请求；不得用于 /api/backtest。"""
-
-    model_config = ConfigDict(extra='forbid')
-
-    symbol: str = 'BTC/USDT'
-    timeframe: str = '5m'
-    context_timeframe: str = '15m'
-    strategy: str = 'KeyLevelScoring'
-    backtest_days: int = Field(default=30, ge=1, le=3650)
-    context_lookback: int = Field(default=192, ge=1, le=500)
-    entry_lookback: int = Field(default=30, ge=1, le=500)
-    lookback: int = Field(default=30, ge=1, le=500)
-    cash: float = Field(default=100, ge=10)
-    position_amount: float = Field(default=10, ge=0.1)
-    leverage: float = Field(default=5, ge=1, le=150)
-    take_profit_amount: float = Field(default=1, ge=0)
-    stop_loss_amount: float = Field(default=1, ge=0)
-    maker_fee: float = Field(default=0.0002, ge=0, le=0.1)
-    taker_fee: float = Field(default=0.0005, ge=0, le=0.1)
-    slippage_rate: float = Field(default=0.0002, ge=0, le=0.1)
-    funding_rate: float = Field(default=0.0001, ge=0, le=0.1)
-    maintenance_margin_rate: float = Field(default=0.005, ge=0, le=0.1)
-
-
 class DataFetchRequest(BaseModel):
     """历史数据拉取请求参数。"""
 
@@ -136,16 +111,11 @@ class OptimizationCandidate(BaseModel):
     """参数搜索候选结果。"""
 
     rank: int
-    strategy: str
-    strategy_label: str
-    context_timeframe: str = '15m'
-    timeframe: str = '5m'
-    lookback: int
-    context_lookback: int
-    entry_lookback: int
+    mode: SignalMode
+    mode_label: str
+    timeframe: Literal['5m', '15m']
+    margin_mode: MarginMode
     leverage: float
-    take_profit_amount: float
-    stop_loss_amount: float
     total_return_pct: float
     max_drawdown_pct: float
     win_rate_pct: float
@@ -196,7 +166,7 @@ class OptimizationJobStatus(BaseModel):
     state: str = 'queued'
     stage: str = '等待'
     evaluated_count: int = 0
-    total_budget: int = 228
+    total_budget: int = 240
     filtered_count: int = 0
     elapsed_seconds: float = 0
     estimated_remaining_seconds: float = 0

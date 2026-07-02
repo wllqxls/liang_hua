@@ -1,125 +1,68 @@
 from dataclasses import asdict
 
 from src.backtest.optimizer import (
+    LEVERAGE_OPTIONS,
     SearchCandidate,
-    available_timeframe_pairs,
+    available_entry_timeframes,
     build_stage_one_candidates,
     build_stage_two_candidates,
 )
+from src.strategies.signal_models import MarginMode, SignalMode
 
 
-def test_available_timeframe_pairs_only_use_existing_ordered_data(tmp_path) -> None:
-    for timeframe in ['5m', '15m', '1h']:
+def test_available_entry_timeframes_require_entry_1h_and_4h_files(tmp_path) -> None:
+    for timeframe in ['5m', '1h', '4h']:
         (tmp_path / f'BTC_USDT_{timeframe}.csv').touch()
+    (tmp_path / 'ETH_USDT_15m.csv').touch()
+    (tmp_path / 'ETH_USDT_1h.csv').touch()
 
-    assert available_timeframe_pairs(tmp_path, 'BTC/USDT') == [
-        ('15m', '5m'),
-        ('1h', '5m'),
-        ('1h', '15m'),
-    ]
+    assert available_entry_timeframes(tmp_path, 'BTC/USDT') == ['5m']
+    assert available_entry_timeframes(tmp_path, 'ETH/USDT') == []
 
 
-def test_stage_one_sampling_is_deterministic_and_stratified() -> None:
+def test_stage_one_is_deterministic_and_covers_modes_by_available_timeframe() -> None:
     kwargs = {
-        'timeframe_pairs': [('15m', '5m'), ('1h', '15m')],
-        'strategies': ['A', 'B'],
-        'current_leverage': 5,
-        'take_profit_amount': 1,
-        'stop_loss_amount': 1,
-        'position_amount': 10,
-        'seed_key': 'BTC/USDT|fees',
-        'budget': 24,
+        'entry_timeframes': ['5m', '15m'],
+        'modes': list(SignalMode),
+        'margin_mode': MarginMode.CROSS,
+        'current_leverage': 7,
+        'seed_key': 'BTC/USDT|CROSS|fees',
     }
 
     first = build_stage_one_candidates(**kwargs)
     second = build_stage_one_candidates(**kwargs)
 
     assert first == second
-    assert len(first) == 24
-    assert {(item.strategy, item.context_timeframe, item.timeframe) for item in first} == {
-        ('A', '15m', '5m'),
-        ('A', '1h', '15m'),
-        ('B', '15m', '5m'),
-        ('B', '1h', '15m'),
+    assert len(first) == 6
+    assert {(item.mode, item.timeframe) for item in first} == {
+        (mode, timeframe) for mode in SignalMode for timeframe in ['5m', '15m']
     }
-    assert 'position_amount' not in asdict(first[0])
-    assert 'backtest_days' not in asdict(first[0])
+    assert {item.leverage for item in first} == {5.0}
+    assert {item.margin_mode for item in first} == {MarginMode.CROSS}
 
 
-def test_stage_two_search_is_bounded_and_deterministic() -> None:
+def test_candidate_shape_contains_only_approved_search_dimensions() -> None:
+    candidate = SearchCandidate(
+        mode=SignalMode.KEY_LEVEL,
+        timeframe='5m',
+        leverage=5,
+        margin_mode=MarginMode.ISOLATED,
+    )
+
+    assert set(asdict(candidate)) == {'mode', 'timeframe', 'leverage', 'margin_mode'}
+
+
+def test_stage_two_is_deterministic_and_only_explores_adjacent_leverage() -> None:
     ranked = [
-        SearchCandidate(f'S{index}', '15m', '5m', 192, 30, 5, 1, 1)
-        for index in range(12)
+        SearchCandidate(SignalMode.KEY_LEVEL, '5m', 5, MarginMode.ISOLATED),
+        SearchCandidate(SignalMode.RSI_REVERSAL, '15m', 125, MarginMode.ISOLATED),
     ]
 
-    first = build_stage_two_candidates(
-        ranked,
-        seed_key='BTC/USDT|fees',
-        position_amount=10,
-        per_candidate=6,
-    )
-    second = build_stage_two_candidates(
-        ranked,
-        seed_key='BTC/USDT|fees',
-        position_amount=10,
-        per_candidate=6,
-    )
+    first = build_stage_two_candidates(ranked, seed_key='BTC/USDT|ISOLATED|fees')
+    second = build_stage_two_candidates(ranked, seed_key='BTC/USDT|ISOLATED|fees')
 
     assert first == second
-    assert len(first) <= 84
-    for index in range(3):
-        assert {item.leverage for item in first if item.strategy == f'S{index}'} == {
-            1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0
-        }
-    for index in range(3, 12):
-        candidates = [item for item in first if item.strategy == f'S{index}']
-        assert len(candidates) == 6
-        assert {item.leverage for item in candidates} <= {3.0, 5.0, 10.0}
-
-
-def test_stage_two_preserves_exit_distances_across_leverage_changes() -> None:
-    base = SearchCandidate('SRBreakout', '1h', '5m', 192, 30, 10, 1.5, 0.5)
-
-    candidates = build_stage_two_candidates(
-        [base],
-        seed_key='ETH/USDT|fees',
-        position_amount=2,
-    )
-
-    assert any(
-        item.leverage == 3
-        and item.context_lookback == 192
-        and item.entry_lookback == 30
-        and item.take_profit_amount == 0.45
-        and item.stop_loss_amount == 0.15
-        for item in candidates
-    )
-
-
-def test_stage_two_does_not_clip_scaled_exit_amounts() -> None:
-    base = SearchCandidate('SRBreakout', '1h', '5m', 192, 30, 10, 1.5, 0.5)
-
-    candidates = build_stage_two_candidates(
-        [base],
-        seed_key='ETH/USDT|fees',
-        position_amount=2,
-    )
-
-    assert any(
-        item.leverage == 1
-        and item.context_lookback == 192
-        and item.entry_lookback == 30
-        and item.take_profit_amount == 0.15
-        and item.stop_loss_amount == 0.05
-        for item in candidates
-    )
-    assert all(item.leverage < 100 for item in candidates)
-    assert all(item.stop_loss_amount <= 2 for item in candidates)
-    assert {
-        round(item.take_profit_amount / item.leverage, 4)
-        for item in candidates
-    } <= {0.1125, 0.15, 0.1875}
-    assert {
-        round(item.stop_loss_amount / item.leverage, 4)
-        for item in candidates
-    } <= {0.0375, 0.05, 0.0625}
+    assert {item.leverage for item in first if item.mode is SignalMode.KEY_LEVEL} == {3.0, 10.0}
+    assert {item.leverage for item in first if item.mode is SignalMode.RSI_REVERSAL} == {100.0, 150.0}
+    assert {item.margin_mode for item in first} == {MarginMode.ISOLATED}
+    assert all(item.leverage in LEVERAGE_OPTIONS for item in first)

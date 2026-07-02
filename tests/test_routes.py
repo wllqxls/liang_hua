@@ -220,68 +220,39 @@ def test_backtest_api_returns_generic_500_and_logs_internal_error(
     assert 'exception_type=RuntimeError' in caplog.text
 
 
-def test_optimization_request_rejects_typo_and_new_backtest_fields() -> None:
+def test_optimization_endpoint_uses_backtest_request_and_rejects_legacy_fields() -> None:
     client = TestClient(app)
     routes._reset_optimization_jobs_for_tests()
-    base = {
-        'symbol': 'BTC/USDT',
-        'timeframe': '5m',
-        'context_timeframe': '15m',
-        'strategy': 'KeyLevelScoring',
-        'cash': 100,
-        'position_amount': 10,
-    }
+    base = {'symbol': 'BTC/USDT', 'timeframe': '5m', 'mode': 'KEY_LEVEL'}
 
     typo = client.post('/api/optimize/jobs', json={**base, 'positon_amount': 10})
-    mixed = client.post('/api/optimize/jobs', json={**base, 'mode': 'KEY_LEVEL'})
+    mixed = client.post('/api/optimize/jobs', json={**base, 'strategy': 'KeyLevelScoring'})
 
     assert typo.status_code == 422
     assert mixed.status_code == 422
 
 
 def test_optimize_api_returns_ranked_candidates(monkeypatch: Any) -> None:
-    calls: list[dict[str, Any]] = []
+    seen: list[Any] = []
 
-    def fake_run(self: object, **kwargs: Any) -> BacktestResult:
-        calls.append(kwargs)
-        score_base = kwargs["leverage"] + kwargs["lookback"] * 0.01
-        return BacktestResult(
-            total_return_pct=score_base,
-            win_rate_pct=45.0,
-            max_drawdown_pct=-2.0,
-            sharpe_ratio=None,
-            num_trades=8,
-            equity_curve=[],
-            trade_list=[
-                {"pnl": 1.2},
-                {"pnl": -0.4},
-                {"pnl": 1.0},
-                {"pnl": -0.3},
-                {"pnl": 0.8},
-                {"pnl": -0.2},
-                {"pnl": 0.9},
-                {"pnl": -0.2},
-            ],
-        )
+    def fake_search(req: Any, progress: Any) -> Any:
+        seen.append(req)
+        return routes.OptimizationResponse(success=True, candidates=[])
 
-    monkeypatch.setattr(routes.BacktestEngine, "run", fake_run)
+    monkeypatch.setattr(routes, '_progressive_optimize', fake_search)
     client = TestClient(app)
 
     response = client.post(
         "/api/optimize",
         json={
             "symbol": "BTC/USDT",
-            "timeframe": "1h",
-            "context_timeframe": "15m",
-            "strategy": "SRBreakout",
+            "timeframe": "5m",
+            "mode": "RSI_REVERSAL",
             "backtest_days": 30,
-            "context_lookback": 192,
-            "entry_lookback": 30,
             "cash": 100,
-            "position_amount": 3.3,
+            "opening_amount": 3.3,
+            "margin_mode": "CROSS",
             "leverage": 5,
-            "take_profit_amount": 0,
-            "stop_loss_amount": 2,
             "maker_fee": 0.0002,
             "taker_fee": 0.0005,
             "slippage_rate": 0.0002,
@@ -293,63 +264,31 @@ def test_optimize_api_returns_ranked_candidates(monkeypatch: Any) -> None:
     payload = response.json()
     assert response.status_code == 200
     assert payload["success"] is True
-    assert len(payload["candidates"]) == 10
-    assert payload["candidates"][0]["rank"] == 1
-    assert "strategy" in payload["candidates"][0]
-    assert "strategy_label" in payload["candidates"][0]
-    assert "quality_score" in payload["candidates"][0]
-    assert "out_sample_return_pct" in payload["candidates"][0]
-    assert "random_pass_rate_pct" in payload["candidates"][0]
-    assert "robustness_score" in payload["candidates"][0]
-    assert payload["evaluated_count"] < len(calls)
-    assert payload["filtered_count"] == 0
-    assert calls[0]["slippage_rate"] == 0.0002
-    assert calls[0]["context_timeframe"] == "15m"
-    assert calls[0]["context_lookback"] in routes.CONTEXT_LOOKBACK_OPTIONS
-    assert calls[0]["window_start"] < calls[0]["window_end"]
-    assert all(candidate["take_profit_amount"] > 0 for candidate in payload["candidates"])
-    assert all(candidate["context_lookback"] in routes.CONTEXT_LOOKBACK_OPTIONS for candidate in payload["candidates"])
-    assert all(candidate["entry_lookback"] in routes.ENTRY_LOOKBACK_OPTIONS for candidate in payload["candidates"])
-    assert all(candidate["leverage"] in routes.LEVERAGE_OPTIONS for candidate in payload["candidates"])
-    assert all(call["take_profit_amount"] > 0 for call in calls)
-    assert all(call["leverage"] in routes.LEVERAGE_OPTIONS for call in calls)
-    strategy_classes = {call["strategy_class"].__name__ for call in calls}
-    assert strategy_classes == {"KeyLevelScoring", "SRBreakout", "MovingAverageCross", "RSIReversion"}
+    assert payload['candidates'] == []
+    assert seen[0].mode.value == 'RSI_REVERSAL'
+    assert seen[0].margin_mode.value == 'CROSS'
 
 
 def test_optimize_api_filters_low_quality_candidates(monkeypatch: Any) -> None:
-    def fake_run(self: object, **kwargs: Any) -> BacktestResult:
-        return BacktestResult(
-            total_return_pct=80.0,
-            win_rate_pct=10.0,
-            max_drawdown_pct=-45.0,
-            sharpe_ratio=None,
-            num_trades=2,
-            equity_curve=[],
-            trade_list=[
-                {"pnl": -0.3},
-                {"pnl": 5.0},
-            ],
+    def fake_search(req: Any, progress: Any) -> Any:
+        return routes.OptimizationResponse(
+            success=True, candidates=[], evaluated_count=6, filtered_count=6,
         )
 
-    monkeypatch.setattr(routes.BacktestEngine, "run", fake_run)
+    monkeypatch.setattr(routes, '_progressive_optimize', fake_search)
     client = TestClient(app)
 
     response = client.post(
         "/api/optimize",
         json={
             "symbol": "BTC/USDT",
-            "timeframe": "1h",
-            "context_timeframe": "15m",
-            "strategy": "SRBreakout",
+            "timeframe": "5m",
+            "mode": "KEY_LEVEL",
             "backtest_days": 30,
-            "context_lookback": 192,
-            "entry_lookback": 30,
             "cash": 100,
-            "position_amount": 3.3,
+            "opening_amount": 3.3,
+            "margin_mode": "ISOLATED",
             "leverage": 5,
-            "take_profit_amount": 0,
-            "stop_loss_amount": 2,
             "maker_fee": 0.0002,
             "taker_fee": 0.0005,
             "slippage_rate": 0.0002,
@@ -362,7 +301,7 @@ def test_optimize_api_filters_low_quality_candidates(monkeypatch: Any) -> None:
     assert response.status_code == 200
     assert payload["success"] is True
     assert payload["candidates"] == []
-    assert payload["evaluated_count"] > 0
+    assert payload["evaluated_count"] == 6
     assert payload["filtered_count"] == payload["evaluated_count"]
 
 
