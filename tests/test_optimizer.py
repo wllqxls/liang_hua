@@ -1,7 +1,6 @@
 from dataclasses import asdict
 
 from src.backtest.optimizer import (
-    LEVERAGE_OPTIONS,
     SearchCandidate,
     available_timeframe_pairs,
     build_stage_one_candidates,
@@ -67,10 +66,10 @@ def test_stage_two_search_is_bounded_and_deterministic() -> None:
     )
 
     assert first == second
-    assert len(first) == 84
+    assert len(first) <= 84
     for index in range(3):
         assert {item.leverage for item in first if item.strategy == f'S{index}'} == {
-            float(value) for value in LEVERAGE_OPTIONS
+            1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0
         }
     for index in range(3, 12):
         candidates = [item for item in first if item.strategy == f'S{index}']
@@ -95,3 +94,32 @@ def test_stage_two_preserves_exit_distances_across_leverage_changes() -> None:
         and item.stop_loss_amount == 0.15
         for item in candidates
     )
+
+
+def test_stage_two_does_not_clip_scaled_exit_amounts() -> None:
+    base = SearchCandidate('SRBreakout', '1h', '5m', 192, 30, 10, 1.5, 0.5)
+
+    candidates = build_stage_two_candidates(
+        [base],
+        seed_key='ETH/USDT|fees',
+        position_amount=2,
+    )
+
+    assert any(
+        item.leverage == 1
+        and item.context_lookback == 192
+        and item.entry_lookback == 30
+        and item.take_profit_amount == 0.15
+        and item.stop_loss_amount == 0.05
+        for item in candidates
+    )
+    assert all(item.leverage < 100 for item in candidates)
+    assert all(item.stop_loss_amount <= 2 for item in candidates)
+    assert {
+        round(item.take_profit_amount / item.leverage, 4)
+        for item in candidates
+    } <= {0.1125, 0.15, 0.1875}
+    assert {
+        round(item.stop_loss_amount / item.leverage, 4)
+        for item in candidates
+    } <= {0.0375, 0.05, 0.0625}

@@ -133,16 +133,8 @@ def build_stage_two_candidates(
                 context_lookback=context_lookback,
                 entry_lookback=entry_lookback,
                 leverage=float(leverage),
-                take_profit_amount=_bounded(
-                    base.take_profit_amount * (float(leverage) / max(base.leverage, 1)) * tp_factor,
-                    0.1,
-                    position_amount * leverage,
-                ),
-                stop_loss_amount=_bounded(
-                    base.stop_loss_amount * (float(leverage) / max(base.leverage, 1)) * sl_factor,
-                    0.1,
-                    position_amount,
-                ),
+                take_profit_amount=scaled_take_profit,
+                stop_loss_amount=scaled_stop_loss,
             )
             for context_lookback, entry_lookback, leverage, tp_factor, sl_factor in product(
                 _nearby(base.context_lookback, CONTEXT_LOOKBACK_OPTIONS),
@@ -151,27 +143,52 @@ def build_stage_two_candidates(
                 [0.75, 1.0, 1.25],
                 [0.75, 1.0, 1.25],
             )
+            for scaled_take_profit in [
+                _scaled_exit_amount(
+                    base.take_profit_amount,
+                    leverage=float(leverage),
+                    base_leverage=base.leverage,
+                    factor=tp_factor,
+                    maximum=position_amount * leverage,
+                )
+            ]
+            for scaled_stop_loss in [
+                _scaled_exit_amount(
+                    base.stop_loss_amount,
+                    leverage=float(leverage),
+                    base_leverage=base.leverage,
+                    factor=sl_factor,
+                    maximum=position_amount,
+                )
+            ]
+            if scaled_take_profit is not None and scaled_stop_loss is not None
         ]
         pool = list(dict.fromkeys(pool))
         added = 0
         if index < 3:
             for leverage in LEVERAGE_OPTIONS:
                 leverage_pool = [candidate for candidate in pool if candidate.leverage == float(leverage)]
-                scaled_take_profit = _bounded(
-                    base.take_profit_amount * (float(leverage) / max(base.leverage, 1)),
-                    0.1,
-                    position_amount * leverage,
+                scaled_take_profit = _scaled_exit_amount(
+                    base.take_profit_amount,
+                    leverage=float(leverage),
+                    base_leverage=base.leverage,
+                    factor=1.0,
+                    maximum=position_amount * leverage,
                 )
-                scaled_stop_loss = _bounded(
-                    base.stop_loss_amount * (float(leverage) / max(base.leverage, 1)),
-                    0.1,
-                    position_amount,
+                scaled_stop_loss = _scaled_exit_amount(
+                    base.stop_loss_amount,
+                    leverage=float(leverage),
+                    base_leverage=base.leverage,
+                    factor=1.0,
+                    maximum=position_amount,
                 )
                 candidate = next(
                     (
                         item
                         for item in leverage_pool
                         if item not in seen
+                        and scaled_take_profit is not None
+                        and scaled_stop_loss is not None
                         and item.context_lookback == base.context_lookback
                         and item.entry_lookback == base.entry_lookback
                         and item.take_profit_amount == scaled_take_profit
@@ -219,3 +236,18 @@ def _nearby(value: float, options: list[int]) -> list[int]:
 
 def _bounded(value: float, minimum: float, maximum: float) -> float:
     return round(min(max(value, minimum), maximum), 4)
+
+
+def _scaled_exit_amount(
+    base_amount: float,
+    *,
+    leverage: float,
+    base_leverage: float,
+    factor: float,
+    maximum: float,
+) -> float | None:
+    """Scale an exit amount without changing its implied price distance."""
+    amount = round(base_amount * (leverage / max(base_leverage, 1)) * factor, 4)
+    if amount <= 0 or amount > maximum:
+        return None
+    return amount
