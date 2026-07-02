@@ -7,6 +7,7 @@ import pytest
 
 from src.backtest.signal_simulator import (
     SignalSimulator,
+    _current_liquidation_price,
     build_trade_plan,
     liquidation_price,
 )
@@ -195,6 +196,29 @@ def test_cross_margin_uses_account_balance_while_isolated_uses_opening_margin() 
     assert isolated == pytest.approx(80.40201005)
     assert cross == 0
     assert cross < isolated
+
+
+@pytest.mark.parametrize(
+    ('side', 'expected'),
+    [
+        ('BUY', 110 / 0.995),
+        ('SELL', 90 / 1.005),
+    ],
+)
+def test_dynamic_cross_liquidation_formula_accepts_nonpositive_cash(
+    side: str,
+    expected: float,
+) -> None:
+    snapshot = _snapshot('2026-01-01 00:05')
+    plan = build_trade_plan(
+        _signal(snapshot, side),
+        fill_price=100,
+        account_balance=100,
+        opening_amount=10,
+        leverage=10,
+        margin_mode=MarginMode.CROSS,
+    )
+    assert _current_liquidation_price(plan, -10, 0.005) == pytest.approx(expected)
 
 
 @pytest.mark.parametrize(
@@ -491,6 +515,41 @@ def test_cross_liquidation_uses_funding_before_intrabar_exit() -> None:
     assert trade.liquidation_price == pytest.approx(trade.exit_price)
 
 
+def test_close_boundary_funding_triggers_dynamic_cross_liquidation() -> None:
+    first = _snapshot('2026-01-01 07:55', opened_at='2026-01-01 07:50')
+    closing_boundary = _snapshot(
+        '2026-01-01 08:00',
+        opened_at='2026-01-01 07:55',
+        open_price=100,
+        high=100,
+        low=10.13,
+        close=10.13,
+    )
+    wide_signal = replace(
+        _signal(first),
+        stop_distance=200,
+        target_distance=200,
+    )
+    result = _run(
+        _series(first, closing_boundary),
+        lambda snapshot, mode: wide_signal if snapshot is first else None,
+        margin_mode=MarginMode.CROSS,
+        leverage=10,
+        slippage_rate=0.01,
+        funding_rate=0.1,
+    )
+    trade = result.trades[0]
+    cash_after_funding = 90
+    expected_threshold = (
+        trade.notional_amount - cash_after_funding
+    ) / (trade.quantity * (1 - 0.005))
+    assert trade.exit_reason == 'LIQUIDATION'
+    assert trade.exit_time == closing_boundary.closed_at
+    assert trade.exit_price == pytest.approx(closing_boundary.close * 0.99)
+    assert trade.liquidation_price == pytest.approx(expected_threshold)
+    assert result.equity_curve.iloc[-1] == pytest.approx(100 + trade.pnl)
+
+
 def test_cross_funding_insolvency_liquidates_at_gap_open_and_stops() -> None:
     first = _snapshot('2026-01-01 07:55', opened_at='2026-01-01 07:50')
     entry = _snapshot(
@@ -527,6 +586,11 @@ def test_cross_funding_insolvency_liquidates_at_gap_open_and_stops() -> None:
     assert trade.exit_price == 99
     assert trade.funding == -100
     assert trade.exit_commission == pytest.approx(trade.quantity * 99 * 0.001)
+    cash_before_exit = 100 - trade.entry_commission + trade.funding
+    expected_threshold = (
+        trade.notional_amount - cash_before_exit
+    ) / (trade.quantity * (1 - 0.005))
+    assert trade.liquidation_price == pytest.approx(expected_threshold)
     assert result.equity_curve.iloc[-1] == pytest.approx(100 + trade.pnl)
 
 
@@ -549,6 +613,17 @@ def test_equity_curve_includes_fallback_liquidation_exit_costs() -> None:
     )
     trade = result.trades[0]
     assert trade.exit_reason == 'LIQUIDATION'
+    assert trade.liquidation_price == pytest.approx(
+        liquidation_price(
+            'BUY',
+            trade.fill_price,
+            trade.leverage,
+            trade.opening_amount,
+            100 - trade.entry_commission,
+            MarginMode.ISOLATED,
+            0.005,
+        )
+    )
     assert result.equity_curve.iloc[-1] == pytest.approx(100 + trade.pnl)
 
 

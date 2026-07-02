@@ -207,7 +207,13 @@ class SignalSimulator:
                 account_cash += funding_before_open
                 position_funding += funding_before_open
                 effective_liquidation_price: float | None = None
+                current_liquidation_price = _current_liquidation_price(
+                    position,
+                    account_cash,
+                    maintenance_margin_rate,
+                )
                 if position.margin_mode is MarginMode.CROSS and account_cash <= 0:
+                    effective_liquidation_price = current_liquidation_price
                     exit_details = (
                         _adverse_exit_price(
                             position.signal.side,
@@ -218,11 +224,6 @@ class SignalSimulator:
                     )
                     stop_after_close = True
                 else:
-                    current_liquidation_price = _current_liquidation_price(
-                        position,
-                        account_cash,
-                        maintenance_margin_rate,
-                    )
                     exit_details = _exit_for_snapshot(
                         position,
                         snapshot,
@@ -312,6 +313,41 @@ class SignalSimulator:
                     account_cash += closing_boundary_funding
                     position_funding += closing_boundary_funding
                     funding_cursor = snapshot.closed_at
+                    if position.margin_mode is MarginMode.CROSS:
+                        current_liquidation_price = _current_liquidation_price(
+                            position,
+                            account_cash,
+                            maintenance_margin_rate,
+                        )
+                        close_crossed_liquidation = (
+                            position.signal.side == 'BUY'
+                            and snapshot.close <= current_liquidation_price
+                        ) or (
+                            position.signal.side == 'SELL'
+                            and snapshot.close >= current_liquidation_price
+                        )
+                        if close_crossed_liquidation:
+                            exit_price = _adverse_exit_price(
+                                position.signal.side,
+                                snapshot.close,
+                                slippage_rate,
+                            )
+                            trade, account_cash = _close_trade(
+                                position,
+                                exit_time=snapshot.closed_at,
+                                exit_price=exit_price,
+                                exit_reason='LIQUIDATION',
+                                account_cash=account_cash,
+                                entry_commission=position_entry_commission,
+                                funding=position_funding,
+                                taker_fee=taker_fee,
+                                effective_liquidation_price=(
+                                    current_liquidation_price
+                                ),
+                            )
+                            trades.append(trade)
+                            position = None
+                            funding_cursor = None
 
             equity = account_cash
             if position is not None:
@@ -332,6 +368,15 @@ class SignalSimulator:
                         entry_commission=position_entry_commission,
                         funding=position_funding,
                         taker_fee=taker_fee,
+                        effective_liquidation_price=(
+                            _current_liquidation_price(
+                                position,
+                                account_cash,
+                                maintenance_margin_rate,
+                            )
+                            if position.margin_mode is MarginMode.CROSS
+                            else position.liquidation_price
+                        ),
                     )
                     trades.append(trade)
                     position = None
@@ -525,14 +570,15 @@ def _current_liquidation_price(
 ) -> float:
     if plan.margin_mode is MarginMode.ISOLATED:
         return plan.liquidation_price
-    return liquidation_price(
-        plan.signal.side,
-        plan.fill_price,
-        plan.leverage,
-        plan.opening_amount,
-        account_cash,
-        plan.margin_mode,
-        maintenance_margin_rate,
+    quantity = plan.quantity
+    if plan.signal.side == 'BUY':
+        return max(
+            0.0,
+            (plan.notional_amount - account_cash)
+            / (quantity * (1 - maintenance_margin_rate)),
+        )
+    return (account_cash + plan.notional_amount) / (
+        quantity * (1 + maintenance_margin_rate)
     )
 
 
