@@ -1,16 +1,16 @@
-# Strong Trend Breakout Filter Implementation Plan
+# Strong Trend Breakout Filter V2 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `SRBreakout` trade only when the last fully closed context candle shows a strong trend aligned with the breakout direction.
+**Goal:** Require trend strength, continuing trend momentum, and correct price position before `SRBreakout` may enter.
 
-**Architecture:** `BacktestEngine` derives `ContextTrendStrength` from moving-average separation divided by ATR and shifts it before merging. A dedicated helper applies this strict gate only to `SRBreakout`; other strategies keep their existing behavior.
+**Architecture:** Extend the existing look-ahead-safe context merge with fast-MA and normalized three-period momentum fields, then apply all three checks in the dedicated breakout gate. Keep other strategies unchanged and validate both rolling risk and full-year quality.
 
 **Tech Stack:** Python, pandas, backtesting.py, pytest
 
 ---
 
-### Task 1: Add look-ahead-safe trend strength
+### Task 1: Add look-ahead-safe momentum and fast-MA fields
 
 **Files:**
 - Modify: `src/backtest/engine.py`
@@ -18,13 +18,14 @@
 
 - [ ] **Step 1: Write failing tests**
 
-Assert that merged context includes non-negative `ContextTrendStrength`. Extend the unclosed-candle regression test by comparing strength with and without an extreme final context candle:
+Add assertions for the new fields and compare results with and without an extreme unclosed final candle:
 
 ```python
-assert 'ContextTrendStrength' in merged.columns
-assert merged['ContextTrendStrength'].dropna().ge(0).all()
-assert with_future.loc[entry_time, 'ContextTrendStrength'] == baseline.loc[
-    entry_time, 'ContextTrendStrength'
+assert 'ContextFastMA' in merged.columns
+assert 'ContextTrendMomentum' in merged.columns
+assert with_future.loc[entry_time, 'ContextFastMA'] == baseline.loc[entry_time, 'ContextFastMA']
+assert with_future.loc[entry_time, 'ContextTrendMomentum'] == baseline.loc[
+    entry_time, 'ContextTrendMomentum'
 ]
 ```
 
@@ -32,19 +33,18 @@ assert with_future.loc[entry_time, 'ContextTrendStrength'] == baseline.loc[
 
 Run: `.\.venv\Scripts\python.exe -m pytest tests\test_engine.py -q`
 
-Expected: FAIL because `ContextTrendStrength` is absent.
+Expected: FAIL because both fields are absent.
 
-- [ ] **Step 3: Implement the feature**
-
-After calculating ATR, add:
+- [ ] **Step 3: Implement the fields before the existing shift**
 
 ```python
-context_features['ContextTrendStrength'] = (
-    (fast_ma - slow_ma).abs() / context_features['ContextATR']
+context_features['ContextFastMA'] = fast_ma
+context_features['ContextTrendMomentum'] = (
+    (fast_ma - fast_ma.shift(3)) / context_features['ContextATR']
 )
 ```
 
-Keep the existing `context_features = context_features.shift(1)` after every context column.
+The existing `context_features.shift(1)` must remain after all fields.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -52,51 +52,50 @@ Run: `.\.venv\Scripts\python.exe -m pytest tests\test_engine.py -q`
 
 Expected: all engine tests pass.
 
-### Task 2: Gate only breakout entries
+### Task 2: Enforce all three confirmations
 
 **Files:**
 - Modify: `src/strategies/risk.py`
-- Modify: `src/strategies/sr_breakout.py`
 - Test: `tests/test_strategies.py`
 
-- [ ] **Step 1: Write failing helper tests**
+- [ ] **Step 1: Extend failing gate tests**
 
-Use small data stubs to verify strong aligned trends pass while wrong direction, strength below `1.0`, and missing strength fail:
+Extend `FakeContextData` with momentum, close, and fast MA. Verify aligned values pass and each contradictory value fails:
 
 ```python
-data = FakeContextData(trend=1, strength=1.2)
+data = FakeContextData(trend=1, strength=1.2, momentum=0.2, close=110, fast_ma=100)
 assert strong_context_trend_allows_side(data, 'long') is True
-assert strong_context_trend_allows_side(data, 'short') is False
-assert strong_context_trend_allows_side(FakeContextData(1, 0.99), 'long') is False
-assert strong_context_trend_allows_side(FakeContextData(1, None), 'long') is False
+assert strong_context_trend_allows_side(
+    FakeContextData(1, 1.2, -0.1, 110, 100), 'long'
+) is False
+assert strong_context_trend_allows_side(
+    FakeContextData(1, 1.2, 0.2, 90, 100), 'long'
+) is False
 ```
+
+Add symmetric short assertions and missing-field rejection.
 
 - [ ] **Step 2: Verify RED**
 
 Run: `.\.venv\Scripts\python.exe -m pytest tests\test_strategies.py -q`
 
-Expected: FAIL because the helper does not exist.
+Expected: FAIL because the first-version helper ignores momentum and price position.
 
-- [ ] **Step 3: Implement the helper and wire it to SRBreakout**
+- [ ] **Step 3: Implement the three-part gate**
+
+Read `ContextTrendMomentum`, `ContextClose`, and `ContextFastMA`. Reject missing values. For long require positive trend, positive momentum, and close above fast MA; for short require all inverse conditions.
 
 ```python
-def strong_context_trend_allows_side(
-    data: object,
-    side: str,
-    minimum_strength: float = 1.0,
-) -> bool:
-    trend = _latest_data_value(data, 'ContextTrend')
-    strength = _latest_data_value(data, 'ContextTrendStrength')
-    if trend is None or strength is None or strength < minimum_strength:
-        return False
-    if side == 'long':
-        return trend > 0
-    if side == 'short':
-        return trend < 0
+if any(value is None for value in [trend, strength, momentum, close, fast_ma]):
     return False
+if strength < minimum_strength:
+    return False
+if side == 'long':
+    return trend > 0 and momentum > 0 and close > fast_ma
+if side == 'short':
+    return trend < 0 and momentum < 0 and close < fast_ma
+return False
 ```
-
-Replace both `context_allows_side` calls in `SRBreakout`; leave other strategies unchanged.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -104,39 +103,7 @@ Run: `.\.venv\Scripts\python.exe -m pytest tests\test_strategies.py tests\test_e
 
 Expected: all focused tests pass.
 
-### Task 3: Explain the behavior in the UI
-
-**Files:**
-- Modify: `src/web/routes.py`
-- Test: `tests/test_routes.py`
-
-- [ ] **Step 1: Write a failing description test**
-
-```python
-option = next(item for item in STRATEGY_OPTIONS if item['value'] == 'SRBreakout')
-assert '高周期强趋势' in option['description']
-assert '震荡时不交易' in option['description']
-```
-
-- [ ] **Step 2: Verify RED**
-
-Run: `.\.venv\Scripts\python.exe -m pytest tests\test_routes.py::test_breakout_description_mentions_strong_context_filter -q`
-
-Expected: FAIL against the old description.
-
-- [ ] **Step 3: Update the description**
-
-```python
-'description': '规则策略：只在高周期强趋势中交易，向上突破做多、向下突破做空，震荡时不交易。'
-```
-
-- [ ] **Step 4: Verify GREEN**
-
-Run: `.\.venv\Scripts\python.exe -m pytest tests\test_routes.py -q`
-
-Expected: all route tests pass.
-
-### Task 4: Full verification and rolling benchmark
+### Task 3: Verify code and strategy performance
 
 **Files:**
 - No additional production changes
@@ -147,12 +114,18 @@ Run: `.\.venv\Scripts\python.exe -m pytest -q`
 
 Expected: all tests pass.
 
-- [ ] **Step 2: Run twelve fixed 30-day windows**
+- [ ] **Step 2: Run twelve non-overlapping 30-day windows**
 
 Use ETH/USDT, `1h + 5m`, context lookback `192`, entry lookback `30`, cash `10`, position `2`, leverage `10`, take profit `1.5`, stop loss `0.5`, and configured costs.
 
-Acceptance: mean return above `0%`, worst return above `-40%`, and at least `8/12` windows pass strict quality filtering.
+Acceptance: mean return above `0%` and worst return above `-40%`.
 
-- [ ] **Step 3: Inspect and commit**
+- [ ] **Step 3: Run the full-year aggregate**
 
-Run `git diff --check`, confirm only planned files changed, then commit with `Filter breakouts by strong context trend`. Do not push until the user explicitly authorizes it.
+Use the same fixed parameters over the entire common 1h/5m date range. Calculate quality with the existing trade list.
+
+Acceptance: positive total return, drawdown better than `-30%`, profit factor at least `1.05`, and at least 50 trades.
+
+- [ ] **Step 4: Inspect and commit only if all gates pass**
+
+Run `git diff --check`, confirm only planned files changed, then commit with `Filter breakouts by persistent context trend`. If any performance gate fails, do not tune thresholds and do not commit the strategy implementation.
