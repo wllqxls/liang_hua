@@ -103,7 +103,38 @@ Run: `.\.venv\Scripts\python.exe -m pytest tests\test_strategies.py tests\test_e
 
 Expected: all focused tests pass.
 
-### Task 3: Verify code and strategy performance
+### Task 3: Preserve exit distances across leverage changes
+
+**Files:**
+- Modify: `src/backtest/optimizer.py`
+- Test: `tests/test_optimizer.py`
+
+- [ ] **Step 1: Write a failing leverage-scaling test**
+
+Use a base candidate at `x10`, take profit `1.5`, and stop loss `0.5`. Assert that the generated `x3` pool contains the unchanged-risk-profile candidate with take profit `0.45` and stop loss `0.15`.
+
+```python
+x3 = [item for item in candidates if item.leverage == 3]
+assert any(item.take_profit_amount == 0.45 and item.stop_loss_amount == 0.15 for item in x3)
+```
+
+- [ ] **Step 2: Verify RED**
+
+Run: `.\.venv\Scripts\python.exe -m pytest tests\test_optimizer.py -q`
+
+Expected: FAIL because amounts currently remain based on the x10 candidate.
+
+- [ ] **Step 3: Scale amounts before local risk factors**
+
+For each generated leverage use `leverage_ratio = leverage / base.leverage`, then multiply both base amounts by this ratio before applying `tp_factor` and `sl_factor`.
+
+- [ ] **Step 4: Verify GREEN**
+
+Run: `.\.venv\Scripts\python.exe -m pytest tests\test_optimizer.py -q`
+
+Expected: all optimizer tests pass.
+
+### Task 4: Verify code and strategy performance
 
 **Files:**
 - No additional production changes
@@ -118,7 +149,7 @@ Expected: all tests pass.
 
 Use ETH/USDT, `1h + 5m`, context lookback `192`, entry lookback `30`, cash `10`, position `2`, leverage `10`, take profit `1.5`, stop loss `0.5`, and configured costs.
 
-Acceptance: mean return above `0%` and worst return above `-40%`.
+Acceptance with `x3`, take profit `0.45`, and stop loss `0.15`: mean return above `0%` and worst return above `-40%`.
 
 - [ ] **Step 3: Run the full-year aggregate**
 
