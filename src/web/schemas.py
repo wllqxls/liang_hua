@@ -4,30 +4,54 @@ Pydantic 数据模型：API 请求/响应结构。
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from src.strategies.signal_models import MarginMode, SignalMode
 
 
 class BacktestRequest(BaseModel):
     """回测请求参数。"""
 
+    model_config = ConfigDict(extra='forbid')
+
     symbol: str = Field(default="BTC/USDT", description="交易对象")
-    timeframe: str = Field(default="5m", description="入场 K 线周期")
-    context_timeframe: str = Field(default="15m", description="环境 K 线周期")
-    strategy: str = Field(default="KeyLevelScoring", description="策略名称")
+    timeframe: Literal['5m', '15m'] = Field(default="5m", description="入场 K 线周期")
+    mode: SignalMode = Field(default=SignalMode.KEY_LEVEL, description="信号模式")
     backtest_days: int = Field(default=30, ge=1, le=3650, description="回测天数")
-    context_lookback: int = Field(default=192, ge=1, le=500, description="环境回溯窗口")
-    entry_lookback: int = Field(default=30, ge=1, le=500, description="入场回溯窗口")
-    lookback: int = Field(default=30, ge=1, le=500, description="兼容旧版回溯窗口")
     cash: float = Field(default=100, ge=10, description="初始资金")
-    position_amount: float = Field(default=10, ge=0.1, description="单笔逐仓保证金")
+    opening_amount: float = Field(default=10, ge=0.1, description="开仓金额")
+    margin_mode: MarginMode = Field(default=MarginMode.ISOLATED, description="保证金模式")
     leverage: float = Field(default=5, ge=1, le=150, description="杠杆倍数")
-    take_profit_amount: float = Field(default=1, ge=0, description="止盈金额")
-    stop_loss_amount: float = Field(default=1, ge=0, description="止损金额")
     maker_fee: float = Field(default=0.0002, ge=0, le=0.1, description="Maker 手续费率")
     taker_fee: float = Field(default=0.0005, ge=0, le=0.1, description="Taker 手续费率")
     slippage_rate: float = Field(default=0.0002, ge=0, le=0.1, description="滑点率")
     funding_rate: float = Field(default=0.0001, ge=0, le=0.1, description="8 小时资金费率")
     maintenance_margin_rate: float = Field(default=0.005, ge=0, le=0.1, description="维持保证金率")
+
+
+class OptimizationRequest(BaseModel):
+    """Task 7 前的旧优化器兼容请求；不得用于 /api/backtest。"""
+
+    symbol: str = 'BTC/USDT'
+    timeframe: str = '5m'
+    context_timeframe: str = '15m'
+    strategy: str = 'KeyLevelScoring'
+    backtest_days: int = Field(default=30, ge=1, le=3650)
+    context_lookback: int = Field(default=192, ge=1, le=500)
+    entry_lookback: int = Field(default=30, ge=1, le=500)
+    lookback: int = Field(default=30, ge=1, le=500)
+    cash: float = Field(default=100, ge=10)
+    position_amount: float = Field(default=10, ge=0.1)
+    leverage: float = Field(default=5, ge=1, le=150)
+    take_profit_amount: float = Field(default=1, ge=0)
+    stop_loss_amount: float = Field(default=1, ge=0)
+    maker_fee: float = Field(default=0.0002, ge=0, le=0.1)
+    taker_fee: float = Field(default=0.0005, ge=0, le=0.1)
+    slippage_rate: float = Field(default=0.0002, ge=0, le=0.1)
+    funding_rate: float = Field(default=0.0001, ge=0, le=0.1)
+    maintenance_margin_rate: float = Field(default=0.005, ge=0, le=0.1)
 
 
 class DataFetchRequest(BaseModel):
@@ -41,6 +65,20 @@ class DataFetchRequest(BaseModel):
 class TradeItem(BaseModel):
     """单笔交易记录。"""
 
+    mode: SignalMode
+    strategy_source: str
+    margin_mode: MarginMode
+    signal_time: str
+    signal_price: float
+    fill_time: str
+    fill_price: float
+    atr_snapshot: float
+    stop_price: float
+    target_price: float
+    expected_stop_amount: float
+    expected_target_amount: float
+    environment_1h: str | None
+    filter_4h: str
     entry_time: str
     exit_time: str
     side: str = "long"
@@ -52,6 +90,8 @@ class TradeItem(BaseModel):
     leverage: float = 1
     liquidation_price: float = 0
     funding_fee: float = 0
+    entry_commission: float = 0
+    exit_commission: float = 0
     pnl: float
     pnl_pct: float
     exit_reason: str = "策略平仓"

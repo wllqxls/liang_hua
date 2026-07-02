@@ -13,6 +13,8 @@ from src.web.schemas import OptimizationResponse
 
 def _payload() -> dict[str, Any]:
     return {
+        # Task 6 keeps this legacy optimizer request shape isolated from the
+        # active /api/backtest contract until Task 7 replaces the optimizer.
         'symbol': 'BTC/USDT',
         'timeframe': '5m',
         'context_timeframe': '15m',

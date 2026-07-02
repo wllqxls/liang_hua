@@ -48,6 +48,7 @@ from src.web.schemas import (
     OptimizationCandidate,
     OptimizationJobCreated,
     OptimizationJobStatus,
+    OptimizationRequest,
     OptimizationResponse,
     TradeItem,
 )
@@ -87,6 +88,24 @@ STRATEGY_OPTIONS = [
         "value": "RSIReversion",
         "label": "RSI 超卖反弹",
         "description": "规则策略：RSI 低位做多，高位做空，方向由策略自动判断。",
+    },
+]
+
+MODE_OPTIONS = [
+    {
+        'value': 'KEY_LEVEL',
+        'label': '关键位',
+        'description': '支撑假跌破做多，阻力假突破做空',
+    },
+    {
+        'value': 'RSI_REVERSAL',
+        'label': 'RSI 反转',
+        'description': 'RSI 极值配合布林带收回',
+    },
+    {
+        'value': 'KEY_LEVEL_RSI',
+        'label': '关键位 + RSI 反转',
+        'description': '关键位优先，RSI 仅作兜底',
     },
 ]
 
@@ -158,7 +177,7 @@ async def index(request: Request) -> HTMLResponse:
         "request": request,
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
-        "strategies": STRATEGY_OPTIONS,
+        "modes": MODE_OPTIONS,
     }
     return templates.TemplateResponse(request, "backtest.html", context)
 
@@ -166,37 +185,34 @@ async def index(request: Request) -> HTMLResponse:
 @router.post("/api/backtest", response_model=BacktestResponse)
 async def run_backtest(req: BacktestRequest) -> BacktestResponse:
     """运行回测。"""
-    strategy_class = STRATEGIES.get(req.strategy)
-    if strategy_class is None:
-        return _error_response(f"未知策略: {req.strategy}")
-    if req.position_amount > req.cash:
-        return _error_response("单笔逐仓金额不能大于初始资金")
+    if req.opening_amount > req.cash:
+        return _error_response('开仓金额不能大于账户总金额')
+    entry_fee = req.opening_amount * req.leverage * req.taker_fee
+    if req.opening_amount + entry_fee > req.cash:
+        return _error_response('账户余额必须覆盖开仓金额和开仓手续费')
 
     try:
         engine = BacktestEngine(data_dir="./data")
-        result = engine.run(
-            strategy_class=strategy_class,
+        result = engine.run_signal_mode(
             symbol=req.symbol,
             timeframe=req.timeframe,
-            context_timeframe=req.context_timeframe,
-            context_lookback=req.context_lookback,
+            mode=req.mode,
             backtest_days=req.backtest_days,
-            lookback=req.entry_lookback,
             cash=req.cash,
-            commission=req.taker_fee,
+            opening_amount=req.opening_amount,
+            margin_mode=req.margin_mode,
             leverage=req.leverage,
+            maker_fee=req.maker_fee,
+            taker_fee=req.taker_fee,
             slippage_rate=req.slippage_rate,
             funding_rate=req.funding_rate,
             maintenance_margin_rate=req.maintenance_margin_rate,
             save_result=True,
-            position_amount=req.position_amount,
-            take_profit_amount=req.take_profit_amount,
-            stop_loss_amount=req.stop_loss_amount,
         )
         quality = _assess_backtest_quality(
             result=result,
-            take_profit_amount=req.take_profit_amount,
-            stop_loss_amount=req.stop_loss_amount,
+            take_profit_amount=1,
+            stop_loss_amount=1,
             backtest_days=req.backtest_days,
         )
 
@@ -231,7 +247,7 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
 
 
 @router.post('/api/optimize/jobs', response_model=OptimizationJobCreated)
-async def create_optimization_job(req: BacktestRequest) -> OptimizationJobCreated:
+async def create_optimization_job(req: OptimizationRequest) -> OptimizationJobCreated:
     """Start one progressive optimization job in a background thread."""
     if req.position_amount > req.cash:
         return OptimizationJobCreated(success=False, error='单笔逐仓金额不能大于初始资金')
@@ -272,7 +288,7 @@ async def get_optimization_job(job_id: str) -> OptimizationJobStatus:
 
 
 @router.post("/api/optimize", response_model=OptimizationResponse)
-async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
+async def optimize_backtest(req: OptimizationRequest) -> OptimizationResponse:
     """基于当前参数，对多个策略和参数组合做一轮小型搜索。"""
     if req.strategy not in STRATEGIES:
         return OptimizationResponse(success=False, candidates=[], error=f"未知策略: {req.strategy}")
@@ -460,7 +476,7 @@ def _update_optimization_job(job_id: str, **values: object) -> None:
             job['estimated_remaining_seconds'] = round(max(0.0, elapsed / evaluated * (total - evaluated)), 1)
 
 
-def _run_optimization_job(job_id: str, req: BacktestRequest) -> None:
+def _run_optimization_job(job_id: str, req: OptimizationRequest) -> None:
     _update_optimization_job(job_id, state='running', stage='粗筛')
 
     def progress(**values: object) -> None:
@@ -484,7 +500,7 @@ def _run_optimization_job(job_id: str, req: BacktestRequest) -> None:
 
 
 def _progressive_optimize(
-    req: BacktestRequest,
+    req: OptimizationRequest,
     progress: Callable[..., None],
 ) -> OptimizationResponse:
     """Run deterministic coarse, local, and robustness search stages."""
@@ -649,7 +665,7 @@ def _candidate_budget_exhausted(
 
 def _evaluate_progressive_candidate(
     engine: BacktestEngine,
-    req: BacktestRequest,
+    req: OptimizationRequest,
     candidate: SearchCandidate,
     bounds_cache: dict[str, tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp, int]],
 ) -> tuple[dict | None, bool]:
@@ -754,7 +770,7 @@ def _search_candidate_from_item(item: dict) -> SearchCandidate:
 
 def _long_window_validation(
     engine: BacktestEngine,
-    req: BacktestRequest,
+    req: OptimizationRequest,
     item: dict,
 ) -> tuple[float, int, int]:
     data_start, data_end = _load_data_bounds(engine, req.symbol, item['timeframe'])
@@ -918,7 +934,7 @@ def _split_validation_bounds(
 
 def _validate_candidate(
     engine: BacktestEngine,
-    req: BacktestRequest,
+    req: OptimizationRequest,
     item: dict,
     out_start: pd.Timestamp,
     out_end: pd.Timestamp,
@@ -991,7 +1007,7 @@ def _validate_candidate(
 
 def _run_candidate_window(
     engine: BacktestEngine,
-    req: BacktestRequest,
+    req: OptimizationRequest,
     item: dict,
     start: pd.Timestamp,
     end: pd.Timestamp,

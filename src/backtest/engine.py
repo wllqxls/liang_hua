@@ -8,6 +8,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,10 @@ from backtesting import Strategy
 from backtesting.lib import FractionalBacktest
 
 from src.data.fetcher import DataFetcher, _COLUMNS
+from src.backtest.signal_simulator import SignalSimulator
+from src.strategies.market_context import build_market_snapshots
 from src.strategies.risk import estimate_liquidation_price
+from src.strategies.signal_models import MarginMode, SignalMode, SimulationTrade
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +101,84 @@ class BacktestEngine:
         df = df[_COLUMNS]
         self._cache[cache_key] = df
         return df
+
+    def run_signal_mode(
+        self,
+        *,
+        symbol: str = 'BTC/USDT',
+        timeframe: str = '5m',
+        mode: SignalMode = SignalMode.KEY_LEVEL,
+        backtest_days: int | None = 30,
+        window_start: Any | None = None,
+        window_end: Any | None = None,
+        cash: float = 100,
+        opening_amount: float = 10,
+        margin_mode: MarginMode = MarginMode.ISOLATED,
+        leverage: float = 5,
+        maker_fee: float = 0.0002,
+        taker_fee: float = 0.0005,
+        slippage_rate: float = 0.0002,
+        funding_rate: float = 0.0001,
+        maintenance_margin_rate: float = 0.005,
+        save_result: bool = False,
+    ) -> BacktestResult:
+        """Run one approved signal mode on entry, 1h, and 4h data."""
+        if timeframe not in {'5m', '15m'}:
+            raise ValueError('timeframe must be 5m or 15m')
+        if not isinstance(mode, SignalMode):
+            raise ValueError('mode must be a SignalMode')
+        if not isinstance(margin_mode, MarginMode):
+            raise ValueError('margin_mode must be ISOLATED or CROSS')
+
+        safe_symbol = symbol.replace('/', '_')
+        paths = {
+            timeframe: self._data_dir / f'{safe_symbol}_{timeframe}.csv',
+            '1h': self._data_dir / f'{safe_symbol}_1h.csv',
+            '4h': self._data_dir / f'{safe_symbol}_4h.csv',
+        }
+        missing = [str(path) for path in paths.values() if not path.exists()]
+        if missing:
+            raise FileNotFoundError('回测缺少必要数据文件: ' + ', '.join(missing))
+
+        entry = _ensure_utc_index(self.load_data(paths[timeframe]))
+        hour = _ensure_utc_index(self.load_data(paths['1h']))
+        four_hour = _ensure_utc_index(self.load_data(paths['4h']))
+        snapshots = build_market_snapshots(
+            entry,
+            hour,
+            four_hour,
+            timeframe=timeframe,
+        )
+        snapshots = _filter_signal_window(
+            snapshots,
+            days=backtest_days,
+            start_time=window_start,
+            end_time=window_end,
+        )
+        simulation = SignalSimulator().run(
+            snapshots,
+            mode=mode,
+            cash=cash,
+            opening_amount=opening_amount,
+            leverage=leverage,
+            margin_mode=margin_mode,
+            taker_fee=taker_fee,
+            slippage_rate=slippage_rate,
+            funding_rate=funding_rate,
+            maintenance_margin_rate=maintenance_margin_rate,
+        )
+        # Signal execution currently uses taker orders only. Keep maker_fee in
+        # the public contract for the later execution layer, but do not charge it.
+        _ = maker_fee
+        result = _map_signal_result(simulation, cash=cash, timeframe=timeframe)
+        if save_result:
+            result.result_path = self.save_result(
+                result,
+                symbol=symbol,
+                timeframe=timeframe,
+                strategy=mode.value,
+            )
+        return result
 
     def run(
         self,
@@ -266,6 +348,116 @@ class BacktestEngine:
             encoding="utf-8",
         )
         return str(path)
+
+
+def _ensure_utc_index(df: pd.DataFrame) -> pd.DataFrame:
+    result = df.copy()
+    index = pd.DatetimeIndex(result.index)
+    result.index = index.tz_localize('UTC') if index.tz is None else index.tz_convert('UTC')
+    return result
+
+
+def _filter_signal_window(
+    snapshots: pd.Series,
+    *,
+    days: int | None,
+    start_time: Any | None,
+    end_time: Any | None,
+) -> pd.Series:
+    if snapshots.empty:
+        return snapshots
+    end = pd.Timestamp(end_time) if end_time is not None else snapshots.index.max()
+    if end.tzinfo is None:
+        end = end.tz_localize('UTC')
+    else:
+        end = end.tz_convert('UTC')
+    if start_time is not None:
+        start = pd.Timestamp(start_time)
+        if start.tzinfo is None:
+            start = start.tz_localize('UTC')
+        else:
+            start = start.tz_convert('UTC')
+    elif days is not None and days > 0:
+        start = end - pd.Timedelta(days=days)
+    else:
+        start = snapshots.index.min()
+    return snapshots.loc[(snapshots.index >= start) & (snapshots.index <= end)]
+
+
+def _map_signal_result(simulation: Any, *, cash: float, timeframe: str) -> BacktestResult:
+    equity = simulation.equity_curve.astype(float)
+    equity_curve = [
+        {'timestamp': pd.Timestamp(timestamp).isoformat(), 'equity': float(value)}
+        for timestamp, value in equity.items()
+    ]
+    trades: tuple[SimulationTrade, ...] = simulation.trades
+    trade_list = [_map_signal_trade(trade) for trade in trades]
+    final_equity = float(equity.iloc[-1]) if not equity.empty else float(cash)
+    total_return = (final_equity / cash - 1) * 100
+    wins = sum(trade.pnl > 0 for trade in trades)
+    win_rate = wins / len(trades) * 100 if trades else 0.0
+    if equity.empty:
+        max_drawdown = 0.0
+        sharpe = None
+    else:
+        drawdown = equity / equity.cummax() - 1
+        max_drawdown = float(drawdown.min() * 100)
+        returns = equity.pct_change().dropna()
+        deviation = float(returns.std()) if len(returns) > 1 else 0.0
+        if deviation > 0 and math.isfinite(deviation):
+            periods_per_day = 288 if timeframe == '5m' else 96
+            sharpe = float(returns.mean() / deviation * math.sqrt(periods_per_day * 365))
+        else:
+            sharpe = None
+    return BacktestResult(
+        total_return_pct=float(total_return),
+        win_rate_pct=float(win_rate),
+        max_drawdown_pct=max_drawdown,
+        sharpe_ratio=sharpe,
+        num_trades=len(trades),
+        equity_curve=equity_curve,
+        trade_list=trade_list,
+        total_funding_fee=float(sum(trade.funding for trade in trades)),
+    )
+
+
+def _map_signal_trade(trade: SimulationTrade) -> dict[str, Any]:
+    fill_time = trade.fill_time.isoformat()
+    return {
+        'mode': trade.mode.value,
+        'strategy_source': trade.strategy,
+        'margin_mode': trade.margin_mode.value,
+        'signal_time': trade.signal_time.isoformat(),
+        'signal_price': trade.signal_close,
+        'fill_time': fill_time,
+        'fill_price': trade.fill_price,
+        'atr_snapshot': trade.atr_snapshot,
+        'stop_price': trade.stop_price,
+        'target_price': trade.target_price,
+        'expected_stop_amount': trade.expected_stop_amount,
+        'expected_target_amount': trade.expected_target_amount,
+        'environment_1h': trade.environment_side,
+        'filter_4h': trade.filter_label.value,
+        'entry_time': fill_time,
+        'exit_time': trade.exit_time.isoformat(),
+        'side': 'long' if trade.side == 'BUY' else 'short',
+        'entry_price': trade.fill_price,
+        'exit_price': trade.exit_price,
+        'size': trade.quantity,
+        'margin_amount': trade.opening_amount,
+        'notional_amount': trade.notional_amount,
+        'leverage': trade.leverage,
+        'liquidation_price': trade.liquidation_price,
+        'funding_fee': trade.funding,
+        'entry_commission': trade.entry_commission,
+        'exit_commission': trade.exit_commission,
+        'pnl': trade.pnl,
+        'pnl_pct': trade.pnl_percent,
+        'exit_reason': trade.exit_reason,
+        'entry_reason': trade.signal.reason,
+        'entry_score': float(trade.signal.score),
+        'entry_context': '',
+    }
 
 
 def _merge_context_features(

@@ -1,11 +1,15 @@
 ﻿from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pandas as pd
 import pytest
 
+from src.backtest import engine as engine_module
 from src.backtest.engine import BacktestEngine, _filter_recent_days, _merge_context_features
+from src.strategies.signal_models import FilterLabel, MarginMode, Signal, SignalMode, SimulationTrade
 from src.strategies.sr_breakout import SRBreakout
 
 
@@ -137,3 +141,149 @@ def test_filter_recent_days_keeps_latest_window(sample_ohlcv: pd.DataFrame) -> N
 
     assert filtered.index.min() >= sample_ohlcv.index.max() - pd.Timedelta(days=2)
     assert filtered.index.max() == sample_ohlcv.index.max()
+
+
+def test_run_signal_mode_lists_every_missing_required_file(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError) as exc_info:
+        BacktestEngine(tmp_path).run_signal_mode(
+            symbol='ETH/USDT',
+            timeframe='5m',
+            mode=SignalMode.KEY_LEVEL,
+        )
+
+    message = str(exc_info.value)
+    assert 'ETH_USDT_5m.csv' in message
+    assert 'ETH_USDT_1h.csv' in message
+    assert 'ETH_USDT_4h.csv' in message
+
+
+def test_run_signal_mode_keeps_warmup_then_filters_requested_window(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    indices = {
+        '5m': pd.date_range('2026-01-01', periods=100, freq='5min', tz='UTC'),
+        '1h': pd.date_range('2025-12-20', periods=100, freq='1h', tz='UTC'),
+        '4h': pd.date_range('2025-11-01', periods=100, freq='4h', tz='UTC'),
+    }
+    for timeframe, index in indices.items():
+        pd.DataFrame(
+            {'Open': 100.0, 'High': 101.0, 'Low': 99.0, 'Close': 100.0, 'Volume': 1.0},
+            index=index,
+        ).to_csv(tmp_path / f'BTC_USDT_{timeframe}.csv')
+
+    captured: dict[str, Any] = {}
+
+    def fake_build(entry: pd.DataFrame, hour: pd.DataFrame, four_hour: pd.DataFrame, *, timeframe: str) -> pd.Series:
+        captured['frame_lengths'] = (len(entry), len(hour), len(four_hour))
+        return pd.Series(list(entry.index), index=entry.index, dtype=object)
+
+    class FakeSimulator:
+        def run(self, snapshots: pd.Series, **kwargs: Any) -> SimpleNamespace:
+            captured['snapshots'] = snapshots
+            captured['kwargs'] = kwargs
+            return SimpleNamespace(trades=(), equity_curve=pd.Series([100.0], index=[snapshots.index[-1]]))
+
+    monkeypatch.setattr(engine_module, 'build_market_snapshots', fake_build)
+    monkeypatch.setattr(engine_module, 'SignalSimulator', FakeSimulator)
+
+    BacktestEngine(tmp_path).run_signal_mode(
+        symbol='BTC/USDT',
+        timeframe='5m',
+        mode=SignalMode.KEY_LEVEL_RSI,
+        backtest_days=1,
+        cash=100,
+        opening_amount=10,
+        margin_mode=MarginMode.CROSS,
+        leverage=5,
+        taker_fee=0.0005,
+        slippage_rate=0.0002,
+        funding_rate=0.0001,
+        maintenance_margin_rate=0.005,
+    )
+
+    assert captured['frame_lengths'] == (100, 100, 100)
+    assert captured['snapshots'].index.min() >= indices['5m'][-1] - pd.Timedelta(days=1)
+    assert captured['kwargs']['mode'] is SignalMode.KEY_LEVEL_RSI
+    assert captured['kwargs']['margin_mode'] is MarginMode.CROSS
+    assert captured['kwargs']['opening_amount'] == 10
+
+
+def test_run_signal_mode_maps_enriched_trade_and_costs(tmp_path: Path, monkeypatch: Any) -> None:
+    frequencies = {'5m': '5min', '1h': '1h', '4h': '4h'}
+    for timeframe, frequency in frequencies.items():
+        index = pd.date_range('2026-01-01', periods=2, freq=frequency, tz='UTC')
+        pd.DataFrame(
+            {'Open': 100.0, 'High': 101.0, 'Low': 99.0, 'Close': 100.0, 'Volume': 1.0},
+            index=index,
+        ).to_csv(tmp_path / f'BTC_USDT_{timeframe}.csv')
+    signal_time = pd.Timestamp('2026-01-01 00:05', tz='UTC')
+    signal = Signal(
+        mode=SignalMode.RSI_REVERSAL,
+        strategy='RSI_REVERSAL',
+        side='BUY',
+        signal_time=signal_time,
+        signal_close=100,
+        atr_snapshot=2,
+        stop_atr_multiple=1.5,
+        target_atr_multiple=2,
+        stop_distance=3,
+        target_distance=4,
+        estimated_stop_price=97,
+        estimated_target_price=104,
+        environment_side='BUY',
+        filter_label=FilterLabel.LONG,
+        reason='test',
+        score=80,
+    )
+    trade = SimulationTrade(
+        signal=signal,
+        fill_time=signal_time + pd.Timedelta(minutes=5),
+        fill_price=101,
+        atr_snapshot=2,
+        quantity=0.5,
+        opening_amount=10,
+        notional_amount=50,
+        leverage=5,
+        margin_mode=MarginMode.ISOLATED,
+        stop_price=98,
+        target_price=105,
+        expected_stop_amount=1.5,
+        expected_target_amount=2,
+        liquidation_price=81,
+        exit_time=signal_time + pd.Timedelta(minutes=10),
+        exit_price=105,
+        exit_reason='TARGET',
+        entry_commission=0.025,
+        exit_commission=0.026,
+        funding=-0.01,
+        pnl=1.939,
+        pnl_percent=19.39,
+        environment_side='BUY',
+        filter_label=FilterLabel.LONG,
+    )
+
+    monkeypatch.setattr(engine_module, 'build_market_snapshots', lambda *args, **kwargs: pd.Series([object()], index=[signal_time]))
+
+    class FakeSimulator:
+        def run(self, snapshots: pd.Series, **kwargs: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                trades=(trade,),
+                equity_curve=pd.Series([100.0, 101.939], index=[signal_time, trade.exit_time]),
+            )
+
+    monkeypatch.setattr(engine_module, 'SignalSimulator', FakeSimulator)
+    result = BacktestEngine(tmp_path).run_signal_mode(mode=SignalMode.RSI_REVERSAL)
+
+    item = result.trade_list[0]
+    assert item['mode'] == 'RSI_REVERSAL'
+    assert item['strategy_source'] == 'RSI_REVERSAL'
+    assert item['margin_mode'] == 'ISOLATED'
+    assert item['signal_price'] == 100
+    assert item['fill_price'] == 101
+    assert item['environment_1h'] == 'BUY'
+    assert item['filter_4h'] == 'FILTER_LONG'
+    assert item['entry_commission'] == 0.025
+    assert item['exit_commission'] == 0.026
+    assert item['funding_fee'] == -0.01
+    assert result.total_funding_fee == -0.01

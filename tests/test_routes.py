@@ -11,35 +11,23 @@ from src.backtest.engine import BacktestResult
 from src.web import routes
 
 
-def test_breakout_description_mentions_strong_context_filter() -> None:
-    option = next(item for item in routes.STRATEGY_OPTIONS if item['value'] == 'SRBreakout')
-
-    assert '高周期强趋势' in option['description']
-    assert '震荡时不交易' in option['description']
-
-
-def test_backtest_api_returns_error_for_unknown_strategy() -> None:
+def test_backtest_api_rejects_legacy_strategy_contract() -> None:
     client = TestClient(app)
 
-    response = client.post("/api/backtest", json={"strategy": "MissingStrategy"})
+    response = client.post('/api/backtest', json={'strategy': 'SRBreakout'})
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["success"] is False
-    assert "未知策略" in payload["error"]
+    assert response.status_code == 422
 
 
 def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
     def fake_run(self: object, **kwargs: Any) -> BacktestResult:
-        assert kwargs["position_amount"] == 3.3
-        assert kwargs["context_timeframe"] == "15m"
-        assert kwargs["context_lookback"] == 192
+        assert kwargs["opening_amount"] == 10
         assert kwargs["backtest_days"] == 30
-        assert kwargs["lookback"] == 30
+        assert kwargs["mode"].value == 'KEY_LEVEL_RSI'
+        assert kwargs["margin_mode"].value == 'CROSS'
         assert kwargs["leverage"] == 5
-        assert kwargs["take_profit_amount"] == 0
-        assert kwargs["stop_loss_amount"] == 2
-        assert kwargs["commission"] == 0.0005
+        assert kwargs["maker_fee"] == 0.0002
+        assert kwargs["taker_fee"] == 0.0005
         assert kwargs["slippage_rate"] == 0.0002
         assert kwargs["funding_rate"] == 0.0001
         assert kwargs["maintenance_margin_rate"] == 0.005
@@ -56,24 +44,20 @@ def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
             trade_list=[],
         )
 
-    monkeypatch.setattr(routes.BacktestEngine, "run", fake_run)
+    monkeypatch.setattr(routes.BacktestEngine, "run_signal_mode", fake_run)
     client = TestClient(app)
 
     response = client.post(
         "/api/backtest",
         json={
             "symbol": "BTC/USDT",
-            "timeframe": "1h",
-            "context_timeframe": "15m",
-            "strategy": "SRBreakout",
+            "timeframe": "5m",
+            "mode": "KEY_LEVEL_RSI",
             "backtest_days": 30,
-            "context_lookback": 192,
-            "entry_lookback": 30,
             "cash": 100_000,
-            "position_amount": 3.3,
+            "opening_amount": 10,
+            "margin_mode": "CROSS",
             "leverage": 5,
-            "take_profit_amount": 0,
-            "stop_loss_amount": 2,
             "maker_fee": 0.0002,
             "taker_fee": 0.0005,
             "slippage_rate": 0.0002,
@@ -91,16 +75,23 @@ def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
     assert payload["equity_curve"][0]["equity"] == 100_000.0
 
 
-def test_index_renders_chinese_strategy_names() -> None:
+def test_index_renders_signal_mode_names() -> None:
     client = TestClient(app)
 
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "关键位评分" in response.text
-    assert "支撑阻力突破" in response.text
-    assert "均线金叉死叉" in response.text
-    assert "RSI 超卖反弹" in response.text
+    assert [item['value'] for item in routes.MODE_OPTIONS] == [
+        'KEY_LEVEL',
+        'RSI_REVERSAL',
+        'KEY_LEVEL_RSI',
+    ]
+
+
+def test_backtest_api_rejects_unsupported_entry_timeframe() -> None:
+    response = TestClient(app).post('/api/backtest', json={'timeframe': '1h'})
+
+    assert response.status_code == 422
 
 
 def test_backtest_api_accepts_ten_usdt_cash(monkeypatch: Any) -> None:
@@ -116,24 +107,18 @@ def test_backtest_api_accepts_ten_usdt_cash(monkeypatch: Any) -> None:
             trade_list=[],
         )
 
-    monkeypatch.setattr(routes.BacktestEngine, "run", fake_run)
+    monkeypatch.setattr(routes.BacktestEngine, "run_signal_mode", fake_run)
     client = TestClient(app)
 
     response = client.post(
         "/api/backtest",
         json={
             "symbol": "BTC/USDT",
-            "timeframe": "1h",
-            "context_timeframe": "15m",
-            "strategy": "SRBreakout",
-            "backtest_days": 30,
-            "context_lookback": 192,
-            "entry_lookback": 30,
+            "timeframe": "15m",
+            "mode": "KEY_LEVEL",
             "cash": 10,
-            "position_amount": 3.3,
+            "opening_amount": 9,
             "leverage": 5,
-            "take_profit_amount": 0,
-            "stop_loss_amount": 2,
             "maker_fee": 0.0002,
             "taker_fee": 0.0005,
         },
@@ -143,24 +128,18 @@ def test_backtest_api_accepts_ten_usdt_cash(monkeypatch: Any) -> None:
     assert response.json()["success"] is True
 
 
-def test_backtest_api_rejects_position_amount_above_cash() -> None:
+def test_backtest_api_rejects_opening_amount_above_cash() -> None:
     client = TestClient(app)
 
     response = client.post(
         "/api/backtest",
         json={
             "symbol": "BTC/USDT",
-            "timeframe": "1h",
-            "context_timeframe": "15m",
-            "strategy": "SRBreakout",
-            "backtest_days": 30,
-            "context_lookback": 192,
-            "entry_lookback": 30,
+            "timeframe": "5m",
+            "mode": "RSI_REVERSAL",
             "cash": 10,
-            "position_amount": 20,
+            "opening_amount": 20,
             "leverage": 5,
-            "take_profit_amount": 0,
-            "stop_loss_amount": 2,
             "maker_fee": 0.0002,
             "taker_fee": 0.0005,
         },
@@ -169,7 +148,18 @@ def test_backtest_api_rejects_position_amount_above_cash() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["success"] is False
-    assert "逐仓金额不能大于初始资金" in payload["error"]
+    assert "开仓金额不能大于账户总金额" in payload["error"]
+
+
+def test_backtest_api_rejects_cash_that_cannot_cover_entry_fee() -> None:
+    response = TestClient(app).post(
+        '/api/backtest',
+        json={'cash': 10, 'opening_amount': 10, 'leverage': 5, 'taker_fee': 0.001},
+    )
+
+    assert response.status_code == 200
+    assert response.json()['success'] is False
+    assert '开仓手续费' in response.json()['error']
 
 
 def test_optimize_api_returns_ranked_candidates(monkeypatch: Any) -> None:
