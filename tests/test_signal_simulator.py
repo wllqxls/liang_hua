@@ -1,0 +1,359 @@
+from __future__ import annotations
+
+from dataclasses import replace
+
+import pandas as pd
+import pytest
+
+from src.backtest.signal_simulator import (
+    SignalSimulator,
+    build_trade_plan,
+    liquidation_price,
+)
+from src.strategies.signal_models import (
+    FilterLabel,
+    MarginMode,
+    MarketSnapshot,
+    Signal,
+    SignalMode,
+)
+
+
+def _snapshot(
+    closed_at: str,
+    *,
+    open_price: float = 100,
+    high: float = 101,
+    low: float = 99,
+    close: float = 100,
+) -> MarketSnapshot:
+    timestamp = pd.Timestamp(closed_at, tz='UTC')
+    return MarketSnapshot(
+        closed_at=timestamp,
+        open=open_price,
+        high=high,
+        low=low,
+        close=close,
+        atr=10,
+        rsi=50,
+        bollinger_upper=110,
+        bollinger_lower=90,
+        previous_high_20=105,
+        previous_low_20=95,
+        environment_side='BUY',
+        filter_label=FilterLabel.LONG,
+        context_1h_closed_at=timestamp,
+        context_4h_closed_at=timestamp,
+    )
+
+
+def _signal(snapshot: MarketSnapshot, side: str = 'BUY') -> Signal:
+    direction = 1 if side == 'BUY' else -1
+    return Signal(
+        mode=SignalMode.KEY_LEVEL,
+        strategy='KEY_LEVEL',
+        side=side,  # type: ignore[arg-type]
+        signal_time=snapshot.closed_at,
+        signal_close=snapshot.close,
+        atr_snapshot=10,
+        stop_atr_multiple=0.6,
+        target_atr_multiple=1.2,
+        stop_distance=6,
+        target_distance=12,
+        estimated_stop_price=snapshot.close - direction * 6,
+        estimated_target_price=snapshot.close + direction * 12,
+        environment_side=side,  # type: ignore[arg-type]
+        filter_label=snapshot.filter_label,
+        reason='test',
+        score=1,
+    )
+
+
+def _series(*snapshots: MarketSnapshot) -> pd.Series:
+    return pd.Series(
+        snapshots,
+        index=pd.DatetimeIndex([snapshot.closed_at for snapshot in snapshots]),
+        dtype=object,
+    )
+
+
+def _run(
+    snapshots: pd.Series,
+    dispatcher,
+    **overrides: object,
+):
+    arguments = {
+        'mode': SignalMode.KEY_LEVEL,
+        'cash': 100.0,
+        'opening_amount': 10.0,
+        'leverage': 5.0,
+        'margin_mode': MarginMode.ISOLATED,
+        'taker_fee': 0.0,
+        'slippage_rate': 0.0,
+        'funding_rate': 0.0,
+        'maintenance_margin_rate': 0.005,
+    }
+    arguments.update(overrides)
+    return SignalSimulator(dispatcher=dispatcher).run(snapshots, **arguments)
+
+
+def test_trade_plan_uses_actual_fill_and_frozen_signal_distances() -> None:
+    snapshot = _snapshot('2026-01-01 00:05')
+    signal = _signal(snapshot)
+
+    plan = build_trade_plan(
+        signal,
+        fill_time=pd.Timestamp('2026-01-01 00:10', tz='UTC'),
+        fill_price=2000,
+        account_balance=100,
+        opening_amount=10,
+        leverage=5,
+        margin_mode=MarginMode.ISOLATED,
+    )
+
+    assert plan.atr_snapshot == signal.atr_snapshot == 10
+    assert plan.stop_price == 1994
+    assert plan.target_price == 2012
+    assert plan.quantity == 0.025
+    assert plan.notional_amount == 50
+    assert plan.expected_stop_amount == 0.15
+    assert plan.expected_target_amount == 0.30
+
+
+def test_signal_fills_at_next_open_with_adverse_entry_slippage() -> None:
+    first = _snapshot('2026-01-01 00:05')
+    second = _snapshot('2026-01-01 00:10', open_price=110, high=111, low=109, close=110)
+    calls = 0
+
+    def dispatcher(snapshot: MarketSnapshot, mode: SignalMode) -> Signal | None:
+        nonlocal calls
+        calls += 1
+        return _signal(snapshot) if snapshot is first else None
+
+    result = _run(_series(first, second), dispatcher, slippage_rate=0.01)
+
+    trade = result.trades[0]
+    assert calls == 1
+    assert trade.signal_time == first.closed_at
+    assert trade.fill_time == second.closed_at
+    assert trade.fill_price == pytest.approx(111.1)
+    assert trade.stop_price == pytest.approx(105.1)
+    assert trade.exit_reason == 'FINALIZE'
+
+
+@pytest.mark.parametrize(
+    ('side', 'expected_fill', 'expected_stop', 'expected_target'),
+    [('BUY', 101, 95, 113), ('SELL', 99, 105, 87)],
+)
+def test_long_and_short_prices_and_amounts(
+    side: str,
+    expected_fill: float,
+    expected_stop: float,
+    expected_target: float,
+) -> None:
+    first = _snapshot('2026-01-01 00:05')
+    second = _snapshot('2026-01-01 00:10', high=102, low=98)
+
+    result = _run(
+        _series(first, second),
+        lambda snapshot, mode: _signal(snapshot, side) if snapshot is first else None,
+        slippage_rate=0.01,
+    )
+
+    trade = result.trades[0]
+    assert trade.fill_price == expected_fill
+    assert trade.stop_price == expected_stop
+    assert trade.target_price == expected_target
+    assert trade.expected_stop_amount == pytest.approx(50 / expected_fill * 6)
+    assert trade.expected_target_amount == pytest.approx(50 / expected_fill * 12)
+
+
+def test_later_atr_change_does_not_reprice_open_trade() -> None:
+    first = _snapshot('2026-01-01 00:05')
+    second = replace(_snapshot('2026-01-01 00:10'), atr=1000, high=105, low=95)
+
+    result = _run(
+        _series(first, second),
+        lambda snapshot, mode: _signal(snapshot) if snapshot is first else None,
+    )
+
+    assert result.trades[0].atr_snapshot == 10
+    assert result.trades[0].stop_price == 94
+    assert result.trades[0].target_price == 112
+
+
+def test_cross_margin_uses_account_balance_while_isolated_uses_opening_margin() -> None:
+    isolated = liquidation_price('BUY', 100, 5, 10, 100, MarginMode.ISOLATED, 0.005)
+    cross = liquidation_price('BUY', 100, 5, 10, 100, MarginMode.CROSS, 0.005)
+    assert isolated == pytest.approx(80.40201005)
+    assert cross == 0
+    assert cross < isolated
+
+
+@pytest.mark.parametrize(
+    ('side', 'margin_mode', 'open_price', 'high', 'low', 'expected_price'),
+    [
+        ('BUY', MarginMode.ISOLATED, 79, 80, 78, 79),
+        ('SELL', MarginMode.ISOLATED, 121, 122, 120, 121),
+    ],
+)
+def test_gap_beyond_liquidation_exits_before_other_protections(
+    side: str,
+    margin_mode: MarginMode,
+    open_price: float,
+    high: float,
+    low: float,
+    expected_price: float,
+) -> None:
+    first = _snapshot('2026-01-01 00:05')
+    entry = _snapshot('2026-01-01 00:10')
+    gap = _snapshot('2026-01-01 00:15', open_price=open_price, high=high, low=low, close=open_price)
+    result = _run(
+        _series(first, entry, gap),
+        lambda snapshot, mode: _signal(snapshot, side) if snapshot is first else None,
+        margin_mode=margin_mode,
+    )
+    trade = result.trades[0]
+    assert trade.exit_reason == 'LIQUIDATION'
+    assert trade.exit_price == expected_price
+
+
+@pytest.mark.parametrize(
+    ('side', 'open_price', 'expected_price'),
+    [('BUY', 90, 89.1), ('SELL', 110, 111.1)],
+)
+def test_gap_beyond_stop_uses_open_with_adverse_exit_slippage(
+    side: str,
+    open_price: float,
+    expected_price: float,
+) -> None:
+    first = _snapshot('2026-01-01 00:05')
+    entry = _snapshot('2026-01-01 00:10')
+    gap = _snapshot(
+        '2026-01-01 00:15',
+        open_price=open_price,
+        high=open_price + 1,
+        low=open_price - 1,
+        close=open_price,
+    )
+    result = _run(
+        _series(first, entry, gap),
+        lambda snapshot, mode: _signal(snapshot, side) if snapshot is first else None,
+        slippage_rate=0.01,
+    )
+    trade = result.trades[0]
+    assert trade.exit_reason == 'STOP'
+    assert trade.exit_price == pytest.approx(expected_price)
+
+
+def test_same_bar_stop_and_target_conflict_uses_stop() -> None:
+    first = _snapshot('2026-01-01 00:05')
+    conflict = _snapshot('2026-01-01 00:10', high=113, low=93)
+    result = _run(
+        _series(first, conflict),
+        lambda snapshot, mode: _signal(snapshot) if snapshot is first else None,
+    )
+    assert result.trades[0].exit_reason == 'STOP'
+    assert result.trades[0].exit_price == 94
+
+
+def test_intrabar_move_hits_stop_before_more_distant_liquidation() -> None:
+    first = _snapshot('2026-01-01 00:05')
+    entry = _snapshot('2026-01-01 00:10')
+    crash = _snapshot('2026-01-01 00:15', open_price=100, high=101, low=70, close=90)
+    result = _run(
+        _series(first, entry, crash),
+        lambda snapshot, mode: _signal(snapshot) if snapshot is first else None,
+    )
+    assert result.trades[0].exit_reason == 'STOP'
+    assert result.trades[0].exit_price == 94
+
+
+@pytest.mark.parametrize(('side', 'expected_funding'), [('BUY', -0.05), ('SELL', 0.05)])
+def test_commissions_funding_and_pnl_are_accounted(
+    side: str,
+    expected_funding: float,
+) -> None:
+    first = _snapshot('2026-01-01 07:55')
+    entry = _snapshot('2026-01-01 08:00')
+    final = _snapshot('2026-01-01 16:00')
+    result = _run(
+        _series(first, entry, final),
+        lambda snapshot, mode: _signal(snapshot, side) if snapshot is first else None,
+        taker_fee=0.001,
+        funding_rate=0.001,
+    )
+    trade = result.trades[0]
+    assert trade.entry_commission == pytest.approx(0.05)
+    assert trade.exit_commission == pytest.approx(0.05)
+    assert trade.funding == pytest.approx(expected_funding)
+    assert trade.pnl == pytest.approx(expected_funding - 0.10)
+    assert trade.pnl_percent == pytest.approx((expected_funding - 0.10) / 10 * 100)
+    assert result.equity_curve.iloc[-1] == pytest.approx(100 + expected_funding - 0.10)
+
+
+def test_pending_and_position_block_duplicate_dispatch_and_positions() -> None:
+    snapshots = _series(
+        _snapshot('2026-01-01 00:05'),
+        _snapshot('2026-01-01 00:10'),
+        _snapshot('2026-01-01 00:15'),
+    )
+    calls: list[pd.Timestamp] = []
+
+    def dispatcher(snapshot: MarketSnapshot, mode: SignalMode) -> Signal:
+        calls.append(snapshot.closed_at)
+        return _signal(snapshot)
+
+    result = _run(snapshots, dispatcher)
+
+    assert calls == [snapshots.iloc[0].closed_at]
+    assert len(result.trades) == 1
+    assert result.maximum_concurrent_positions == 1
+
+
+def test_empty_input_returns_empty_result() -> None:
+    result = _run(
+        pd.Series(dtype=object, index=pd.DatetimeIndex([], tz='UTC')),
+        lambda snapshot, mode: None,
+    )
+    assert result.trades == ()
+    assert result.equity_curve.empty
+    assert result.maximum_concurrent_positions == 0
+
+
+@pytest.mark.parametrize(
+    ('overrides', 'message'),
+    [
+        ({'cash': 0}, 'cash'),
+        ({'opening_amount': 0}, 'opening_amount'),
+        ({'opening_amount': 101}, 'opening_amount'),
+        ({'leverage': 0}, 'leverage'),
+        ({'taker_fee': -0.1}, 'taker_fee'),
+        ({'taker_fee': 1}, 'taker_fee'),
+        ({'slippage_rate': 1}, 'slippage_rate'),
+        ({'funding_rate': -0.1}, 'funding_rate'),
+        ({'funding_rate': 1}, 'funding_rate'),
+        ({'maintenance_margin_rate': 1}, 'maintenance_margin_rate'),
+    ],
+)
+def test_invalid_run_parameters_raise(overrides: dict[str, object], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        _run(_series(_snapshot('2026-01-01 00:05')), lambda snapshot, mode: None, **overrides)
+
+
+def test_invalid_snapshot_prices_and_indexes_raise() -> None:
+    valid = _snapshot('2026-01-01 00:05')
+    with pytest.raises(ValueError, match='prices'):
+        _run(_series(replace(valid, high=99)), lambda snapshot, mode: None)
+
+    duplicate = pd.Series(
+        [valid, valid],
+        index=pd.DatetimeIndex([valid.closed_at, valid.closed_at]),
+        dtype=object,
+    )
+    with pytest.raises(ValueError, match='unique'):
+        _run(duplicate, lambda snapshot, mode: None)
+
+    reversed_series = _series(valid, _snapshot('2026-01-01 00:04'))
+    with pytest.raises(ValueError, match='increasing'):
+        _run(reversed_series, lambda snapshot, mode: None)
