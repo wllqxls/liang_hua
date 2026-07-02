@@ -240,13 +240,22 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
         )
 
     except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        _log_safe_backtest_error('backtest_data_missing', e)
+        raise HTTPException(
+            status_code=404,
+            detail='回测所需数据不存在，请先补齐数据',
+        ) from None
     except ValueError as e:
-        logger.warning('回测参数或数据格式无效: %s', e)
-        raise HTTPException(status_code=422, detail='回测参数或数据格式无效') from e
+        _log_safe_backtest_error('backtest_invalid_input', e)
+        raise HTTPException(status_code=422, detail='回测参数或数据格式无效') from None
     except Exception as e:
-        logger.exception('回测服务内部错误')
-        raise HTTPException(status_code=500, detail='回测服务内部错误，请稍后重试') from e
+        _log_safe_backtest_error('backtest_internal_error', e)
+        raise HTTPException(status_code=500, detail='回测服务内部错误，请稍后重试') from None
+
+
+def _log_safe_backtest_error(event: str, error: Exception) -> None:
+    """Log an error category without exception messages or tracebacks."""
+    logger.error('event=%s exception_type=%s', event, type(error).__name__)
 
 
 @router.post('/api/optimize/jobs', response_model=OptimizationJobCreated)

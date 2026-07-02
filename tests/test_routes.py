@@ -160,27 +160,42 @@ def test_backtest_api_rejects_cash_that_cannot_cover_entry_fee() -> None:
     assert '开仓手续费' in response.json()['detail']
 
 
-def test_backtest_api_returns_404_for_missing_market_data(monkeypatch: Any) -> None:
+def test_backtest_api_returns_safe_404_for_missing_market_data(
+    monkeypatch: Any,
+    caplog: Any,
+) -> None:
     def missing(self: object, **kwargs: Any) -> BacktestResult:
-        raise FileNotFoundError('回测缺少必要数据文件: BTC_USDT_4h.csv')
+        raise FileNotFoundError(r'secret path C:\accounts\BTC_USDT_4h.csv')
 
     monkeypatch.setattr(routes.BacktestEngine, 'run_signal_mode', missing)
-    response = TestClient(app).post('/api/backtest', json={})
+    with caplog.at_level(logging.ERROR, logger=routes.__name__):
+        response = TestClient(app).post('/api/backtest', json={})
 
     assert response.status_code == 404
-    assert 'BTC_USDT_4h.csv' in response.json()['detail']
+    assert response.json()['detail'] == '回测所需数据不存在，请先补齐数据'
+    assert 'secret' not in response.text
+    assert 'secret' not in caplog.text
+    assert 'event=backtest_data_missing' in caplog.text
+    assert 'exception_type=FileNotFoundError' in caplog.text
 
 
-def test_backtest_api_returns_422_without_leaking_value_error_details(monkeypatch: Any) -> None:
+def test_backtest_api_returns_422_without_leaking_value_error_details(
+    monkeypatch: Any,
+    caplog: Any,
+) -> None:
     def invalid(self: object, **kwargs: Any) -> BacktestResult:
         raise ValueError(r'invalid data at C:\secret\market.csv')
 
     monkeypatch.setattr(routes.BacktestEngine, 'run_signal_mode', invalid)
-    response = TestClient(app).post('/api/backtest', json={})
+    with caplog.at_level(logging.ERROR, logger=routes.__name__):
+        response = TestClient(app).post('/api/backtest', json={})
 
     assert response.status_code == 422
     assert response.json()['detail'] == '回测参数或数据格式无效'
     assert 'secret' not in response.text
+    assert 'secret' not in caplog.text
+    assert 'event=backtest_invalid_input' in caplog.text
+    assert 'exception_type=ValueError' in caplog.text
 
 
 def test_backtest_api_returns_generic_500_and_logs_internal_error(
@@ -196,8 +211,10 @@ def test_backtest_api_returns_generic_500_and_logs_internal_error(
 
     assert response.status_code == 500
     assert response.json()['detail'] == '回测服务内部错误，请稍后重试'
-    assert 'password' not in response.text
-    assert 'database password leaked' in caplog.text
+    assert 'database password leaked' not in response.text
+    assert 'database password leaked' not in caplog.text
+    assert 'event=backtest_internal_error' in caplog.text
+    assert 'exception_type=RuntimeError' in caplog.text
 
 
 def test_optimization_request_rejects_typo_and_new_backtest_fields() -> None:
