@@ -57,6 +57,7 @@ def _entry_features(frame: pd.DataFrame, duration: pd.Timedelta) -> pd.DataFrame
     _, upper, lower = bollinger_bands(frame['Close'], window=20, deviations=2)
     features = pd.DataFrame(
         {
+            'opened_at': frame.index,
             'open': frame['Open'],
             'high': frame['High'],
             'low': frame['Low'],
@@ -159,6 +160,7 @@ def build_market_snapshots(
     ]
 
     snapshot_columns = [
+        'opened_at',
         'open',
         'high',
         'low',
@@ -178,6 +180,7 @@ def build_market_snapshots(
     for values in joined.loc[:, snapshot_columns].itertuples(index=True, name=None):
         (
             closed_at,
+            opened_at,
             open_price,
             high,
             low,
@@ -195,6 +198,7 @@ def build_market_snapshots(
         ) = values
         snapshots.append(
             MarketSnapshot(
+                opened_at=_timestamp(opened_at),
                 closed_at=_timestamp(closed_at),
                 open=float(open_price),
                 high=float(high),

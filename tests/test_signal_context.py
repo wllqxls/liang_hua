@@ -44,6 +44,7 @@ def test_signal_contracts_are_stable_strings_and_snapshots_are_immutable() -> No
     assert FilterLabel.LONG.value == 'FILTER_LONG'
 
     snapshot = MarketSnapshot(
+        opened_at=pd.Timestamp('2026-01-01 00:00', tz='UTC'),
         closed_at=pd.Timestamp('2026-01-01 00:05', tz='UTC'),
         open=100,
         high=101,
@@ -101,7 +102,9 @@ def test_entry_features_use_close_time_and_previous_key_levels() -> None:
     snapshots = build_market_snapshots(entry, hour, four_hour, timeframe='5m')
 
     snapshot = snapshots.loc[pd.Timestamp('2026-01-01 01:45', tz='UTC')]
+    assert snapshot.opened_at == pd.Timestamp('2026-01-01 01:40', tz='UTC')
     assert snapshot.closed_at == pd.Timestamp('2026-01-01 01:45', tz='UTC')
+    assert snapshot.opened_at + pd.Timedelta(minutes=5) == snapshot.closed_at
     assert snapshot.close == 120
     assert snapshot.previous_high_20 == 120
     assert snapshot.previous_low_20 == 99
@@ -117,6 +120,7 @@ def test_snapshot_accepts_fifteen_minutes_and_sorts_indexes() -> None:
 
     assert snapshots.index.is_monotonic_increasing
     assert snapshots.index[0] == entry.sort_index().index[20] + pd.Timedelta(minutes=15)
+    assert snapshots.iloc[0].opened_at + pd.Timedelta(minutes=15) == snapshots.iloc[0].closed_at
 
 
 @pytest.mark.parametrize('frame_name', ['entry', 'hour', 'four_hour'])

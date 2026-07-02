@@ -22,6 +22,7 @@ from src.strategies.signal_models import (
 def _snapshot(
     closed_at: str,
     *,
+    opened_at: str | None = None,
     open_price: float = 100,
     high: float = 101,
     low: float = 99,
@@ -29,6 +30,11 @@ def _snapshot(
 ) -> MarketSnapshot:
     timestamp = pd.Timestamp(closed_at, tz='UTC')
     return MarketSnapshot(
+        opened_at=(
+            timestamp - pd.Timedelta(minutes=5)
+            if opened_at is None
+            else pd.Timestamp(opened_at, tz='UTC')
+        ),
         closed_at=timestamp,
         open=open_price,
         high=high,
@@ -135,10 +141,11 @@ def test_signal_fills_at_next_open_with_adverse_entry_slippage() -> None:
     trade = result.trades[0]
     assert calls == 1
     assert trade.signal_time == first.closed_at
-    assert trade.fill_time == second.closed_at
+    assert trade.fill_time == second.opened_at
     assert trade.fill_price == pytest.approx(111.1)
     assert trade.stop_price == pytest.approx(105.1)
     assert trade.exit_reason == 'FINALIZE'
+    assert trade.exit_time == second.closed_at
 
 
 @pytest.mark.parametrize(
@@ -216,6 +223,7 @@ def test_gap_beyond_liquidation_exits_before_other_protections(
     trade = result.trades[0]
     assert trade.exit_reason == 'LIQUIDATION'
     assert trade.exit_price == expected_price
+    assert trade.exit_time == gap.opened_at
 
 
 @pytest.mark.parametrize(
@@ -244,6 +252,27 @@ def test_gap_beyond_stop_uses_open_with_adverse_exit_slippage(
     trade = result.trades[0]
     assert trade.exit_reason == 'STOP'
     assert trade.exit_price == pytest.approx(expected_price)
+    assert trade.exit_time == gap.opened_at
+
+
+def test_gap_beyond_target_uses_open_time_and_fixed_target_price() -> None:
+    first = _snapshot('2026-01-01 00:05')
+    entry = _snapshot('2026-01-01 00:10')
+    gap = _snapshot(
+        '2026-01-01 00:15',
+        open_price=120,
+        high=121,
+        low=119,
+        close=120,
+    )
+    result = _run(
+        _series(first, entry, gap),
+        lambda snapshot, mode: _signal(snapshot) if snapshot is first else None,
+    )
+    trade = result.trades[0]
+    assert trade.exit_reason == 'TARGET'
+    assert trade.exit_price == 112
+    assert trade.exit_time == gap.opened_at
 
 
 def test_same_bar_stop_and_target_conflict_uses_stop() -> None:
@@ -255,6 +284,7 @@ def test_same_bar_stop_and_target_conflict_uses_stop() -> None:
     )
     assert result.trades[0].exit_reason == 'STOP'
     assert result.trades[0].exit_price == 94
+    assert result.trades[0].exit_time == conflict.closed_at
 
 
 def test_intrabar_move_hits_stop_before_more_distant_liquidation() -> None:
@@ -270,26 +300,183 @@ def test_intrabar_move_hits_stop_before_more_distant_liquidation() -> None:
 
 
 @pytest.mark.parametrize(('side', 'expected_funding'), [('BUY', -0.05), ('SELL', 0.05)])
-def test_commissions_funding_and_pnl_are_accounted(
+def test_intrabar_exit_excludes_funding_boundary_at_exit_time(
     side: str,
     expected_funding: float,
 ) -> None:
-    first = _snapshot('2026-01-01 07:55')
-    entry = _snapshot('2026-01-01 08:00')
-    final = _snapshot('2026-01-01 16:00')
+    first = _snapshot('2026-01-01 07:55', opened_at='2026-01-01 07:50')
+    entry = _snapshot('2026-01-01 08:00', opened_at='2026-01-01 07:55')
+    exit_bar = _snapshot(
+        '2026-01-01 16:00',
+        opened_at='2026-01-01 15:55',
+        high=113 if side == 'BUY' else 101,
+        low=99 if side == 'BUY' else 87,
+    )
     result = _run(
-        _series(first, entry, final),
+        _series(first, entry, exit_bar),
         lambda snapshot, mode: _signal(snapshot, side) if snapshot is first else None,
         taker_fee=0.001,
         funding_rate=0.001,
     )
     trade = result.trades[0]
     assert trade.entry_commission == pytest.approx(0.05)
-    assert trade.exit_commission == pytest.approx(0.05)
+    assert trade.exit_reason == 'TARGET'
+    assert trade.exit_time == exit_bar.closed_at
     assert trade.funding == pytest.approx(expected_funding)
-    assert trade.pnl == pytest.approx(expected_funding - 0.10)
-    assert trade.pnl_percent == pytest.approx((expected_funding - 0.10) / 10 * 100)
-    assert result.equity_curve.iloc[-1] == pytest.approx(100 + expected_funding - 0.10)
+
+
+def test_entry_exit_commissions_pnl_and_equity_are_accounted_once() -> None:
+    first = _snapshot('2026-01-01 00:05')
+    final = _snapshot('2026-01-01 00:10')
+    result = _run(
+        _series(first, final),
+        lambda snapshot, mode: _signal(snapshot) if snapshot is first else None,
+        taker_fee=0.001,
+    )
+    trade = result.trades[0]
+    assert trade.entry_commission == pytest.approx(0.05)
+    assert trade.exit_commission == pytest.approx(0.05)
+    assert trade.pnl == pytest.approx(-0.10)
+    assert trade.pnl_percent == pytest.approx(-1)
+    assert result.equity_curve.iloc[-1] == pytest.approx(99.90)
+
+
+def test_open_position_receives_funding_at_boundary_equal_to_bar_close() -> None:
+    first = _snapshot('2026-01-01 07:55', opened_at='2026-01-01 07:50')
+    entry = _snapshot('2026-01-01 08:00', opened_at='2026-01-01 07:55')
+    final = _snapshot('2026-01-01 16:00', opened_at='2026-01-01 15:55')
+    result = _run(
+        _series(first, entry, final),
+        lambda snapshot, mode: _signal(snapshot) if snapshot is first else None,
+        funding_rate=0.001,
+    )
+    trade = result.trades[0]
+    assert trade.exit_reason == 'FINALIZE'
+    assert trade.exit_time == final.closed_at
+    assert trade.funding == pytest.approx(-0.10)
+    assert trade.pnl == pytest.approx(-0.10)
+    assert result.equity_curve.iloc[-1] == pytest.approx(99.90)
+
+
+def test_gap_exit_excludes_funding_boundary_equal_to_open_time() -> None:
+    first = _snapshot('2026-01-01 07:55', opened_at='2026-01-01 07:50')
+    entry = _snapshot('2026-01-01 08:00', opened_at='2026-01-01 07:55')
+    gap = _snapshot(
+        '2026-01-01 16:05',
+        opened_at='2026-01-01 16:00',
+        open_price=90,
+        high=91,
+        low=89,
+        close=90,
+    )
+    result = _run(
+        _series(first, entry, gap),
+        lambda snapshot, mode: _signal(snapshot) if snapshot is first else None,
+        funding_rate=0.001,
+    )
+    trade = result.trades[0]
+    assert trade.exit_reason == 'STOP'
+    assert trade.exit_time == gap.opened_at
+    assert trade.funding == pytest.approx(-0.05)
+
+
+def test_entry_commission_reduces_initial_cross_liquidation_collateral() -> None:
+    first = _snapshot('2026-01-01 00:05')
+    entry = _snapshot('2026-01-01 00:10')
+    result = _run(
+        _series(first, entry),
+        lambda snapshot, mode: _signal(snapshot) if snapshot is first else None,
+        margin_mode=MarginMode.CROSS,
+        leverage=10,
+        taker_fee=0.1,
+    )
+    assert result.trades[0].liquidation_price == pytest.approx(10 / 0.995)
+
+
+def test_long_negative_funding_moves_dynamic_cross_liquidation_up() -> None:
+    first = _snapshot('2026-01-01 07:55', opened_at='2026-01-01 07:50')
+    entry = _snapshot('2026-01-01 08:00', opened_at='2026-01-01 07:55')
+    gap = _snapshot(
+        '2026-01-01 08:05',
+        opened_at='2026-01-01 08:00',
+        open_price=15,
+        high=16,
+        low=14,
+        close=15,
+    )
+    wide_signal = replace(
+        _signal(first),
+        stop_distance=200,
+        target_distance=200,
+    )
+    result = _run(
+        _series(first, entry, gap),
+        lambda snapshot, mode: wide_signal if snapshot is first else None,
+        margin_mode=MarginMode.CROSS,
+        leverage=10,
+        taker_fee=0.1,
+        funding_rate=0.1,
+    )
+    assert result.trades[0].funding == -10
+    assert result.trades[0].exit_reason == 'LIQUIDATION'
+    assert result.trades[0].exit_time == gap.opened_at
+
+
+def test_cross_liquidation_uses_funding_before_intrabar_exit() -> None:
+    first = _snapshot('2026-01-01 07:55', opened_at='2026-01-01 07:50')
+    entry_and_crash = _snapshot(
+        '2026-01-01 08:05',
+        opened_at='2026-01-01 07:55',
+        open_price=100,
+        high=101,
+        low=15,
+        close=100,
+    )
+    wide_signal = replace(
+        _signal(first),
+        stop_distance=200,
+        target_distance=200,
+    )
+    result = _run(
+        _series(first, entry_and_crash),
+        lambda snapshot, mode: wide_signal if snapshot is first else None,
+        margin_mode=MarginMode.CROSS,
+        leverage=10,
+        taker_fee=0.1,
+        funding_rate=0.1,
+    )
+    trade = result.trades[0]
+    assert trade.funding == -10
+    assert trade.exit_reason == 'LIQUIDATION'
+    assert trade.exit_time == entry_and_crash.closed_at
+
+
+def test_short_positive_funding_moves_dynamic_cross_liquidation_away() -> None:
+    first = _snapshot('2026-01-01 07:55', opened_at='2026-01-01 07:50')
+    entry = _snapshot('2026-01-01 08:00', opened_at='2026-01-01 07:55')
+    gap = _snapshot(
+        '2026-01-01 08:05',
+        opened_at='2026-01-01 08:00',
+        open_price=195,
+        high=196,
+        low=194,
+        close=195,
+    )
+    wide_signal = replace(
+        _signal(first, 'SELL'),
+        stop_distance=200,
+        target_distance=200,
+    )
+    result = _run(
+        _series(first, entry, gap),
+        lambda snapshot, mode: wide_signal if snapshot is first else None,
+        margin_mode=MarginMode.CROSS,
+        leverage=10,
+        taker_fee=0.1,
+        funding_rate=0.1,
+    )
+    assert result.trades[0].funding == 10
+    assert result.trades[0].exit_reason == 'FINALIZE'
 
 
 def test_pending_and_position_block_duplicate_dispatch_and_positions() -> None:
@@ -357,3 +544,9 @@ def test_invalid_snapshot_prices_and_indexes_raise() -> None:
     reversed_series = _series(valid, _snapshot('2026-01-01 00:04'))
     with pytest.raises(ValueError, match='increasing'):
         _run(reversed_series, lambda snapshot, mode: None)
+
+    with pytest.raises(ValueError, match='opened_at'):
+        _run(
+            _series(replace(valid, opened_at=valid.closed_at)),
+            lambda snapshot, mode: None,
+        )

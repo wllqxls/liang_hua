@@ -9,6 +9,7 @@ from src.strategies.signal_models import FilterLabel, MarketSnapshot, SignalMode
 
 
 BASE = MarketSnapshot(
+    opened_at=pd.Timestamp('2026-01-01 00:00', tz='UTC'),
     closed_at=pd.Timestamp('2026-01-01 00:05', tz='UTC'),
     open=100,
     high=101,

@@ -26,6 +26,7 @@ class FilterLabel(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class MarketSnapshot:
+    opened_at: pd.Timestamp
     closed_at: pd.Timestamp
     open: float
     high: float

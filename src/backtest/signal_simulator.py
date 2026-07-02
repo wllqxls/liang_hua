@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from math import floor, isfinite
+from math import isfinite
 from typing import Literal, cast
 
 import pandas as pd
@@ -19,6 +19,7 @@ from src.strategies.signal_models import (
 
 SignalDispatcher = Callable[[MarketSnapshot, SignalMode], Signal | None]
 ExitReason = Literal['STOP', 'TARGET', 'LIQUIDATION', 'FINALIZE']
+ExitPhase = Literal['GAP', 'INTRABAR']
 
 
 def liquidation_price(
@@ -160,7 +161,7 @@ class SignalSimulator:
         position: TradePlan | None = None
         position_entry_commission = 0.0
         position_funding = 0.0
-        last_funding_time: pd.Timestamp | None = None
+        funding_cursor: pd.Timestamp | None = None
         trades: list[SimulationTrade] = []
         equity_values: list[float] = []
         equity_index: list[pd.Timestamp] = []
@@ -170,9 +171,14 @@ class SignalSimulator:
             timestamp = snapshot.closed_at
             if pending is not None:
                 fill_price = _adverse_price(pending.side, snapshot.open, slippage_rate)
+                position_entry_commission = commission(
+                    opening_amount * leverage,
+                    taker_fee,
+                )
+                account_cash -= position_entry_commission
                 position = build_trade_plan(
                     pending,
-                    fill_time=timestamp,
+                    fill_time=snapshot.opened_at,
                     fill_price=fill_price,
                     account_balance=account_cash,
                     opening_amount=opening_amount,
@@ -180,30 +186,39 @@ class SignalSimulator:
                     margin_mode=margin_mode,
                     maintenance_margin_rate=maintenance_margin_rate,
                 )
-                position_entry_commission = commission(position.notional_amount, taker_fee)
-                account_cash -= position_entry_commission
                 position_funding = 0.0
-                last_funding_time = timestamp
+                funding_cursor = snapshot.opened_at
                 pending = None
                 maximum_concurrent_positions = max(maximum_concurrent_positions, 1)
 
             if position is not None:
-                assert last_funding_time is not None
-                funding_events = _funding_events(last_funding_time, timestamp)
-                if funding_events:
-                    position_funding += funding_events * funding_cash_flow(
-                        position.signal.side,
-                        position.notional_amount,
-                        funding_rate,
-                    )
-                    last_funding_time = timestamp
-
-                exit_details = _exit_for_snapshot(position, snapshot, slippage_rate)
+                assert funding_cursor is not None
+                funding_before_open = _settle_funding(
+                    position,
+                    funding_cursor,
+                    snapshot.opened_at,
+                    funding_rate,
+                    include_end=False,
+                )
+                account_cash += funding_before_open
+                position_funding += funding_before_open
+                current_liquidation_price = _current_liquidation_price(
+                    position,
+                    account_cash,
+                    maintenance_margin_rate,
+                )
+                exit_details = _exit_for_snapshot(
+                    position,
+                    snapshot,
+                    slippage_rate,
+                    current_liquidation_price,
+                    phase='GAP',
+                )
                 if exit_details is not None:
                     exit_price, reason = exit_details
                     trade, account_cash = _close_trade(
                         position,
-                        exit_time=timestamp,
+                        exit_time=snapshot.opened_at,
                         exit_price=exit_price,
                         exit_reason=reason,
                         account_cash=account_cash,
@@ -213,11 +228,64 @@ class SignalSimulator:
                     )
                     trades.append(trade)
                     position = None
-                    last_funding_time = None
+                    funding_cursor = None
+                else:
+                    funding_before_close = _settle_funding(
+                        position,
+                        funding_cursor,
+                        snapshot.closed_at,
+                        funding_rate,
+                        include_end=False,
+                    )
+                    intrabar_funding = funding_before_close - funding_before_open
+                    account_cash += intrabar_funding
+                    position_funding += intrabar_funding
+                    current_liquidation_price = _current_liquidation_price(
+                        position,
+                        account_cash,
+                        maintenance_margin_rate,
+                    )
+                    exit_details = _exit_for_snapshot(
+                        position,
+                        snapshot,
+                        slippage_rate,
+                        current_liquidation_price,
+                        phase='INTRABAR',
+                    )
+
+                if position is not None and exit_details is not None:
+                    exit_price, reason = exit_details
+                    trade, account_cash = _close_trade(
+                        position,
+                        exit_time=snapshot.closed_at,
+                        exit_price=exit_price,
+                        exit_reason=reason,
+                        account_cash=account_cash,
+                        entry_commission=position_entry_commission,
+                        funding=position_funding,
+                        taker_fee=taker_fee,
+                    )
+                    trades.append(trade)
+                    position = None
+                    funding_cursor = None
+                elif position is not None:
+                    funding_through_close = _settle_funding(
+                        position,
+                        funding_cursor,
+                        snapshot.closed_at,
+                        funding_rate,
+                        include_end=True,
+                    )
+                    closing_boundary_funding = (
+                        funding_through_close - funding_before_close
+                    )
+                    account_cash += closing_boundary_funding
+                    position_funding += closing_boundary_funding
+                    funding_cursor = snapshot.closed_at
 
             equity = account_cash
             if position is not None:
-                equity += _gross_pnl(position, snapshot.close) + position_funding
+                equity += _gross_pnl(position, snapshot.close)
             equity_values.append(equity)
             equity_index.append(timestamp)
             if equity <= 0:
@@ -244,14 +312,6 @@ class SignalSimulator:
 
         if position is not None:
             final_snapshot = cast(MarketSnapshot, snapshots.iloc[-1])
-            assert last_funding_time is not None
-            funding_events = _funding_events(last_funding_time, final_snapshot.closed_at)
-            if funding_events:
-                position_funding += funding_events * funding_cash_flow(
-                    position.signal.side,
-                    position.notional_amount,
-                    funding_rate,
-                )
             exit_price = _adverse_exit_price(
                 position.signal.side,
                 final_snapshot.close,
@@ -283,29 +343,50 @@ def _exit_for_snapshot(
     plan: TradePlan,
     snapshot: MarketSnapshot,
     slippage_rate: float,
+    current_liquidation_price: float,
+    *,
+    phase: ExitPhase,
 ) -> tuple[float, ExitReason] | None:
     side = plan.signal.side
-    if side == 'BUY':
-        if snapshot.open <= plan.liquidation_price:
-            return _adverse_exit_price(side, snapshot.open, slippage_rate), 'LIQUIDATION'
+    if phase == 'GAP' and side == 'BUY':
+        if snapshot.open <= current_liquidation_price:
+            return (
+                _adverse_exit_price(side, snapshot.open, slippage_rate),
+                'LIQUIDATION',
+            )
         if snapshot.open <= plan.stop_price:
             return _adverse_exit_price(side, snapshot.open, slippage_rate), 'STOP'
-        adverse_price = max(plan.stop_price, plan.liquidation_price)
+        if snapshot.open >= plan.target_price:
+            return plan.target_price, 'TARGET'
+    elif phase == 'INTRABAR' and side == 'BUY':
+        adverse_price = max(plan.stop_price, current_liquidation_price)
         if snapshot.low <= adverse_price:
             reason: ExitReason = (
-                'LIQUIDATION' if adverse_price == plan.liquidation_price else 'STOP'
+                'LIQUIDATION'
+                if adverse_price == current_liquidation_price
+                else 'STOP'
             )
             return adverse_price, reason
         if snapshot.high >= plan.target_price:
             return plan.target_price, 'TARGET'
-    else:
-        if snapshot.open >= plan.liquidation_price:
-            return _adverse_exit_price(side, snapshot.open, slippage_rate), 'LIQUIDATION'
+    elif phase == 'GAP':
+        if snapshot.open >= current_liquidation_price:
+            return (
+                _adverse_exit_price(side, snapshot.open, slippage_rate),
+                'LIQUIDATION',
+            )
         if snapshot.open >= plan.stop_price:
             return _adverse_exit_price(side, snapshot.open, slippage_rate), 'STOP'
-        adverse_price = min(plan.stop_price, plan.liquidation_price)
+        if snapshot.open <= plan.target_price:
+            return plan.target_price, 'TARGET'
+    else:
+        adverse_price = min(plan.stop_price, current_liquidation_price)
         if snapshot.high >= adverse_price:
-            reason = 'LIQUIDATION' if adverse_price == plan.liquidation_price else 'STOP'
+            reason = (
+                'LIQUIDATION'
+                if adverse_price == current_liquidation_price
+                else 'STOP'
+            )
             return adverse_price, reason
         if snapshot.low <= plan.target_price:
             return plan.target_price, 'TARGET'
@@ -326,7 +407,7 @@ def _close_trade(
     gross_pnl = _gross_pnl(plan, exit_price)
     exit_commission = commission(plan.quantity * exit_price, taker_fee)
     pnl = gross_pnl - entry_commission - exit_commission + funding
-    account_cash += gross_pnl - exit_commission + funding
+    account_cash += gross_pnl - exit_commission
     trade = SimulationTrade(
         signal=plan.signal,
         fill_time=plan.fill_time,
@@ -369,11 +450,51 @@ def _adverse_exit_price(side: Literal['BUY', 'SELL'], price: float, rate: float)
     return price * (1 - rate) if side == 'BUY' else price * (1 + rate)
 
 
-def _funding_events(start: pd.Timestamp, end: pd.Timestamp) -> int:
+def _funding_events(
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    *,
+    include_end: bool,
+) -> int:
     if end <= start:
         return 0
     period_ns = pd.Timedelta(hours=8).value
-    return max(0, floor(end.value / period_ns) - floor(start.value / period_ns))
+    end_value = end.value if include_end else end.value - 1
+    return max(0, end_value // period_ns - start.value // period_ns)
+
+
+def _settle_funding(
+    plan: TradePlan,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    funding_rate: float,
+    *,
+    include_end: bool,
+) -> float:
+    events = _funding_events(start, end, include_end=include_end)
+    return events * funding_cash_flow(
+        plan.signal.side,
+        plan.notional_amount,
+        funding_rate,
+    )
+
+
+def _current_liquidation_price(
+    plan: TradePlan,
+    account_cash: float,
+    maintenance_margin_rate: float,
+) -> float:
+    if plan.margin_mode is MarginMode.ISOLATED:
+        return plan.liquidation_price
+    return liquidation_price(
+        plan.signal.side,
+        plan.fill_price,
+        plan.leverage,
+        plan.opening_amount,
+        account_cash,
+        plan.margin_mode,
+        maintenance_margin_rate,
+    )
 
 
 def _validate_run_inputs(
@@ -412,6 +533,7 @@ def _validate_run_inputs(
     _rate('maintenance_margin_rate', maintenance_margin_rate, upper_bound=1)
 
     previous: pd.Timestamp | None = None
+    previous_opened_at: pd.Timestamp | None = None
     for index, snapshot in snapshots.items():
         if not isinstance(snapshot, MarketSnapshot):
             raise ValueError('snapshots must contain MarketSnapshot values')
@@ -420,6 +542,11 @@ def _validate_run_inputs(
         if previous is not None and snapshot.closed_at <= previous:
             raise ValueError('snapshot closed_at values must be strictly increasing')
         previous = snapshot.closed_at
+        if snapshot.opened_at.tz is None or snapshot.opened_at >= snapshot.closed_at:
+            raise ValueError('snapshot opened_at must be timezone-aware and before closed_at')
+        if previous_opened_at is not None and snapshot.opened_at <= previous_opened_at:
+            raise ValueError('snapshot opened_at values must be strictly increasing')
+        previous_opened_at = snapshot.opened_at
         prices = (snapshot.open, snapshot.high, snapshot.low, snapshot.close)
         if not all(isfinite(value) and value > 0 for value in prices):
             raise ValueError('snapshot prices must be finite and positive')
