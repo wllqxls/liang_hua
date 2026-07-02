@@ -80,6 +80,7 @@ def _hour_features(frame: pd.DataFrame) -> pd.DataFrame:
         pd.DataFrame(
             {
                 'environment_side': side,
+                '_context_1h_ready': average.notna(),
                 'context_1h_closed_at': frame.index + pd.Timedelta(hours=1),
             },
             index=frame.index,
@@ -91,13 +92,16 @@ def _hour_features(frame: pd.DataFrame) -> pd.DataFrame:
 def _four_hour_features(frame: pd.DataFrame) -> pd.DataFrame:
     short_average = ema(frame['Close'], 10)
     long_average = ema(frame['Close'], 30)
-    label = pd.Series(FilterLabel.NEUTRAL, index=frame.index, dtype=object)
+    ready = short_average.notna() & long_average.notna()
+    label = pd.Series(None, index=frame.index, dtype=object)
+    label.loc[ready] = FilterLabel.NEUTRAL
     label.loc[short_average > long_average] = FilterLabel.LONG
     label.loc[short_average < long_average] = FilterLabel.SHORT
     return _closed_features(
         pd.DataFrame(
             {
                 'filter_label': label,
+                '_context_4h_ready': ready,
                 'context_4h_closed_at': frame.index + pd.Timedelta(hours=4),
             },
             index=frame.index,
@@ -131,6 +135,26 @@ def build_market_snapshots(
         ),
         _four_hour_features(four_hour),
     )
+    indicators = [
+        'atr',
+        'rsi',
+        'bollinger_upper',
+        'bollinger_lower',
+        'previous_high_20',
+        'previous_low_20',
+    ]
+    required = [
+        *indicators,
+        'filter_label',
+        'context_1h_closed_at',
+        'context_4h_closed_at',
+    ]
+    joined = joined.dropna(subset=required)
+    joined = joined.loc[
+        joined['_context_1h_ready'].eq(True)
+        & joined['_context_4h_ready'].eq(True)
+        & np.isfinite(joined[indicators].to_numpy(dtype=float)).all(axis=1)
+    ]
 
     snapshots = [
         MarketSnapshot(
@@ -149,11 +173,7 @@ def build_market_snapshots(
                 Literal['BUY', 'SELL'] | None,
                 None if pd.isna(row.environment_side) else row.environment_side,
             ),
-            filter_label=(
-                FilterLabel.NEUTRAL
-                if pd.isna(row.filter_label)
-                else FilterLabel(row.filter_label)
-            ),
+            filter_label=FilterLabel(row.filter_label),
             context_1h_closed_at=_timestamp(row.context_1h_closed_at),
             context_4h_closed_at=_timestamp(row.context_4h_closed_at),
         )
