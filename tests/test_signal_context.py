@@ -136,8 +136,8 @@ def test_snapshot_rejects_duplicate_indexes(frame_name: str) -> None:
         )
 
 
-def test_snapshot_builds_ten_thousand_unique_entries_within_reasonable_time() -> None:
-    entry_index = pd.date_range('2026-01-01', periods=10_000, freq='5min', tz='UTC')
+def test_snapshot_builds_thirty_thousand_unique_entries_within_reasonable_time() -> None:
+    entry_index = pd.date_range('2026-01-01', periods=30_000, freq='5min', tz='UTC')
     hour_index = pd.date_range('2025-12-01', periods=2_000, freq='1h', tz='UTC')
     four_hour_index = pd.date_range(
         '2025-12-01', periods=500, freq='4h', tz='UTC'
@@ -145,16 +145,16 @@ def test_snapshot_builds_ten_thousand_unique_entries_within_reasonable_time() ->
 
     started = perf_counter()
     snapshots = build_market_snapshots(
-        _candles(entry_index, list(range(10_000))),
+        _candles(entry_index, list(range(30_000))),
         _candles(hour_index, list(range(2_000))),
         _candles(four_hour_index, list(range(500))),
         timeframe='5m',
     )
     elapsed = perf_counter() - started
 
-    assert len(snapshots) == 9_980
+    assert len(snapshots) == 29_980
     assert snapshots.index.is_unique
-    assert elapsed < 10
+    assert elapsed < 5
 
 
 def test_snapshot_omits_entries_before_first_higher_timeframe_close() -> None:
