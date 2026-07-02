@@ -393,6 +393,45 @@ def test_entry_commission_reduces_initial_cross_liquidation_collateral() -> None
     assert result.trades[0].liquidation_price == pytest.approx(10 / 0.995)
 
 
+def test_initial_cash_must_cover_opening_amount_and_entry_fee() -> None:
+    with pytest.raises(ValueError, match='opening_amount and entry fee'):
+        _run(
+            _series(_snapshot('2026-01-01 00:05')),
+            lambda snapshot, mode: None,
+            opening_amount=100,
+            taker_fee=0.001,
+        )
+
+
+def test_insufficient_cash_for_later_pending_fill_stops_without_new_trade() -> None:
+    first = _snapshot('2026-01-01 00:05')
+    first_entry_and_stop = _snapshot(
+        '2026-01-01 00:10',
+        high=101,
+        low=70,
+        close=80,
+    )
+    next_fill = _snapshot('2026-01-01 00:15')
+
+    def dispatcher(snapshot: MarketSnapshot, mode: SignalMode) -> Signal:
+        return replace(
+            _signal(snapshot),
+            stop_distance=20,
+            target_distance=40,
+        )
+
+    result = _run(
+        _series(first, first_entry_and_stop, next_fill),
+        dispatcher,
+        opening_amount=90,
+        leverage=1,
+        taker_fee=0.01,
+    )
+    assert len(result.trades) == 1
+    assert result.trades[0].exit_reason == 'STOP'
+    assert result.equity_curve.index[-1] == first_entry_and_stop.closed_at
+
+
 def test_long_negative_funding_moves_dynamic_cross_liquidation_up() -> None:
     first = _snapshot('2026-01-01 07:55', opened_at='2026-01-01 07:50')
     entry = _snapshot('2026-01-01 08:00', opened_at='2026-01-01 07:55')
@@ -449,6 +488,68 @@ def test_cross_liquidation_uses_funding_before_intrabar_exit() -> None:
     assert trade.funding == -10
     assert trade.exit_reason == 'LIQUIDATION'
     assert trade.exit_time == entry_and_crash.closed_at
+    assert trade.liquidation_price == pytest.approx(trade.exit_price)
+
+
+def test_cross_funding_insolvency_liquidates_at_gap_open_and_stops() -> None:
+    first = _snapshot('2026-01-01 07:55', opened_at='2026-01-01 07:50')
+    entry = _snapshot(
+        '2026-01-01 08:00',
+        opened_at='2026-01-01 07:55',
+        high=100,
+        low=100,
+    )
+    gap = _snapshot(
+        '2026-01-01 16:10',
+        opened_at='2026-01-01 16:05',
+        open_price=100,
+        high=101,
+        low=99,
+        close=100,
+    )
+    wide_signal = replace(
+        _signal(first),
+        stop_distance=200,
+        target_distance=200,
+    )
+    result = _run(
+        _series(first, entry, gap),
+        lambda snapshot, mode: wide_signal if snapshot is first else None,
+        margin_mode=MarginMode.CROSS,
+        leverage=10,
+        taker_fee=0.001,
+        slippage_rate=0.01,
+        funding_rate=0.5,
+    )
+    trade = result.trades[0]
+    assert trade.exit_reason == 'LIQUIDATION'
+    assert trade.exit_time == gap.opened_at
+    assert trade.exit_price == 99
+    assert trade.funding == -100
+    assert trade.exit_commission == pytest.approx(trade.quantity * 99 * 0.001)
+    assert result.equity_curve.iloc[-1] == pytest.approx(100 + trade.pnl)
+
+
+def test_equity_curve_includes_fallback_liquidation_exit_costs() -> None:
+    first = _snapshot('2026-01-01 07:55', opened_at='2026-01-01 07:50')
+    entry = _snapshot('2026-01-01 08:00', opened_at='2026-01-01 07:55')
+    insolvent = _snapshot('2026-01-01 16:00', opened_at='2026-01-01 15:55')
+    wide_signal = replace(
+        _signal(first),
+        stop_distance=200,
+        target_distance=200,
+    )
+    result = _run(
+        _series(first, entry, insolvent),
+        lambda snapshot, mode: wide_signal if snapshot is first else None,
+        leverage=10,
+        taker_fee=0.001,
+        slippage_rate=0.01,
+        funding_rate=0.99,
+    )
+    trade = result.trades[0]
+    assert trade.exit_reason == 'LIQUIDATION'
+    assert result.equity_curve.iloc[-1] == pytest.approx(100 + trade.pnl)
 
 
 def test_short_positive_funding_moves_dynamic_cross_liquidation_away() -> None:

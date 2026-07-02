@@ -166,6 +166,7 @@ class SignalSimulator:
         equity_values: list[float] = []
         equity_index: list[pd.Timestamp] = []
         maximum_concurrent_positions = 0
+        stop_after_close = False
 
         for snapshot in snapshots:
             timestamp = snapshot.closed_at
@@ -175,6 +176,9 @@ class SignalSimulator:
                     opening_amount * leverage,
                     taker_fee,
                 )
+                if opening_amount + position_entry_commission > account_cash:
+                    pending = None
+                    break
                 account_cash -= position_entry_commission
                 position = build_trade_plan(
                     pending,
@@ -202,18 +206,36 @@ class SignalSimulator:
                 )
                 account_cash += funding_before_open
                 position_funding += funding_before_open
-                current_liquidation_price = _current_liquidation_price(
-                    position,
-                    account_cash,
-                    maintenance_margin_rate,
-                )
-                exit_details = _exit_for_snapshot(
-                    position,
-                    snapshot,
-                    slippage_rate,
-                    current_liquidation_price,
-                    phase='GAP',
-                )
+                effective_liquidation_price: float | None = None
+                if position.margin_mode is MarginMode.CROSS and account_cash <= 0:
+                    exit_details = (
+                        _adverse_exit_price(
+                            position.signal.side,
+                            snapshot.open,
+                            slippage_rate,
+                        ),
+                        'LIQUIDATION',
+                    )
+                    stop_after_close = True
+                else:
+                    current_liquidation_price = _current_liquidation_price(
+                        position,
+                        account_cash,
+                        maintenance_margin_rate,
+                    )
+                    exit_details = _exit_for_snapshot(
+                        position,
+                        snapshot,
+                        slippage_rate,
+                        current_liquidation_price,
+                        phase='GAP',
+                    )
+                    if (
+                        exit_details is not None
+                        and exit_details[1] == 'LIQUIDATION'
+                        and position.margin_mode is MarginMode.CROSS
+                    ):
+                        effective_liquidation_price = current_liquidation_price
                 if exit_details is not None:
                     exit_price, reason = exit_details
                     trade, account_cash = _close_trade(
@@ -225,6 +247,7 @@ class SignalSimulator:
                         entry_commission=position_entry_commission,
                         funding=position_funding,
                         taker_fee=taker_fee,
+                        effective_liquidation_price=effective_liquidation_price,
                     )
                     trades.append(trade)
                     position = None
@@ -252,6 +275,12 @@ class SignalSimulator:
                         current_liquidation_price,
                         phase='INTRABAR',
                     )
+                    if (
+                        exit_details is not None
+                        and exit_details[1] == 'LIQUIDATION'
+                        and position.margin_mode is MarginMode.CROSS
+                    ):
+                        effective_liquidation_price = current_liquidation_price
 
                 if position is not None and exit_details is not None:
                     exit_price, reason = exit_details
@@ -264,6 +293,7 @@ class SignalSimulator:
                         entry_commission=position_entry_commission,
                         funding=position_funding,
                         taker_fee=taker_fee,
+                        effective_liquidation_price=effective_liquidation_price,
                     )
                     trades.append(trade)
                     position = None
@@ -305,6 +335,10 @@ class SignalSimulator:
                     )
                     trades.append(trade)
                     position = None
+                    equity_values[-1] = account_cash
+                break
+
+            if stop_after_close:
                 break
 
             if position is None and pending is None:
@@ -403,6 +437,7 @@ def _close_trade(
     entry_commission: float,
     funding: float,
     taker_fee: float,
+    effective_liquidation_price: float | None = None,
 ) -> tuple[SimulationTrade, float]:
     gross_pnl = _gross_pnl(plan, exit_price)
     exit_commission = commission(plan.quantity * exit_price, taker_fee)
@@ -422,7 +457,11 @@ def _close_trade(
         target_price=plan.target_price,
         expected_stop_amount=plan.expected_stop_amount,
         expected_target_amount=plan.expected_target_amount,
-        liquidation_price=plan.liquidation_price,
+        liquidation_price=(
+            plan.liquidation_price
+            if effective_liquidation_price is None
+            else effective_liquidation_price
+        ),
         exit_time=exit_time,
         exit_price=exit_price,
         exit_reason=exit_reason,
@@ -531,6 +570,9 @@ def _validate_run_inputs(
     _rate('slippage_rate', slippage_rate, upper_bound=1)
     _rate('funding_rate', funding_rate, upper_bound=1)
     _rate('maintenance_margin_rate', maintenance_margin_rate, upper_bound=1)
+    entry_fee = commission(opening_amount * leverage, taker_fee)
+    if opening_amount + entry_fee > cash:
+        raise ValueError('cash must cover opening_amount and entry fee')
 
     previous: pd.Timestamp | None = None
     previous_opened_at: pd.Timestamp | None = None
