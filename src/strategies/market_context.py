@@ -18,6 +18,8 @@ _ENTRY_DURATIONS = {
 def _validated_frame(frame: pd.DataFrame, *, name: str) -> pd.DataFrame:
     if not isinstance(frame.index, pd.DatetimeIndex) or frame.index.tz is None:
         raise ValueError(f'{name} must use a timezone-aware DatetimeIndex')
+    if frame.index.has_duplicates:
+        raise ValueError(f'{name} index must not contain duplicate timestamps')
     missing = [column for column in _PRICE_COLUMNS if column not in frame.columns]
     if missing:
         raise ValueError(f'{name} is missing required columns: {", ".join(missing)}')
@@ -156,27 +158,61 @@ def build_market_snapshots(
         & np.isfinite(joined[indicators].to_numpy(dtype=float)).all(axis=1)
     ]
 
-    snapshots = [
-        MarketSnapshot(
-            closed_at=_timestamp(closed_at),
-            open=float(row.open),
-            high=float(row.high),
-            low=float(row.low),
-            close=float(row.close),
-            atr=float(row.atr),
-            rsi=float(row.rsi),
-            bollinger_upper=float(row.bollinger_upper),
-            bollinger_lower=float(row.bollinger_lower),
-            previous_high_20=float(row.previous_high_20),
-            previous_low_20=float(row.previous_low_20),
-            environment_side=cast(
-                Literal['BUY', 'SELL'] | None,
-                None if pd.isna(row.environment_side) else row.environment_side,
-            ),
-            filter_label=FilterLabel(row.filter_label),
-            context_1h_closed_at=_timestamp(row.context_1h_closed_at),
-            context_4h_closed_at=_timestamp(row.context_4h_closed_at),
-        )
-        for closed_at, row in joined.iterrows()
+    snapshot_columns = [
+        'open',
+        'high',
+        'low',
+        'close',
+        'atr',
+        'rsi',
+        'bollinger_upper',
+        'bollinger_lower',
+        'previous_high_20',
+        'previous_low_20',
+        'environment_side',
+        'filter_label',
+        'context_1h_closed_at',
+        'context_4h_closed_at',
     ]
+    snapshots = []
+    for values in joined.loc[:, snapshot_columns].itertuples(index=True, name=None):
+        (
+            closed_at,
+            open_price,
+            high,
+            low,
+            close,
+            atr,
+            rsi,
+            bollinger_upper,
+            bollinger_lower,
+            previous_high_20,
+            previous_low_20,
+            environment_side,
+            filter_label,
+            context_1h_closed_at,
+            context_4h_closed_at,
+        ) = values
+        snapshots.append(
+            MarketSnapshot(
+                closed_at=_timestamp(closed_at),
+                open=float(open_price),
+                high=float(high),
+                low=float(low),
+                close=float(close),
+                atr=float(atr),
+                rsi=float(rsi),
+                bollinger_upper=float(bollinger_upper),
+                bollinger_lower=float(bollinger_lower),
+                previous_high_20=float(previous_high_20),
+                previous_low_20=float(previous_low_20),
+                environment_side=cast(
+                    Literal['BUY', 'SELL'] | None,
+                    None if pd.isna(environment_side) else environment_side,
+                ),
+                filter_label=FilterLabel(filter_label),
+                context_1h_closed_at=_timestamp(context_1h_closed_at),
+                context_4h_closed_at=_timestamp(context_4h_closed_at),
+            )
+        )
     return pd.Series(snapshots, index=joined.index, dtype=object, name='snapshot')

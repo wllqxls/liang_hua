@@ -30,19 +30,19 @@ def ema(values: pd.Series, window: int | np.integer) -> pd.Series:
 
 
 def _wilder(values: pd.Series, window: int, *, seed_start: int) -> pd.Series:
-    float_values = values.astype(float)
-    result = pd.Series(float('nan'), index=values.index, dtype=float)
+    float_values = values.to_numpy(dtype=float, copy=False)
+    result = np.full(len(values), np.nan, dtype=float)
     seed_end = seed_start + window
     if len(values) < seed_end:
-        return result
+        return pd.Series(result, index=values.index, dtype=float)
 
     seed_index = seed_end - 1
-    result.iloc[seed_index] = float_values.iloc[seed_start:seed_end].mean()
+    result[seed_index] = float_values[seed_start:seed_end].mean()
     for index in range(seed_end, len(values)):
-        result.iloc[index] = (
-            result.iloc[index - 1] * (window - 1) + float_values.iloc[index]
+        result[index] = (
+            result[index - 1] * (window - 1) + float_values[index]
         ) / window
-    return result
+    return pd.Series(result, index=values.index, dtype=float)
 
 
 def rsi_wilder(close: pd.Series, window: int | np.integer = 14) -> pd.Series:

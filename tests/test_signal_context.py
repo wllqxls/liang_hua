@@ -1,4 +1,5 @@
 from dataclasses import FrozenInstanceError
+from time import perf_counter
 
 import numpy as np
 import pandas as pd
@@ -116,6 +117,44 @@ def test_snapshot_accepts_fifteen_minutes_and_sorts_indexes() -> None:
 
     assert snapshots.index.is_monotonic_increasing
     assert snapshots.index[0] == entry.sort_index().index[20] + pd.Timedelta(minutes=15)
+
+
+@pytest.mark.parametrize('frame_name', ['entry', 'hour', 'four_hour'])
+def test_snapshot_rejects_duplicate_indexes(frame_name: str) -> None:
+    entry, hour, four_hour = _frames()
+    frames = {'entry': entry, 'hour': hour, 'four_hour': four_hour}
+    duplicated = frames[frame_name].copy()
+    duplicated.index = duplicated.index.where(
+        np.arange(len(duplicated)) != 1,
+        duplicated.index[0],
+    )
+    frames[frame_name] = duplicated
+
+    with pytest.raises(ValueError, match=rf'{frame_name}.*duplicate'):
+        build_market_snapshots(
+            frames['entry'], frames['hour'], frames['four_hour'], timeframe='5m'
+        )
+
+
+def test_snapshot_builds_ten_thousand_unique_entries_within_reasonable_time() -> None:
+    entry_index = pd.date_range('2026-01-01', periods=10_000, freq='5min', tz='UTC')
+    hour_index = pd.date_range('2025-12-01', periods=2_000, freq='1h', tz='UTC')
+    four_hour_index = pd.date_range(
+        '2025-12-01', periods=500, freq='4h', tz='UTC'
+    )
+
+    started = perf_counter()
+    snapshots = build_market_snapshots(
+        _candles(entry_index, list(range(10_000))),
+        _candles(hour_index, list(range(2_000))),
+        _candles(four_hour_index, list(range(500))),
+        timeframe='5m',
+    )
+    elapsed = perf_counter() - started
+
+    assert len(snapshots) == 9_980
+    assert snapshots.index.is_unique
+    assert elapsed < 10
 
 
 def test_snapshot_omits_entries_before_first_higher_timeframe_close() -> None:
