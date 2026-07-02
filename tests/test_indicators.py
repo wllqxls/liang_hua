@@ -79,9 +79,34 @@ def test_public_indicators_reject_non_positive_windows(window: int) -> None:
         bollinger_bands(close, window=window)
 
 
-def test_bollinger_bands_reject_negative_deviations() -> None:
+@pytest.mark.parametrize('window', [1.5, True, False])
+def test_public_indicators_reject_non_integer_windows(window: object) -> None:
+    close = pd.Series([100.0, 101.0])
+
     with pytest.raises(ValueError):
-        bollinger_bands(pd.Series([100.0]), deviations=-0.1)
+        ema(close, window)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        rsi_wilder(close, window)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        atr_wilder(close + 1, close - 1, close, window)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        bollinger_bands(close, window=window)  # type: ignore[arg-type]
+
+
+def test_public_indicators_accept_numpy_integer_windows() -> None:
+    close = pd.Series([100.0, 101.0])
+    window = np.int64(2)
+
+    assert ema(close, window).iloc[-1] == pytest.approx(100.66666666666667)
+    assert rsi_wilder(close, window).isna().all()
+    assert atr_wilder(close + 1, close - 1, close, window).iloc[-1] == 2
+    assert bollinger_bands(close, window=window)[0].iloc[-1] == 100.5
+
+
+@pytest.mark.parametrize('deviations', [-0.1, np.nan, np.inf, -np.inf])
+def test_bollinger_bands_reject_invalid_deviations(deviations: float) -> None:
+    with pytest.raises(ValueError):
+        bollinger_bands(pd.Series([100.0]), deviations=deviations)
 
 
 def test_short_series_remain_uninitialized() -> None:
@@ -96,13 +121,50 @@ def test_short_series_remain_uninitialized() -> None:
     assert lower.isna().all()
 
 
-def test_non_finite_values_do_not_produce_infinite_indicators() -> None:
-    close = pd.Series([100.0] * 15 + [np.inf, 100.0])
-    high = close + 1
-    low = close - 1
+@pytest.mark.parametrize('invalid_value', [np.nan, np.inf, -np.inf])
+def test_single_series_indicators_reject_non_finite_prices(invalid_value: float) -> None:
+    close = pd.Series([100.0, invalid_value, 101.0])
 
-    outputs = [ema(close, 14), rsi_wilder(close, 14), atr_wilder(high, low, close, 14)]
-    outputs.extend(bollinger_bands(close, window=14))
+    with pytest.raises(ValueError):
+        ema(close, 2)
+    with pytest.raises(ValueError):
+        rsi_wilder(close, 2)
+    with pytest.raises(ValueError):
+        bollinger_bands(close, window=2)
 
-    for output in outputs:
-        assert not np.isinf(output.to_numpy()).any()
+
+@pytest.mark.parametrize('column', ['high', 'low', 'close'])
+@pytest.mark.parametrize('invalid_value', [np.nan, np.inf, -np.inf])
+def test_atr_rejects_non_finite_ohlc_prices(column: str, invalid_value: float) -> None:
+    prices = {
+        'high': pd.Series([101.0, 102.0]),
+        'low': pd.Series([99.0, 100.0]),
+        'close': pd.Series([100.0, 101.0]),
+    }
+    prices[column].iloc[0] = invalid_value
+
+    with pytest.raises(ValueError):
+        atr_wilder(prices['high'], prices['low'], prices['close'], window=2)
+
+
+@pytest.mark.parametrize(
+    ('misaligned_name', 'misaligned'),
+    [
+        ('high', pd.Series([101.0, 102.0], index=[1, 2])),
+        ('low', pd.Series([99.0, 100.0], index=[1, 2])),
+        ('close', pd.Series([100.0, 101.0], index=[1, 2])),
+    ],
+)
+def test_atr_rejects_misaligned_indexes(
+    misaligned_name: str,
+    misaligned: pd.Series,
+) -> None:
+    prices = {
+        'high': pd.Series([101.0, 102.0]),
+        'low': pd.Series([99.0, 100.0]),
+        'close': pd.Series([100.0, 101.0]),
+    }
+    prices[misaligned_name] = misaligned
+
+    with pytest.raises(ValueError):
+        atr_wilder(prices['high'], prices['low'], prices['close'], window=2)
