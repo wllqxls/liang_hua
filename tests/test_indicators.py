@@ -49,7 +49,39 @@ def test_wilder_rsi_and_atr_have_stable_seed_and_recursion(
     assert rsi.iloc[-1] == pytest.approx(79.4564428889596)
     assert atr.iloc[-1] == pytest.approx(4.204446064139942)
     assert rsi.iloc[:14].isna().all()
-    assert atr.iloc[:14].isna().all()
+    assert atr.iloc[:13].isna().all()
+    assert atr.iloc[13] == pytest.approx(4.0)
+
+
+def test_atr_seed_includes_the_first_true_range() -> None:
+    close = pd.Series([100.0, 100.0, 100.0, 100.0])
+    high = pd.Series([110.0, 102.0, 102.0, 102.0])
+    low = pd.Series([90.0, 98.0, 98.0, 98.0])
+
+    atr = atr_wilder(high, low, close, window=3)
+
+    assert atr.iloc[:2].isna().all()
+    assert atr.iloc[2] == pytest.approx((20.0 + 4.0 + 4.0) / 3)
+    assert atr.iloc[3] == pytest.approx((((20.0 + 4.0 + 4.0) / 3) * 2 + 4.0) / 3)
+
+
+@pytest.mark.parametrize('window', [0, -1])
+def test_public_indicators_reject_non_positive_windows(window: int) -> None:
+    close = pd.Series([100.0, 101.0])
+
+    with pytest.raises(ValueError):
+        ema(close, window)
+    with pytest.raises(ValueError):
+        rsi_wilder(close, window)
+    with pytest.raises(ValueError):
+        atr_wilder(close + 1, close - 1, close, window)
+    with pytest.raises(ValueError):
+        bollinger_bands(close, window=window)
+
+
+def test_bollinger_bands_reject_negative_deviations() -> None:
+    with pytest.raises(ValueError):
+        bollinger_bands(pd.Series([100.0]), deviations=-0.1)
 
 
 def test_short_series_remain_uninitialized() -> None:

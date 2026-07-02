@@ -4,11 +4,17 @@ import numpy as np
 import pandas as pd
 
 
+def _validate_window(window: int) -> None:
+    if window <= 0:
+        raise ValueError('window must be positive')
+
+
 def _finite_floats(values: pd.Series) -> pd.Series:
     return values.astype(float).replace([np.inf, -np.inf], np.nan)
 
 
 def ema(values: pd.Series, window: int) -> pd.Series:
+    _validate_window(window)
     return _finite_floats(values).ewm(
         span=window,
         adjust=False,
@@ -16,14 +22,16 @@ def ema(values: pd.Series, window: int) -> pd.Series:
     ).mean()
 
 
-def _wilder(values: pd.Series, window: int) -> pd.Series:
+def _wilder(values: pd.Series, window: int, *, seed_start: int) -> pd.Series:
     finite_values = _finite_floats(values)
     result = pd.Series(float('nan'), index=values.index, dtype=float)
-    if len(values) <= window:
+    seed_end = seed_start + window
+    if len(values) < seed_end:
         return result
 
-    result.iloc[window] = finite_values.iloc[1 : window + 1].mean()
-    for index in range(window + 1, len(values)):
+    seed_index = seed_end - 1
+    result.iloc[seed_index] = finite_values.iloc[seed_start:seed_end].mean()
+    for index in range(seed_end, len(values)):
         result.iloc[index] = (
             result.iloc[index - 1] * (window - 1) + finite_values.iloc[index]
         ) / window
@@ -31,9 +39,10 @@ def _wilder(values: pd.Series, window: int) -> pd.Series:
 
 
 def rsi_wilder(close: pd.Series, window: int = 14) -> pd.Series:
+    _validate_window(window)
     delta = _finite_floats(close).diff()
-    average_gain = _wilder(delta.clip(lower=0), window)
-    average_loss = _wilder(-delta.clip(upper=0), window)
+    average_gain = _wilder(delta.clip(lower=0), window, seed_start=1)
+    average_loss = _wilder(-delta.clip(upper=0), window, seed_start=1)
     relative_strength = average_gain / average_loss.where(average_loss != 0)
     rsi = 100 - 100 / (1 + relative_strength)
     return rsi.mask((average_loss == 0) & (average_gain > 0), 100).mask(
@@ -48,6 +57,7 @@ def atr_wilder(
     close: pd.Series,
     window: int = 14,
 ) -> pd.Series:
+    _validate_window(window)
     finite_high = _finite_floats(high)
     finite_low = _finite_floats(low)
     previous_close = _finite_floats(close).shift(1)
@@ -59,7 +69,7 @@ def atr_wilder(
         ],
         axis=1,
     ).max(axis=1)
-    return _wilder(true_range, window)
+    return _wilder(true_range, window, seed_start=0)
 
 
 def bollinger_bands(
@@ -67,6 +77,9 @@ def bollinger_bands(
     window: int = 20,
     deviations: float = 2,
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
+    _validate_window(window)
+    if deviations < 0:
+        raise ValueError('deviations must be non-negative')
     finite_close = _finite_floats(close)
     middle = finite_close.rolling(window).mean()
     standard_deviation = finite_close.rolling(window).std(ddof=0)
