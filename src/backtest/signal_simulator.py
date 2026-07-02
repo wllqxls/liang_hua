@@ -166,7 +166,6 @@ class SignalSimulator:
         equity_values: list[float] = []
         equity_index: list[pd.Timestamp] = []
         maximum_concurrent_positions = 0
-        stop_after_close = False
 
         for snapshot in snapshots:
             timestamp = snapshot.closed_at
@@ -212,31 +211,19 @@ class SignalSimulator:
                     account_cash,
                     maintenance_margin_rate,
                 )
-                if position.margin_mode is MarginMode.CROSS and account_cash <= 0:
+                exit_details = _exit_for_snapshot(
+                    position,
+                    snapshot,
+                    slippage_rate,
+                    current_liquidation_price,
+                    phase='GAP',
+                )
+                if (
+                    exit_details is not None
+                    and exit_details[1] == 'LIQUIDATION'
+                    and position.margin_mode is MarginMode.CROSS
+                ):
                     effective_liquidation_price = current_liquidation_price
-                    exit_details = (
-                        _adverse_exit_price(
-                            position.signal.side,
-                            snapshot.open,
-                            slippage_rate,
-                        ),
-                        'LIQUIDATION',
-                    )
-                    stop_after_close = True
-                else:
-                    exit_details = _exit_for_snapshot(
-                        position,
-                        snapshot,
-                        slippage_rate,
-                        current_liquidation_price,
-                        phase='GAP',
-                    )
-                    if (
-                        exit_details is not None
-                        and exit_details[1] == 'LIQUIDATION'
-                        and position.margin_mode is MarginMode.CROSS
-                    ):
-                        effective_liquidation_price = current_liquidation_price
                 if exit_details is not None:
                     exit_price, reason = exit_details
                     trade, account_cash = _close_trade(
@@ -381,9 +368,6 @@ class SignalSimulator:
                     trades.append(trade)
                     position = None
                     equity_values[-1] = account_cash
-                break
-
-            if stop_after_close:
                 break
 
             if position is None and pending is None:

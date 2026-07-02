@@ -8,6 +8,7 @@ import pytest
 from src.backtest.signal_simulator import (
     SignalSimulator,
     _current_liquidation_price,
+    _exit_for_snapshot,
     build_trade_plan,
     liquidation_price,
 )
@@ -550,7 +551,83 @@ def test_close_boundary_funding_triggers_dynamic_cross_liquidation() -> None:
     assert result.equity_curve.iloc[-1] == pytest.approx(100 + trade.pnl)
 
 
-def test_cross_funding_insolvency_liquidates_at_gap_open_and_stops() -> None:
+def test_negative_cross_cash_with_sufficient_long_profit_stays_open() -> None:
+    first = _snapshot('2026-01-01 07:55', opened_at='2026-01-01 07:50')
+    entry = _snapshot(
+        '2026-01-01 08:00',
+        opened_at='2026-01-01 07:55',
+        high=100,
+        low=100,
+    )
+    profitable_gap = _snapshot(
+        '2026-01-01 16:10',
+        opened_at='2026-01-01 16:05',
+        open_price=150,
+        high=151,
+        low=149,
+        close=150,
+    )
+    wide_signal = replace(
+        _signal(first),
+        stop_distance=200,
+        target_distance=200,
+    )
+    result = _run(
+        _series(first, entry, profitable_gap),
+        lambda snapshot, mode: wide_signal if snapshot is first else None,
+        margin_mode=MarginMode.CROSS,
+        leverage=10,
+        funding_rate=0.51,
+    )
+    trade = result.trades[0]
+    assert trade.exit_reason == 'FINALIZE'
+    assert trade.exit_time == profitable_gap.closed_at
+    assert trade.funding == -102
+    assert result.equity_curve.iloc[-1] == pytest.approx(100 + trade.pnl)
+    assert result.equity_curve.iloc[-1] > 0
+
+
+def test_negative_cross_cash_with_sufficient_short_profit_is_below_threshold() -> None:
+    first = _snapshot('2026-01-01 00:05')
+    safe = _snapshot(
+        '2026-01-01 00:10',
+        open_price=50,
+        high=60,
+        low=40,
+        close=50,
+    )
+    wide_signal = replace(
+        _signal(first, 'SELL'),
+        stop_distance=200,
+        target_distance=200,
+    )
+    plan = build_trade_plan(
+        wide_signal,
+        fill_price=100,
+        account_balance=100,
+        opening_amount=10,
+        leverage=10,
+        margin_mode=MarginMode.CROSS,
+    )
+    threshold = _current_liquidation_price(plan, -10, 0.005)
+    assert safe.open < threshold
+    assert _exit_for_snapshot(
+        plan,
+        safe,
+        0,
+        threshold,
+        phase='GAP',
+    ) is None
+    assert _exit_for_snapshot(
+        plan,
+        safe,
+        0,
+        threshold,
+        phase='INTRABAR',
+    ) is None
+
+
+def test_negative_cross_cash_crossing_threshold_liquidates_at_gap_open() -> None:
     first = _snapshot('2026-01-01 07:55', opened_at='2026-01-01 07:50')
     entry = _snapshot(
         '2026-01-01 08:00',
