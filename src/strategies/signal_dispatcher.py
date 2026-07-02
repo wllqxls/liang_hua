@@ -23,6 +23,9 @@ def dispatch_signal(
     if mode is SignalMode.RSI_REVERSAL:
         return rsi(snapshot, mode)
     if mode is SignalMode.KEY_LEVEL_RSI:
-        return key_level(snapshot, mode) or rsi(snapshot, mode)
+        key_level_signal = key_level(snapshot, mode)
+        if key_level_signal is not None:
+            return key_level_signal
+        return rsi(snapshot, mode)
 
     raise ValueError(f'Unsupported signal mode: {mode!r}')
