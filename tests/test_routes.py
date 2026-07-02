@@ -11,6 +11,13 @@ from src.backtest.engine import BacktestResult
 from src.web import routes
 
 
+def test_breakout_description_mentions_strong_context_filter() -> None:
+    option = next(item for item in routes.STRATEGY_OPTIONS if item['value'] == 'SRBreakout')
+
+    assert '高周期强趋势' in option['description']
+    assert '震荡时不交易' in option['description']
+
+
 def test_backtest_api_returns_error_for_unknown_strategy() -> None:
     client = TestClient(app)
 

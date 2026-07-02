@@ -76,3 +76,22 @@ def test_stage_two_search_is_bounded_and_deterministic() -> None:
         candidates = [item for item in first if item.strategy == f'S{index}']
         assert len(candidates) == 6
         assert {item.leverage for item in candidates} <= {3.0, 5.0, 10.0}
+
+
+def test_stage_two_preserves_exit_distances_across_leverage_changes() -> None:
+    base = SearchCandidate('SRBreakout', '1h', '5m', 192, 30, 10, 1.5, 0.5)
+
+    candidates = build_stage_two_candidates(
+        [base],
+        seed_key='ETH/USDT|fees',
+        position_amount=2,
+    )
+
+    assert any(
+        item.leverage == 3
+        and item.context_lookback == 192
+        and item.entry_lookback == 30
+        and item.take_profit_amount == 0.45
+        and item.stop_loss_amount == 0.15
+        for item in candidates
+    )

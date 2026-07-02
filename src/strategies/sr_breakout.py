@@ -21,7 +21,7 @@ from src.strategies.risk import (
     build_entry_tag,
     build_risk_prices,
     calculate_fractional_order_size,
-    context_allows_side,
+    strong_context_trend_allows_side,
 )
 
 
@@ -62,7 +62,7 @@ class SRBreakout(Strategy):
             return
 
         if price > self.resistance[-1]:
-            if not context_allows_side(self.data, "long", price):
+            if not strong_context_trend_allows_side(self.data, "long"):
                 return
             tag = build_entry_tag(
                 reason="收盘突破近期阻力",
@@ -89,7 +89,7 @@ class SRBreakout(Strategy):
             else:
                 self.buy(size=size, tp=take_profit, sl=stop_loss, tag=tag)
         elif price < self.support[-1]:
-            if not context_allows_side(self.data, "short", price):
+            if not strong_context_trend_allows_side(self.data, "short"):
                 return
             tag = build_entry_tag(
                 reason="收盘跌破近期支撑",

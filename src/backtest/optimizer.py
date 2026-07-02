@@ -134,12 +134,12 @@ def build_stage_two_candidates(
                 entry_lookback=entry_lookback,
                 leverage=float(leverage),
                 take_profit_amount=_bounded(
-                    base.take_profit_amount * tp_factor,
+                    base.take_profit_amount * (float(leverage) / max(base.leverage, 1)) * tp_factor,
                     0.1,
                     position_amount * leverage,
                 ),
                 stop_loss_amount=_bounded(
-                    base.stop_loss_amount * sl_factor,
+                    base.stop_loss_amount * (float(leverage) / max(base.leverage, 1)) * sl_factor,
                     0.1,
                     position_amount,
                 ),
@@ -157,8 +157,31 @@ def build_stage_two_candidates(
         if index < 3:
             for leverage in LEVERAGE_OPTIONS:
                 leverage_pool = [candidate for candidate in pool if candidate.leverage == float(leverage)]
+                scaled_take_profit = _bounded(
+                    base.take_profit_amount * (float(leverage) / max(base.leverage, 1)),
+                    0.1,
+                    position_amount * leverage,
+                )
+                scaled_stop_loss = _bounded(
+                    base.stop_loss_amount * (float(leverage) / max(base.leverage, 1)),
+                    0.1,
+                    position_amount,
+                )
+                candidate = next(
+                    (
+                        item
+                        for item in leverage_pool
+                        if item not in seen
+                        and item.context_lookback == base.context_lookback
+                        and item.entry_lookback == base.entry_lookback
+                        and item.take_profit_amount == scaled_take_profit
+                        and item.stop_loss_amount == scaled_stop_loss
+                    ),
+                    None,
+                )
                 _rng(f'{seed_key}|stage2|{index}|{base}|{leverage}').shuffle(leverage_pool)
-                candidate = next((item for item in leverage_pool if item not in seen), None)
+                if candidate is None:
+                    candidate = next((item for item in leverage_pool if item not in seen), None)
                 if candidate is None:
                     continue
                 selected.append(candidate)

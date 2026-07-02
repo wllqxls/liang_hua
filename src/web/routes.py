@@ -76,7 +76,7 @@ STRATEGY_OPTIONS = [
     {
         "value": "SRBreakout",
         "label": "支撑阻力突破",
-        "description": "规则策略：突破近期高点做多，跌破近期低点做空，方向由策略自动判断。",
+        "description": "规则策略：只在高周期强趋势中交易，向上突破做多、向下突破做空，震荡时不交易。",
     },
     {
         "value": "MovingAverageCross",

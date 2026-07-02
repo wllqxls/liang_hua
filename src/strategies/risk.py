@@ -116,6 +116,28 @@ def context_allows_side(data: object, side: str, price: float) -> bool:
     return trend == 0 or near_resistance
 
 
+def strong_context_trend_allows_side(
+    data: object,
+    side: str,
+    minimum_strength: float = 1.0,
+) -> bool:
+    """只在已收盘高周期的强趋势方向上允许入场。"""
+    trend = _latest_data_value(data, 'ContextTrend')
+    strength = _latest_data_value(data, 'ContextTrendStrength')
+    momentum = _latest_data_value(data, 'ContextTrendMomentum')
+    close = _latest_data_value(data, 'ContextClose')
+    fast_ma = _latest_data_value(data, 'ContextFastMA')
+    if any(value is None for value in [trend, strength, momentum, close, fast_ma]):
+        return False
+    if strength < minimum_strength:
+        return False
+    if side == 'long':
+        return trend > 0 and momentum > 0 and close > fast_ma
+    if side == 'short':
+        return trend < 0 and momentum < 0 and close < fast_ma
+    return False
+
+
 def build_entry_tag(reason: str, score: float, context: dict[str, Any] | None = None) -> dict[str, Any]:
     """生成可写入交易记录的入场标签。"""
     return {

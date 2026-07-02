@@ -90,9 +90,13 @@ def test_context_features_align_to_entry_timeframe(sample_ohlcv: pd.DataFrame) -
 
     assert len(merged) == len(entry)
     assert "ContextTrend" in merged.columns
+    assert "ContextTrendStrength" in merged.columns
+    assert "ContextTrendMomentum" in merged.columns
+    assert "ContextFastMA" in merged.columns
     assert "ContextSupport" in merged.columns
     assert "ContextResistance" in merged.columns
     assert merged["ContextTrend"].notna().any()
+    assert merged["ContextTrendStrength"].dropna().ge(0).all()
 
 
 def test_context_features_do_not_use_an_unclosed_context_candle() -> None:
@@ -114,8 +118,18 @@ def test_context_features_do_not_use_an_unclosed_context_candle() -> None:
     )
 
     merged = _merge_context_features(entry, context, lookback=5)
+    baseline = _merge_context_features(entry, context.iloc[:-1], lookback=5)
 
     assert merged.loc[entry_time, 'ContextClose'] == 100.0
+    assert merged.loc[entry_time, 'ContextTrendStrength'] == baseline.loc[
+        entry_time, 'ContextTrendStrength'
+    ]
+    assert merged.loc[entry_time, 'ContextTrendMomentum'] == baseline.loc[
+        entry_time, 'ContextTrendMomentum'
+    ]
+    assert merged.loc[entry_time, 'ContextFastMA'] == baseline.loc[
+        entry_time, 'ContextFastMA'
+    ]
 
 
 def test_filter_recent_days_keeps_latest_window(sample_ohlcv: pd.DataFrame) -> None:

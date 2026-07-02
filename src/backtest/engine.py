@@ -298,6 +298,13 @@ def _merge_context_features(
         axis=1,
     ).max(axis=1)
     context_features["ContextATR"] = true_range.rolling(atr_window).mean()
+    context_features["ContextTrendStrength"] = (
+        (fast_ma - slow_ma).abs() / context_features["ContextATR"]
+    )
+    context_features["ContextFastMA"] = fast_ma
+    context_features["ContextTrendMomentum"] = (
+        (fast_ma - fast_ma.shift(3)) / context_features["ContextATR"]
+    )
     context_features["ContextClose"] = context["Close"]
 
     # CCXT timestamps identify the opening time of each candle. At an entry
