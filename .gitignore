@@ -9,6 +9,7 @@
 venv/
 env/
 .venv/
+.worktrees/
 __pycache__/
 .pytest_cache/
 *.pyc
