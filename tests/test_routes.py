@@ -160,6 +160,25 @@ def test_backtest_api_rejects_cash_that_cannot_cover_entry_fee() -> None:
     assert '开仓手续费' in response.json()['detail']
 
 
+def test_backtest_fee_validation_does_not_call_engine(monkeypatch: Any) -> None:
+    calls = 0
+
+    def spy_run(self: object, **kwargs: Any) -> BacktestResult:
+        nonlocal calls
+        calls += 1
+        raise AssertionError('engine must not run')
+
+    monkeypatch.setattr(routes.BacktestEngine, 'run_signal_mode', spy_run)
+
+    response = TestClient(app).post(
+        '/api/backtest',
+        json={'cash': 10, 'opening_amount': 10, 'leverage': 5, 'taker_fee': 0.001},
+    )
+
+    assert response.status_code == 422
+    assert calls == 0
+
+
 def test_backtest_api_returns_safe_404_for_missing_market_data(
     monkeypatch: Any,
     caplog: Any,
@@ -303,6 +322,25 @@ def test_optimize_api_filters_low_quality_candidates(monkeypatch: Any) -> None:
     assert payload["candidates"] == []
     assert payload["evaluated_count"] == 6
     assert payload["filtered_count"] == payload["evaluated_count"]
+
+
+def test_optimize_fee_validation_does_not_call_pipeline(monkeypatch: Any) -> None:
+    calls = 0
+
+    def spy_search(req: Any, progress: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        raise AssertionError('optimizer must not run')
+
+    monkeypatch.setattr(routes, '_progressive_optimize', spy_search)
+
+    response = TestClient(app).post(
+        '/api/optimize',
+        json={'cash': 10, 'opening_amount': 10, 'leverage': 5, 'taker_fee': 0.001},
+    )
+
+    assert response.status_code == 422
+    assert calls == 0
 
 
 def test_data_status_api_reports_local_csv(tmp_path: Path, monkeypatch: Any) -> None:

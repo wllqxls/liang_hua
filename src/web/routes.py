@@ -139,11 +139,7 @@ async def index(request: Request) -> HTMLResponse:
 @router.post("/api/backtest", response_model=BacktestResponse)
 async def run_backtest(req: BacktestRequest) -> BacktestResponse:
     """运行回测。"""
-    if req.opening_amount > req.cash:
-        raise HTTPException(status_code=422, detail='开仓金额不能大于账户总金额')
-    entry_fee = req.opening_amount * req.leverage * req.taker_fee
-    if req.opening_amount + entry_fee > req.cash:
-        raise HTTPException(status_code=422, detail='账户余额必须覆盖开仓金额和开仓手续费')
+    _validate_request_funds(req)
 
     try:
         engine = BacktestEngine(data_dir="./data")
@@ -216,8 +212,7 @@ def _log_safe_backtest_error(event: str, error: Exception) -> None:
 @router.post('/api/optimize/jobs', response_model=OptimizationJobCreated)
 async def create_optimization_job(req: BacktestRequest) -> OptimizationJobCreated:
     """Start one progressive optimization job in a background thread."""
-    if req.opening_amount > req.cash:
-        return OptimizationJobCreated(success=False, error='开仓金额不能大于初始资金')
+    _validate_request_funds(req)
     timeframes = available_entry_timeframes(Path('./data'), req.symbol)
     if not timeframes:
         return OptimizationJobCreated(
@@ -257,9 +252,20 @@ async def get_optimization_job(job_id: str) -> OptimizationJobStatus:
 @router.post("/api/optimize", response_model=OptimizationResponse)
 async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
     """Run the same deterministic pipeline synchronously."""
-    if req.opening_amount > req.cash:
-        return OptimizationResponse(success=False, candidates=[], error='开仓金额不能大于初始资金')
+    _validate_request_funds(req)
     return _progressive_optimize(req, lambda **_: None)
+
+
+def _validate_request_funds(req: BacktestRequest) -> None:
+    """Reject requests whose initial cash cannot fund margin and entry fee."""
+    if req.opening_amount > req.cash:
+        raise HTTPException(status_code=422, detail='开仓金额不能大于账户总金额')
+    entry_fee = req.opening_amount * req.leverage * req.taker_fee
+    if req.opening_amount + entry_fee > req.cash:
+        raise HTTPException(
+            status_code=422,
+            detail='账户余额必须覆盖开仓金额和开仓手续费',
+        )
 
 
 def _new_optimization_job(job_id: str) -> dict:

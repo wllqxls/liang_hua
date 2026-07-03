@@ -6,7 +6,6 @@ import random
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Iterable
 
 from src.strategies.signal_models import MarginMode, SignalMode
 
@@ -49,8 +48,8 @@ def build_stage_one_candidates(
     seed_key: str,
     budget: int = STAGE_ONE_BUDGET,
 ) -> list[SearchCandidate]:
-    """Cover every approved mode/timeframe stratum at the nearest leverage."""
-    leverage = float(_nearest(current_leverage, LEVERAGE_OPTIONS))
+    """Cover every approved mode/timeframe stratum at the requested leverage."""
+    leverage = float(current_leverage)
     candidates = [
         SearchCandidate(mode, timeframe, leverage, margin_mode)
         for mode in modes
@@ -64,18 +63,17 @@ def build_stage_two_candidates(
     ranked: list[SearchCandidate],
     *,
     seed_key: str,
-    per_candidate: int = 2,
 ) -> list[SearchCandidate]:
-    """Explore only adjacent configured leverages around leading candidates."""
+    """Explore the exact base and configured options bracketing it."""
     selected: list[SearchCandidate] = []
-    seen = set(ranked)
+    seen: set[SearchCandidate] = set()
     for index, base in enumerate(ranked[:12]):
         pool = [
             SearchCandidate(base.mode, base.timeframe, float(leverage), base.margin_mode)
-            for leverage in _adjacent(base.leverage, LEVERAGE_OPTIONS)
+            for leverage in _bracketed(base.leverage, LEVERAGE_OPTIONS)
         ]
         _rng(f'{seed_key}|stage2|{index}|{base}').shuffle(pool)
-        for candidate in pool[:per_candidate]:
+        for candidate in pool:
             if candidate not in seen:
                 selected.append(candidate)
                 seen.add(candidate)
@@ -89,16 +87,13 @@ def _rng(seed_key: str) -> random.Random:
     return random.Random(int.from_bytes(digest[:8], 'big'))
 
 
-def _nearest(value: float, options: Iterable[int]) -> int:
-    return min(options, key=lambda option: abs(option - value))
-
-
-def _adjacent(value: float, options: list[int]) -> list[int]:
-    nearest = _nearest(value, options)
-    index = options.index(nearest)
-    adjacent: list[int] = []
-    if index > 0:
-        adjacent.append(options[index - 1])
-    if index + 1 < len(options):
-        adjacent.append(options[index + 1])
-    return adjacent
+def _bracketed(value: float, options: list[int]) -> list[float]:
+    lower = [option for option in options if option < value]
+    upper = [option for option in options if option > value]
+    bracketed: list[float] = []
+    if lower:
+        bracketed.append(float(lower[-1]))
+    bracketed.append(float(value))
+    if upper:
+        bracketed.append(float(upper[0]))
+    return bracketed

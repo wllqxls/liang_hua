@@ -37,7 +37,7 @@ def test_stage_one_is_deterministic_and_covers_modes_by_available_timeframe() ->
     assert {(item.mode, item.timeframe) for item in first} == {
         (mode, timeframe) for mode in SignalMode for timeframe in ['5m', '15m']
     }
-    assert {item.leverage for item in first} == {5.0}
+    assert {item.leverage for item in first} == {7.0}
     assert {item.margin_mode for item in first} == {MarginMode.CROSS}
 
 
@@ -62,7 +62,16 @@ def test_stage_two_is_deterministic_and_only_explores_adjacent_leverage() -> Non
     second = build_stage_two_candidates(ranked, seed_key='BTC/USDT|ISOLATED|fees')
 
     assert first == second
-    assert {item.leverage for item in first if item.mode is SignalMode.KEY_LEVEL} == {3.0, 10.0}
-    assert {item.leverage for item in first if item.mode is SignalMode.RSI_REVERSAL} == {100.0, 150.0}
+    assert {item.leverage for item in first if item.mode is SignalMode.KEY_LEVEL} == {3.0, 5.0, 10.0}
+    assert {item.leverage for item in first if item.mode is SignalMode.RSI_REVERSAL} == {100.0, 125.0, 150.0}
     assert {item.margin_mode for item in first} == {MarginMode.ISOLATED}
     assert all(item.leverage in LEVERAGE_OPTIONS for item in first)
+
+
+def test_stage_two_keeps_exact_unlisted_base_with_bracketing_options() -> None:
+    base = SearchCandidate(SignalMode.KEY_LEVEL, '5m', 7, MarginMode.CROSS)
+
+    candidates = build_stage_two_candidates([base], seed_key='seven-x')
+
+    assert {item.leverage for item in candidates} == {5.0, 7.0, 10.0}
+    assert len(candidates) == 3
