@@ -146,6 +146,7 @@ class OptimizationResponse(BaseModel):
     candidates: list[OptimizationCandidate]
     evaluated_count: int = 0
     filtered_count: int = 0
+    failure_count: int = 0
     partial: bool = False
     error: str | None = None
 
@@ -166,8 +167,9 @@ class OptimizationJobStatus(BaseModel):
     state: str = 'queued'
     stage: str = '等待'
     evaluated_count: int = 0
-    total_budget: int = 240
+    total_budget: int = 54
     filtered_count: int = 0
+    failure_count: int = 0
     elapsed_seconds: float = 0
     estimated_remaining_seconds: float = 0
     partial: bool = False

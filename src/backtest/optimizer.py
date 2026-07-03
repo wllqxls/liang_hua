@@ -66,7 +66,7 @@ def build_stage_two_candidates(
 ) -> list[SearchCandidate]:
     """Explore the exact base and configured options bracketing it."""
     selected: list[SearchCandidate] = []
-    seen: set[SearchCandidate] = set()
+    seen: set[SearchCandidate] = set(ranked)
     for index, base in enumerate(ranked[:12]):
         pool = [
             SearchCandidate(base.mode, base.timeframe, float(leverage), base.margin_mode)
