@@ -5,6 +5,7 @@
 let equityChart = null;
 let chartData = null;
 let optimizationCandidates = [];
+let operationGeneration = 0;
 const MIN_NOTIONAL_BY_SYMBOL = {
     'BTC/USDT': 50,
     'ETH/USDT': 20,
@@ -35,21 +36,24 @@ async function runBacktest() {
     const results = document.getElementById('results');
     const errorMsg = document.getElementById('error-msg');
 
-    // UI：加载状态
-    btn.disabled = true;
+    let payload;
+    try {
+        payload = collectBacktestPayload();
+    } catch (err) {
+        showError(err.message);
+        return;
+    }
+    const validationError = validateBacktestPayload(payload);
+    if (validationError) {
+        showError(validationError);
+        return;
+    }
+
+    const token = beginOperation();
     btn.textContent = '⏳ 回测中...';
     status.innerHTML = '<span class="spinner"></span>正在计算...';
     errorMsg.classList.add('hidden');
     results.classList.add('hidden');
-
-    const payload = collectBacktestPayload();
-    const validationError = validateBacktestPayload(payload);
-    if (validationError) {
-        showError(validationError);
-        btn.disabled = false;
-        btn.textContent = '▶ 开始回测';
-        return;
-    }
 
     try {
         const resp = await fetch('/api/backtest', {
@@ -58,12 +62,8 @@ async function runBacktest() {
             body: JSON.stringify(payload),
         });
 
-        const data = await resp.json();
-
-        if (!resp.ok) {
-            showError(formatApiError(data));
-            return;
-        }
+        const data = await parseApiResponse(resp);
+        if (!isCurrentOperation(token)) return;
 
         if (!data.success) {
             showError(data.error || '回测失败');
@@ -74,10 +74,9 @@ async function runBacktest() {
         status.textContent = '✅ 回测完成';
 
     } catch (err) {
-        showError('运行错误: ' + err.message);
+        if (isCurrentOperation(token)) showError('运行错误: ' + err.message);
     } finally {
-        btn.disabled = false;
-        btn.textContent = '▶ 开始回测';
+        finishOperation(token);
     }
 }
 
@@ -145,7 +144,14 @@ function bindRealtimeChecks() {
 function updateOrderCheck() {
     const msg = document.getElementById('order-check-msg');
     if (!msg) return;
-    const payload = collectBacktestPayload();
+    let payload;
+    try {
+        payload = collectBacktestPayload();
+    } catch (err) {
+        msg.textContent = err.message;
+        msg.className = 'notice-msg warning';
+        return;
+    }
     const check = getOrderCheck(payload);
     msg.textContent = check.message;
     msg.className = check.ok ? 'notice-msg positive' : 'notice-msg warning';
@@ -182,23 +188,27 @@ function collectBacktestPayload() {
         symbol: document.getElementById('symbol').value,
         timeframe: document.getElementById('timeframe').value,
         mode: document.getElementById('mode').value,
-        backtest_days: numberValue('backtest-days', 30),
-        cash: numberValue('cash', 100),
-        opening_amount: numberValue('opening-amount', 10),
+        backtest_days: requiredNumber('backtest-days', '回测天数'),
+        cash: requiredNumber('cash', '账户总金额'),
+        opening_amount: requiredNumber('opening-amount', '开仓金额'),
         margin_mode: document.getElementById('margin-mode').value,
-        leverage: numberValue('leverage', 5),
-        maker_fee: numberValue('maker-fee', 0.0002),
-        taker_fee: numberValue('taker-fee', 0.0005),
-        slippage_rate: numberValue('slippage-rate', 0.0002),
-        funding_rate: numberValue('funding-rate', 0.0001),
-        maintenance_margin_rate: numberValue('maintenance-margin-rate', 0.005),
+        leverage: requiredNumber('leverage', '杠杆'),
+        maker_fee: requiredNumber('maker-fee', 'Maker 手续费率'),
+        taker_fee: requiredNumber('taker-fee', 'Taker 手续费率'),
+        slippage_rate: requiredNumber('slippage-rate', '滑点率'),
+        funding_rate: requiredNumber('funding-rate', '资金费率'),
+        maintenance_margin_rate: requiredNumber('maintenance-margin-rate', '维持保证金率'),
     };
 }
 
 
-function numberValue(id, fallback) {
-    const value = parseFloat(document.getElementById(id).value);
-    return Number.isFinite(value) ? value : fallback;
+function requiredNumber(id, label) {
+    const rawValue = String(document.getElementById(id).value).trim();
+    const value = Number(rawValue);
+    if (rawValue === '' || !Number.isFinite(value)) {
+        throw new Error(label + '必须填写有效数字');
+    }
+    return value;
 }
 
 
@@ -211,17 +221,22 @@ function updateModeDescription() {
 
 
 async function optimizeParams() {
-    const btn = document.getElementById('optimize-btn');
     const status = document.getElementById('status');
     const results = document.getElementById('results');
-    const payload = collectBacktestPayload();
+    let payload;
+    try {
+        payload = collectBacktestPayload();
+    } catch (err) {
+        showError(err.message);
+        return;
+    }
     const validationError = validateOptimizationPayload(payload);
     if (validationError) {
         showError(validationError);
         return;
     }
 
-    btn.disabled = true;
+    const token = beginOperation();
     status.innerHTML = '<span class="spinner"></span>正在搜索策略和参数...';
     results.classList.remove('hidden');
 
@@ -231,29 +246,24 @@ async function optimizeParams() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
         });
-        const created = await resp.json();
-        if (!resp.ok) {
-            showError(formatApiError(created));
-            return;
-        }
+        const created = await parseApiResponse(resp);
+        if (!isCurrentOperation(token)) return;
         if (!created.success) {
             showError(created.error || '智能搜索启动失败');
             return;
         }
         const jobId = created.job_id;
-        while (true) {
+        while (isCurrentOperation(token)) {
             const jobResp = await fetch('/api/optimize/jobs/' + jobId);
-            const data = await jobResp.json();
-            if (!jobResp.ok) {
-                throw new Error(formatApiError(data));
-            }
+            const data = await parseApiResponse(jobResp);
+            if (!isCurrentOperation(token)) return;
             if (!data.success) {
                 throw new Error(data.error || '智能搜索失败');
             }
-            const evaluated = data.evaluated_count || 0;
-            const total = data.total_budget || 0;
+            const evaluated = finiteNumber(data.evaluated_count, 0);
+            const total = finiteNumber(data.total_budget, 0);
             const percent = total > 0 ? Math.min(100, Math.round(evaluated / total * 100)) : 0;
-            status.innerHTML = '<span class="spinner"></span>' + (data.stage || '搜索') +
+            status.innerHTML = '<span class="spinner"></span>' + escapeHtml(data.stage || '搜索') +
                 '：' + evaluated + ' / ' + total + '（' + percent + '%），已用 ' +
                 formatDuration(data.elapsed_seconds || 0);
 
@@ -261,7 +271,7 @@ async function optimizeParams() {
                 renderOptimizationTable(data.candidates, data);
                 status.textContent = '✅ 智能搜索完成，评估 ' + evaluated +
                     ' 个，通过 ' + (data.candidates || []).length + ' 个，过滤 ' +
-                    (data.filtered_count || 0) + ' 个' + (data.partial ? '（达到时间预算，已提前结束）' : '');
+                    finiteNumber(data.filtered_count, 0) + ' 个' + (data.partial ? '（达到时间预算，已提前结束）' : '');
                 results.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 break;
             }
@@ -271,9 +281,9 @@ async function optimizeParams() {
             await delay(1000);
         }
     } catch (err) {
-        showError('运行错误: ' + err.message);
+        if (isCurrentOperation(token)) showError('运行错误: ' + err.message);
     } finally {
-        btn.disabled = false;
+        finishOperation(token);
     }
 }
 
@@ -291,10 +301,7 @@ async function loadDataStatus(successMessage) {
 
     try {
         const resp = await fetch('/api/data-status');
-        const data = await resp.json();
-        if (!resp.ok) {
-            throw new Error(formatApiError(data));
-        }
+        const data = await parseApiResponse(resp);
         renderDataStatusTable(data);
         statusText.textContent = successMessage || '数据状态已更新';
     } catch (err) {
@@ -310,13 +317,20 @@ async function fetchSelectedData() {
     const btn = document.getElementById('fetch-data-btn');
     const statusText = document.getElementById('data-status-text');
     const symbol = document.getElementById('symbol').value;
-    const days = parseInt(document.getElementById('fetch-days').value) || 365;
+    let days;
+    try {
+        days = requiredNumber('fetch-days', '拉取天数');
+    } catch (err) {
+        statusText.textContent = err.message;
+        return;
+    }
     const timeframes = Array.from(
         new Set([document.getElementById('timeframe').value, '1h', '4h'])
     );
 
     btn.disabled = true;
-    statusText.innerHTML = '<span class="spinner"></span>正在拉取 ' + symbol + ' ' + timeframes.join(' + ') + '...';
+    statusText.innerHTML = '<span class="spinner"></span>正在拉取 ' + escapeHtml(symbol) + ' ' +
+        timeframes.map(escapeHtml).join(' + ') + '...';
 
     try {
         const saved = [];
@@ -326,12 +340,10 @@ async function fetchSelectedData() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ symbol, timeframe, days }),
             });
-            const data = await resp.json();
+            const data = await parseApiResponse(resp);
 
-            if (!resp.ok || !data.success) {
-                statusText.textContent = resp.ok
-                    ? (data.error || '数据拉取失败')
-                    : formatApiError(data);
+            if (!data.success) {
+                statusText.textContent = data.error || '数据拉取失败';
                 return;
             }
             const rows = data.rows == null ? '--' : data.rows.toLocaleString();
@@ -360,12 +372,12 @@ function renderDataStatusTable(items) {
         const row = document.createElement('tr');
         const statusClass = item.exists ? 'positive' : 'negative';
         const statusText = item.exists ? '已存在' : '缺失';
-        const rows = item.rows == null ? '--' : item.rows.toLocaleString();
-        const size = item.file_size_kb == null ? '--' : item.file_size_kb.toFixed(1) + ' KB';
+        const rows = item.rows == null ? '--' : formatNumber(item.rows, 0);
+        const size = item.file_size_kb == null ? '--' : formatNumber(item.file_size_kb, 1) + ' KB';
 
         row.innerHTML =
-            '<td>' + item.symbol + '</td>' +
-            '<td>' + item.timeframe + '</td>' +
+            '<td>' + escapeHtml(item.symbol || '--') + '</td>' +
+            '<td>' + escapeHtml(item.timeframe || '--') + '</td>' +
             '<td class="' + statusClass + '">' + statusText + '</td>' +
             '<td>' + rows + '</td>' +
             '<td>' + size + '</td>';
@@ -540,9 +552,9 @@ function renderTradesTable(trades) {
             '<td>' + escapeHtml(t.margin_mode || '--') + '</td>' +
             '<td>' + escapeHtml(t.environment_1h || '--') + '</td>' +
             '<td>' + escapeHtml(t.filter_4h || '--') + '</td>' +
-            '<td>' + formatTime(t.signal_time) + '</td>' +
+            '<td>' + escapeHtml(formatTime(t.signal_time)) + '</td>' +
             '<td>' + formatNumber(t.signal_price, 2) + '</td>' +
-            '<td>' + formatTime(t.fill_time) + '</td>' +
+            '<td>' + escapeHtml(formatTime(t.fill_time)) + '</td>' +
             '<td>' + formatNumber(t.fill_price, 2) + '</td>' +
             '<td>' + formatNumber(t.atr_snapshot, 4) + '</td>' +
             '<td>' + formatNumber(t.stop_price, 2) + '</td>' +
@@ -588,10 +600,10 @@ function renderOptimizationTable(candidates, summary) {
         const badge = qualityBadge(item.quality_label, item.quality_grade, item.quality_reasons);
         const robustness = robustnessBadge(item.robustness_label, item.robustness_score);
         row.innerHTML =
-            '<td>' + item.rank + '</td>' +
+            '<td>' + formatNumber(item.rank, 0) + '</td>' +
             '<td>' + escapeHtml(item.mode_label || item.mode || '--') + '</td>' +
             '<td>' + badge + '</td>' +
-            '<td>' + (item.timeframe || '--') + '</td>' +
+            '<td>' + escapeHtml(item.timeframe || '--') + '</td>' +
             '<td>' + escapeHtml(item.margin_mode || '--') + '</td>' +
             '<td>x' + formatNumber(item.leverage, 0) + '</td>' +
             '<td class="' + returnClass + '">' + formatNumber(item.total_return_pct, 2) + '</td>' +
@@ -599,13 +611,13 @@ function renderOptimizationTable(candidates, summary) {
             '<td>' + formatNumber(item.random_pass_rate_pct, 0) + '%</td>' +
             '<td class="' + randomWorstClass + '">' + formatNumber(item.random_worst_return_pct, 2) + '</td>' +
             '<td>' + formatNumber(item.long_window_return_pct, 2) +
-                (item.long_window_days ? ' (' + item.long_window_days + '天)' : '') + '</td>' +
+                (item.long_window_days ? ' (' + formatNumber(item.long_window_days, 0) + '天)' : '') + '</td>' +
             '<td>' + robustness + '</td>' +
             '<td class="' + drawdownClass + '">' + formatNumber(item.max_drawdown_pct, 2) + '</td>' +
             '<td>' + formatNumber(item.win_rate_pct, 2) + '</td>' +
             '<td>' + formatNumber(item.profit_factor, 2) + '</td>' +
-            '<td>' + item.max_consecutive_losses + '</td>' +
-            '<td>' + item.num_trades + '</td>' +
+            '<td>' + formatNumber(item.max_consecutive_losses, 0) + '</td>' +
+            '<td>' + formatNumber(item.num_trades, 0) + '</td>' +
             '<td>' + formatNumber(item.quality_score, 0) + '</td>' +
             '<td><button class="btn-mini" onclick="applyOptimizationCandidate(' + index + ')">套用</button></td>';
         tbody.appendChild(row);
@@ -650,6 +662,27 @@ function delay(milliseconds) {
 }
 
 
+function beginOperation() {
+    operationGeneration += 1;
+    document.getElementById('run-btn').disabled = true;
+    document.getElementById('optimize-btn').disabled = true;
+    return operationGeneration;
+}
+
+
+function isCurrentOperation(token) {
+    return token === operationGeneration;
+}
+
+
+function finishOperation(token) {
+    if (!isCurrentOperation(token)) return;
+    document.getElementById('run-btn').disabled = false;
+    document.getElementById('optimize-btn').disabled = false;
+    document.getElementById('run-btn').textContent = '▶ 开始回测';
+}
+
+
 function formatDuration(seconds) {
     const value = Math.max(0, Math.round(seconds));
     const minutes = Math.floor(value / 60);
@@ -676,6 +709,12 @@ function formatNumber(value, decimals) {
     const number = Number(value);
     if (!Number.isFinite(number)) return '--';
     return number.toFixed(decimals);
+}
+
+
+function finiteNumber(value, fallback) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
 }
 
 
@@ -731,6 +770,35 @@ function formatApiError(data) {
 }
 
 
+async function parseApiResponse(response) {
+    let text = '';
+    try {
+        text = await response.text();
+    } catch {
+        text = '';
+    }
+
+    let data = null;
+    if (text.trim() !== '') {
+        try {
+            data = JSON.parse(text);
+        } catch {
+            data = null;
+        }
+    }
+
+    if (!response.ok) {
+        const hasDetail = data && (
+            typeof data.detail === 'string' || Array.isArray(data.detail)
+        );
+        const status = response.status == null ? '' : ' ' + response.status;
+        const statusText = response.statusText ? ' ' + response.statusText : '';
+        throw new Error(hasDetail ? formatApiError(data) : ('HTTP' + status + statusText).trim());
+    }
+    return data || {};
+}
+
+
 function showError(msg) {
     const errorMsg = document.getElementById('error-msg');
     const status = document.getElementById('status');
@@ -742,11 +810,17 @@ function showError(msg) {
 }
 
 
-globalThis.__backtestTestApi = Object.freeze({
-    applyOptimizationCandidate,
-    collectBacktestPayload,
-    fetchSelectedData,
-    renderTradesTable,
-    runBacktest,
-    validateBacktestPayload,
-});
+if (globalThis.__BACKTEST_TEST__ === true) {
+    globalThis.__backtestTestApi = Object.freeze({
+        applyOptimizationCandidate,
+        collectBacktestPayload,
+        fetchSelectedData,
+        optimizeParams,
+        parseApiResponse,
+        renderDataStatusTable,
+        renderOptimizationTable,
+        renderTradesTable,
+        runBacktest,
+        validateBacktestPayload,
+    });
+}

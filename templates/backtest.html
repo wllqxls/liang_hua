@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>量化回测系统</title>
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/style.css?v=runtime-hardening-1">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -150,10 +150,10 @@
                 </div>
             </details>
             <div id="order-check-msg" class="notice-msg hidden"></div>
-            <div id="error-msg" class="error-msg hidden"></div>
+            <div id="error-msg" class="error-msg hidden" role="alert" aria-live="assertive"></div>
             <button id="run-btn" class="btn-primary" onclick="runBacktest()">▶ 开始回测</button>
             <button id="optimize-btn" class="btn-secondary" onclick="optimizeParams()">智能参数搜索</button>
-            <span id="status" class="status-text"></span>
+            <span id="status" class="status-text" aria-live="polite"></span>
         </section>
 
         <!-- 结果面板 -->
@@ -261,6 +261,6 @@
         </section>
     </div>
 
-    <script src="/static/js/backtest.js?v=signal-margin-1"></script>
+    <script src="/static/js/backtest.js?v=runtime-hardening-1"></script>
 </body>
 </html>

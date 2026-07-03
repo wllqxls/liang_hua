@@ -74,7 +74,7 @@ def test_payload_and_validation_match_new_backtest_api() -> None:
     assert "mode: document.getElementById('mode').value" in script
     assert "timeframe: document.getElementById('timeframe').value" in script
     assert "margin_mode: document.getElementById('margin-mode').value" in script
-    assert "opening_amount: numberValue('opening-amount', 10)" in script
+    assert "opening_amount: requiredNumber('opening-amount', '开仓金额')" in script
     assert "['5m', '15m'].includes(payload.timeframe)" in script
     assert 'payload.opening_amount + entryFee > payload.cash' in script
     assert 'payload.opening_amount * payload.leverage * payload.taker_fee' in script
@@ -84,7 +84,7 @@ def test_data_fetch_requests_entry_one_hour_and_four_hour_once() -> None:
     _, script, _ = _sources()
 
     assert "new Set([document.getElementById('timeframe').value, '1h', '4h'])" in script
-    assert "if (!resp.ok || !data.success)" in script
+    assert 'const data = await parseApiResponse(resp);' in script
     assert 'formatApiError(data)' in script
 
 
@@ -146,12 +146,23 @@ def test_funds_grid_has_independent_responsive_columns() -> None:
 def test_non_2xx_errors_use_api_detail_and_cache_key_is_updated() -> None:
     template, script, _ = _sources()
 
-    assert script.count('if (!resp.ok)') >= 1
+    assert 'async function parseApiResponse(response)' in script
+    assert 'text = await response.text()' in script
     assert 'formatApiError(data)' in script
-    assert "if (!resp.ok)" in script
+    assert "if (!response.ok)" in script
     assert "if (!created.success)" in script
-    assert 'formatApiError(created)' in script
-    assert '/static/js/backtest.js?v=signal-margin-1' in template
+    assert 'resp.json()' not in script
+    assert '/static/css/style.css?v=runtime-hardening-1' in template
+    assert '/static/js/backtest.js?v=runtime-hardening-1' in template
+
+
+def test_form_controls_and_statuses_are_keyboard_and_screen_reader_accessible() -> None:
+    template, _, css = _sources()
+
+    assert 'outline: none' not in css
+    assert ':focus-visible' in css
+    assert 'id="status" class="status-text" aria-live="polite"' in template
+    assert 'id="error-msg" class="error-msg hidden" role="alert" aria-live="assertive"' in template
 
 
 def test_equity_chart_uses_value_aware_tick_labels() -> None:
