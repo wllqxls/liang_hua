@@ -740,3 +740,13 @@ function showError(msg) {
     status.textContent = '回测失败';
     errorMsg.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
+
+
+globalThis.__backtestTestApi = Object.freeze({
+    applyOptimizationCandidate,
+    collectBacktestPayload,
+    fetchSelectedData,
+    renderTradesTable,
+    runBacktest,
+    validateBacktestPayload,
+});

@@ -87,6 +87,15 @@ def test_index_renders_signal_mode_names() -> None:
         'RSI_REVERSAL',
         'KEY_LEVEL_RSI',
     ]
+    html = response.text
+    assert '<option value="KEY_LEVEL"' in html
+    assert '>关键位</option>' in html
+    assert '<option value="RSI_REVERSAL"' in html
+    assert '>RSI 反转</option>' in html
+    assert '<option value="KEY_LEVEL_RSI"' in html
+    assert '>关键位 + RSI 反转</option>' in html
+    assert '<option value="ISOLATED" selected>逐仓</option>' in html
+    assert '<select id="strategy">' not in html
 
 
 def test_backtest_api_rejects_unsupported_entry_timeframe() -> None:

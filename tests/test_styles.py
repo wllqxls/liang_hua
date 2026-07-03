@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).parents[1]
@@ -13,6 +14,18 @@ def _sources() -> tuple[str, str, str]:
         SCRIPT_PATH.read_text(encoding='utf-8'),
         STYLE_PATH.read_text(encoding='utf-8'),
     )
+
+
+def test_frontend_behavior_in_node_vm() -> None:
+    result = subprocess.run(
+        ['node', str(ROOT / 'tests' / 'frontend_harness.js')],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_control_contract_uses_signal_and_margin_modes_in_required_order() -> None:
