@@ -304,12 +304,13 @@ def test_progressive_pipeline_stops_before_validation_at_hard_deadline(
     monkeypatch: Any,
 ) -> None:
     candidate = SearchCandidate(SignalMode.KEY_LEVEL, '5m', 7, MarginMode.CROSS)
-    clock = iter([0.0, 0.0, routes.SEARCH_HARD_LIMIT_SECONDS])
+    clock = {'now': 0.0}
     calls = 0
 
     def fake_run(self: object, **kwargs: Any) -> object:
         nonlocal calls
         calls += 1
+        clock['now'] = routes.SEARCH_HARD_LIMIT_SECONDS
         return SimpleNamespace(
             total_return_pct=12,
             win_rate_pct=60,
@@ -319,7 +320,7 @@ def test_progressive_pipeline_stops_before_validation_at_hard_deadline(
             trade_list=[{'pnl': value} for value in [2, -1, 2, -1, 2, -1, 2, -1]],
         )
 
-    monkeypatch.setattr(routes.time, 'monotonic', lambda: next(clock))
+    monkeypatch.setattr(routes.time, 'monotonic', lambda: clock['now'])
     monkeypatch.setattr(routes, 'available_entry_timeframes', lambda *_: ['5m'])
     monkeypatch.setattr(routes, 'build_stage_one_candidates', lambda **_: [candidate])
     monkeypatch.setattr(routes, 'build_stage_two_candidates', lambda *_args, **_kwargs: [])
@@ -336,3 +337,102 @@ def test_progressive_pipeline_stops_before_validation_at_hard_deadline(
     assert response.partial is True
     assert response.candidates == []
     assert calls == 1
+
+
+def _run_pipeline_with_deadline_crossing_on_call(
+    monkeypatch: Any,
+    crossing_call: int,
+) -> tuple[OptimizationResponse, list[dict[str, Any]]]:
+    candidate = SearchCandidate(SignalMode.KEY_LEVEL, '5m', 7, MarginMode.CROSS)
+    clock = {'now': 0.0}
+    calls: list[dict[str, Any]] = []
+
+    def fake_run(self: object, **kwargs: Any) -> object:
+        calls.append(kwargs)
+        if len(calls) == crossing_call:
+            clock['now'] = routes.SEARCH_HARD_LIMIT_SECONDS
+        return SimpleNamespace(
+            total_return_pct=12,
+            win_rate_pct=60,
+            max_drawdown_pct=-5,
+            sharpe_ratio=1.5,
+            num_trades=8,
+            trade_list=[{'pnl': value} for value in [2, -1, 2, -1, 2, -1, 2, -1]],
+        )
+
+    monkeypatch.setattr(routes.time, 'monotonic', lambda: clock['now'])
+    monkeypatch.setattr(routes, 'available_entry_timeframes', lambda *_: ['5m'])
+    monkeypatch.setattr(routes, 'build_stage_one_candidates', lambda **_: [candidate])
+    monkeypatch.setattr(routes, 'build_stage_two_candidates', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        routes,
+        '_load_data_bounds',
+        lambda *_: (pd.Timestamp('2025-01-01'), pd.Timestamp('2025-07-01')),
+    )
+    monkeypatch.setattr(routes.BacktestEngine, 'run_signal_mode', fake_run)
+
+    response = routes._progressive_optimize(
+        BacktestRequest(backtest_days=60, leverage=7),
+        lambda **_: None,
+    )
+    return response, calls
+
+
+def test_oos_crossing_hard_deadline_starts_no_random_or_long_windows(
+    monkeypatch: Any,
+) -> None:
+    response, calls = _run_pipeline_with_deadline_crossing_on_call(monkeypatch, 2)
+
+    assert len(calls) == 2  # in-sample, OOS
+    assert response.partial is True
+    assert response.candidates == []
+
+
+def test_first_random_crossing_hard_deadline_starts_no_second_random_or_long_window(
+    monkeypatch: Any,
+) -> None:
+    response, calls = _run_pipeline_with_deadline_crossing_on_call(monkeypatch, 3)
+
+    assert len(calls) == 3  # in-sample, OOS, random 1
+    assert response.partial is True
+    assert response.candidates == []
+
+
+def test_ninety_day_crossing_hard_deadline_starts_no_180_day_window(
+    monkeypatch: Any,
+) -> None:
+    response, calls = _run_pipeline_with_deadline_crossing_on_call(monkeypatch, 5)
+
+    assert len(calls) == 5  # in-sample, OOS, random 1/2, 90d
+    assert response.partial is True
+    assert response.candidates == []
+
+
+def test_candidate_does_not_start_when_data_loading_reaches_hard_deadline(
+    monkeypatch: Any,
+) -> None:
+    candidate = SearchCandidate(SignalMode.KEY_LEVEL, '5m', 7, MarginMode.CROSS)
+    clock = {'now': 0.0}
+    calls = 0
+
+    def load_bounds(*_: object) -> tuple[pd.Timestamp, pd.Timestamp]:
+        clock['now'] = routes.SEARCH_HARD_LIMIT_SECONDS
+        return pd.Timestamp('2025-01-01'), pd.Timestamp('2025-07-01')
+
+    def fake_run(self: object, **kwargs: Any) -> object:
+        nonlocal calls
+        calls += 1
+        raise AssertionError('candidate must not start after the hard deadline')
+
+    monkeypatch.setattr(routes.time, 'monotonic', lambda: clock['now'])
+    monkeypatch.setattr(routes, 'available_entry_timeframes', lambda *_: ['5m'])
+    monkeypatch.setattr(routes, 'build_stage_one_candidates', lambda **_: [candidate])
+    monkeypatch.setattr(routes, 'build_stage_two_candidates', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(routes, '_load_data_bounds', load_bounds)
+    monkeypatch.setattr(routes.BacktestEngine, 'run_signal_mode', fake_run)
+
+    response = routes._progressive_optimize(BacktestRequest(), lambda **_: None)
+
+    assert calls == 0
+    assert response.partial is True
+    assert response.candidates == []

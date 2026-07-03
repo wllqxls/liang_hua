@@ -362,13 +362,25 @@ def _progressive_optimize(
     filtered_count = 0
     partial = False
 
+    def hard_deadline_reached() -> bool:
+        return time.monotonic() - started_at >= SEARCH_HARD_LIMIT_SECONDS
+
     for candidate in stage_one:
         if _candidate_budget_exhausted(started_at, evaluated_count):
             partial = True
             break
-        item, filtered = _evaluate_progressive_candidate(engine, req, candidate, bounds_cache)
+        item, filtered = _evaluate_progressive_candidate(
+            engine,
+            req,
+            candidate,
+            bounds_cache,
+            hard_deadline_reached,
+        )
         evaluated_count += 1
         filtered_count += int(filtered)
+        if hard_deadline_reached():
+            partial = True
+            break
         if item is not None:
             rankless.append(item)
         progress(
@@ -390,9 +402,18 @@ def _progressive_optimize(
         if _candidate_budget_exhausted(started_at, evaluated_count):
             partial = True
             break
-        item, filtered = _evaluate_progressive_candidate(engine, req, candidate, bounds_cache)
+        item, filtered = _evaluate_progressive_candidate(
+            engine,
+            req,
+            candidate,
+            bounds_cache,
+            hard_deadline_reached,
+        )
         evaluated_count += 1
         filtered_count += int(filtered)
+        if hard_deadline_reached():
+            partial = True
+            break
         if item is not None:
             rankless.append(item)
         progress(
@@ -406,7 +427,7 @@ def _progressive_optimize(
     validation_pool = sorted(rankless, key=lambda item: item['score'], reverse=True)[:VALIDATION_POOL_SIZE]
     validated_pool: list[dict] = []
     for item in validation_pool:
-        if time.monotonic() - started_at >= SEARCH_HARD_LIMIT_SECONDS:
+        if hard_deadline_reached():
             partial = True
             break
         data_start, data_end = _load_data_bounds(engine, req.symbol, item['timeframe'])
@@ -421,7 +442,11 @@ def _progressive_optimize(
             out_sample_days=out_sample_days,
             data_start=data_start,
             data_end=data_end,
+            hard_deadline_reached=hard_deadline_reached,
         )
+        if validation is None:
+            partial = True
+            break
         item.update({
             'out_sample_return_pct': validation.out_sample_return_pct,
             'out_sample_quality_score': validation.out_sample_quality_score,
@@ -443,14 +468,27 @@ def _progressive_optimize(
         )
 
     ranked = sorted(validated_pool, key=lambda item: item['score'], reverse=True)[:10]
-    for item in ranked[:3]:
-        if time.monotonic() - started_at >= SEARCH_HARD_LIMIT_SECONDS:
+    long_validation_items = ranked[:3]
+    for index, item in enumerate(long_validation_items):
+        if hard_deadline_reached():
             partial = True
+            for incomplete in long_validation_items[index:]:
+                ranked.remove(incomplete)
             break
-        long_return, long_days, calls = _long_window_validation(engine, req, item)
+        long_return, long_days, calls, completed = _long_window_validation(
+            engine,
+            req,
+            item,
+            hard_deadline_reached,
+        )
+        evaluated_count += calls
+        if not completed:
+            partial = True
+            for incomplete in long_validation_items[index:]:
+                ranked.remove(incomplete)
+            break
         item['long_window_return_pct'] = long_return
         item['long_window_days'] = long_days
-        evaluated_count += calls
         progress(
             stage='长窗口验证',
             evaluated_count=evaluated_count,
@@ -493,6 +531,7 @@ def _evaluate_progressive_candidate(
     req: BacktestRequest,
     candidate: SearchCandidate,
     bounds_cache: dict[str, tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp, int]],
+    hard_deadline_reached: Callable[[], bool] | None = None,
 ) -> tuple[dict | None, bool]:
     if candidate.timeframe not in bounds_cache:
         data_start, data_end = _load_data_bounds(engine, req.symbol, candidate.timeframe)
@@ -500,6 +539,8 @@ def _evaluate_progressive_candidate(
         in_days = max(1, math.ceil((in_end - in_start).total_seconds() / 86400))
         bounds_cache[candidate.timeframe] = (data_start, data_end, in_start, in_end, in_days)
     _, _, in_start, in_end, in_days = bounds_cache[candidate.timeframe]
+    if hard_deadline_reached is not None and hard_deadline_reached():
+        return None, False
     try:
         result = engine.run_signal_mode(
             symbol=req.symbol,
@@ -517,6 +558,8 @@ def _evaluate_progressive_candidate(
             funding_rate=req.funding_rate,
             maintenance_margin_rate=req.maintenance_margin_rate,
         )
+        if hard_deadline_reached is not None and hard_deadline_reached():
+            return None, False
     except Exception:
         logger.exception('渐进搜索候选失败')
         return None, False
@@ -581,19 +624,24 @@ def _long_window_validation(
     engine: BacktestEngine,
     req: BacktestRequest,
     item: dict,
-) -> tuple[float, int, int]:
+    hard_deadline_reached: Callable[[], bool],
+) -> tuple[float, int, int, bool]:
     data_start, data_end = _load_data_bounds(engine, req.symbol, item['timeframe'])
     returns: list[float] = []
     longest = 0
     for days in [90, 180]:
+        if hard_deadline_reached():
+            return (min(returns) if returns else 0.0), longest, len(returns), False
         start = max(data_start, data_end - pd.Timedelta(days=days))
         actual_days = max(1, math.ceil((data_end - start).total_seconds() / 86400))
         result = _run_candidate_window(engine, req, item, start, data_end)
         returns.append(_finite_number(result.total_return_pct))
         longest = max(longest, actual_days)
+        if hard_deadline_reached():
+            return min(returns), longest, len(returns), False
         if start == data_start:
             break
-    return (min(returns) if returns else 0.0), longest, len(returns)
+    return (min(returns) if returns else 0.0), longest, len(returns), True
 
 
 @router.get("/api/data-status")
@@ -718,9 +766,14 @@ def _validate_candidate(
     out_sample_days: int,
     data_start: pd.Timestamp,
     data_end: pd.Timestamp,
-) -> ValidationReport:
+    hard_deadline_reached: Callable[[], bool],
+) -> ValidationReport | None:
+    if hard_deadline_reached():
+        return None
     try:
         out_result = _run_candidate_window(engine, req, item, out_start, out_end)
+        if hard_deadline_reached():
+            return None
         out_quality = _assess_backtest_quality(
             result=out_result,
             backtest_days=out_sample_days,
@@ -737,8 +790,12 @@ def _validate_candidate(
     validation_days = req.backtest_days
     windows = _random_validation_windows(data_start, data_end, validation_days, item)
     for start, end in windows:
+        if hard_deadline_reached():
+            return None
         try:
             random_result = _run_candidate_window(engine, req, item, start, end)
+            if hard_deadline_reached():
+                return None
             random_quality = _assess_backtest_quality(
                 result=random_result,
                 backtest_days=validation_days,
