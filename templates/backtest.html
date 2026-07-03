@@ -18,7 +18,7 @@
         <details class="panel collapsible-panel">
             <summary class="collapsible-summary">
                 <span class="summary-title">本地数据</span>
-                <span class="summary-note">展开查看或拉取环境+入场数据</span>
+                <span class="summary-note">展开查看或拉取入场、1h、4h 数据</span>
             </summary>
             <div class="collapsible-content">
                 <div class="data-actions">
@@ -26,7 +26,7 @@
                         <label for="fetch-days">拉取天数</label>
                         <input type="number" id="fetch-days" value="365" min="1" max="3650">
                     </div>
-                    <button id="fetch-data-btn" class="btn-secondary" onclick="fetchSelectedData()">拉取环境+入场数据</button>
+                    <button id="fetch-data-btn" class="btn-secondary" onclick="fetchSelectedData()">拉取入场+1h+4h 数据</button>
                     <button id="refresh-data-btn" class="btn-secondary" onclick="loadDataStatus()">刷新</button>
                     <span id="data-status-text" class="status-text"></span>
                 </div>
@@ -62,52 +62,21 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="context-timeframe">环境周期</label>
-                    <select id="context-timeframe">
-                        {% for t in timeframes %}
-                        <option value="{{ t }}" {% if t == '15m' %}selected{% endif %}>{{ t }}</option>
+                    <label for="mode">信号模式</label>
+                    <select id="mode">
+                        {% for mode in modes %}
+                        <option value="{{ mode.value }}" data-desc="{{ mode.description }}">{{ mode.label }}</option>
                         {% endfor %}
                     </select>
-                    <span class="field-note">看趋势、支撑阻力</span>
+                    <span id="mode-desc" class="field-note"></span>
                 </div>
                 <div class="form-group">
                     <label for="timeframe">入场周期</label>
                     <select id="timeframe">
-                        {% for t in timeframes %}
-                        <option value="{{ t }}" {% if t == '5m' %}selected{% endif %}>{{ t }}</option>
-                        {% endfor %}
+                        <option value="5m" selected>5m</option>
+                        <option value="15m">15m</option>
                     </select>
-                    <span class="field-note">找具体入场信号</span>
-                </div>
-                <div class="form-group">
-                    <label for="strategy">策略</label>
-                    <select id="strategy">
-                        {% for s in strategies %}
-                        <option value="{{ s.value }}" data-desc="{{ s.description }}">{{ s.label }}</option>
-                        {% endfor %}
-                    </select>
-                    <span id="strategy-desc" class="field-note"></span>
-                </div>
-                <div class="form-group">
-                    <label for="context-lookback">环境回溯窗口</label>
-                    <select id="context-lookback">
-                        <option value="96">96</option>
-                        <option value="192" selected>192</option>
-                        <option value="288">288</option>
-                    </select>
-                    <span class="field-note">15m 支撑阻力、趋势</span>
-                </div>
-                <div class="form-group">
-                    <label for="entry-lookback">入场回溯窗口</label>
-                    <select id="entry-lookback">
-                        <option value="10">10</option>
-                        <option value="20">20</option>
-                        <option value="30" selected>30</option>
-                        <option value="40">40</option>
-                        <option value="50">50</option>
-                        <option value="60">60</option>
-                    </select>
-                    <span class="field-note">5m 入场信号</span>
+                    <span class="field-note">信号产生与成交模拟周期</span>
                 </div>
                 <div class="form-group">
                     <label for="backtest-days">回测天数</label>
@@ -136,21 +105,22 @@
                         <option value="150">x150</option>
                     </select>
                 </div>
+            </div>
+            <div class="funds-grid">
                 <div class="form-group">
-                    <label for="cash">初始资金 (USDT)</label>
+                    <label for="cash">账户总金额 (USDT)</label>
                     <input type="number" id="cash" value="100" min="10" step="10">
                 </div>
                 <div class="form-group">
-                    <label for="position-amount">单笔逐仓金额 (USDT)</label>
-                    <input type="number" id="position-amount" value="10" min="0.1" step="0.1">
+                    <label for="margin-mode">保证金模式</label>
+                    <select id="margin-mode">
+                        <option value="ISOLATED" selected>逐仓</option>
+                        <option value="CROSS">全仓</option>
+                    </select>
                 </div>
                 <div class="form-group">
-                    <label for="take-profit-amount">止盈金额 (USDT)</label>
-                    <input type="number" id="take-profit-amount" value="1" min="0" step="0.1">
-                </div>
-                <div class="form-group">
-                    <label for="stop-loss-amount">止损金额 (USDT)</label>
-                    <input type="number" id="stop-loss-amount" value="1" min="0" step="0.1">
+                    <label for="opening-amount">开仓金额 (USDT)</label>
+                    <input type="number" id="opening-amount" value="10" min="0.1" step="0.1">
                 </div>
             </div>
             <details class="advanced-options">
@@ -233,20 +203,24 @@
                 <table id="trades-table">
                     <thead>
                         <tr>
-                            <th>方向</th>
-                            <th>入场时间</th>
-                            <th>出场时间</th>
-                            <th>入场价</th>
-                            <th>出场价</th>
-                            <th>保证金</th>
-                            <th>名义仓位</th>
-                            <th>强平价</th>
-                            <th>入场分</th>
-                            <th>入场原因</th>
-                            <th>资金费</th>
-                            <th>盈亏</th>
-                            <th>盈亏%</th>
-                            <th>原因</th>
+                            <th>策略来源</th>
+                            <th>信号模式</th>
+                            <th>保证金模式</th>
+                            <th>1h 环境</th>
+                            <th>4h 过滤</th>
+                            <th>信号时间</th>
+                            <th>信号价</th>
+                            <th>成交时间</th>
+                            <th>成交价</th>
+                            <th>冻结 ATR</th>
+                            <th>止损价</th>
+                            <th>目标价</th>
+                            <th>预期止损U</th>
+                            <th>预期止盈U</th>
+                            <th>实际盈亏U</th>
+                            <th>入场费U</th>
+                            <th>出场费U</th>
+                            <th>资金费U</th>
                         </tr>
                     </thead>
                     <tbody id="trades-tbody"></tbody>
@@ -259,15 +233,11 @@
                     <thead>
                         <tr>
                             <th>排名</th>
-                            <th>策略</th>
+                            <th>信号模式</th>
                             <th>评价</th>
-                            <th>环境周期</th>
                             <th>入场周期</th>
-                            <th>环境回溯</th>
-                            <th>入场回溯</th>
+                            <th>保证金模式</th>
                             <th>杠杆</th>
-                            <th>止盈U</th>
-                            <th>止损U</th>
                             <th>样本内%</th>
                             <th>样本外%</th>
                             <th>随机通过</th>
@@ -284,13 +254,13 @@
                         </tr>
                     </thead>
                     <tbody id="optimization-tbody">
-                        <tr><td colspan="23" class="empty-cell">尚未搜索</td></tr>
+                        <tr><td colspan="19" class="empty-cell">尚未搜索</td></tr>
                     </tbody>
                 </table>
             </div>
         </section>
     </div>
 
-    <script src="/static/js/backtest.js?v=equity-axis-1"></script>
+    <script src="/static/js/backtest.js?v=signal-margin-1"></script>
 </body>
 </html>

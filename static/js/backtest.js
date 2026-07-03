@@ -18,8 +18,8 @@ const MIN_NOTIONAL_BY_SYMBOL = {
 const LEVERAGE_OPTIONS = [1, 2, 3, 5, 10, 20, 50, 100, 125, 150];
 
 window.addEventListener('DOMContentLoaded', () => {
-    updateStrategyDescription();
-    document.getElementById('strategy').addEventListener('change', updateStrategyDescription);
+    updateModeDescription();
+    document.getElementById('mode').addEventListener('change', updateModeDescription);
     bindRealtimeChecks();
     updateOrderCheck();
     loadDataStatus();
@@ -83,45 +83,34 @@ async function runBacktest() {
 
 
 function validateBacktestPayload(payload) {
-    if (payload.context_lookback < 1 || payload.context_lookback > 500) {
-        return '环境回溯窗口必须在 1 到 500 之间';
-    }
-    if (payload.entry_lookback < 1 || payload.entry_lookback > 500) {
-        return '入场回溯窗口必须在 1 到 500 之间';
-    }
     if (payload.backtest_days < 1 || payload.backtest_days > 3650) {
         return '回测天数必须在 1 到 3650 之间';
     }
-    if (payload.context_timeframe === payload.timeframe) {
-        return '环境周期和入场周期建议分开，例如 15m + 5m';
+    if (!['5m', '15m'].includes(payload.timeframe)) {
+        return '入场周期只能选择 5m 或 15m';
     }
     if (payload.cash < 10) {
         return '初始资金不能低于 10 USDT';
     }
-    if (payload.position_amount <= 0) {
-        return '单笔逐仓金额必须大于 0';
+    if (payload.opening_amount <= 0) {
+        return '开仓金额必须大于 0';
     }
-    if (payload.position_amount > payload.cash) {
-        return '单笔逐仓金额不能大于初始资金';
+    if (payload.opening_amount > payload.cash) {
+        return '开仓金额不能大于账户总金额';
     }
     if (payload.leverage < 1 || payload.leverage > 150) {
         return '杠杆必须在 x1 到 x150 之间';
     }
+    if (payload.maker_fee < 0 || payload.taker_fee < 0 || payload.maker_fee > 0.1 || payload.taker_fee > 0.1) {
+        return '手续费率必须在 0 到 0.1 之间';
+    }
+    const entryFee = payload.opening_amount * payload.leverage * payload.taker_fee;
+    if (payload.opening_amount + entryFee > payload.cash) {
+        return '账户总金额必须覆盖开仓金额和开仓手续费';
+    }
     const orderCheck = getOrderCheck(payload);
     if (!orderCheck.ok) {
         return orderCheck.message;
-    }
-    if (payload.take_profit_amount < 0 || payload.stop_loss_amount < 0) {
-        return '止盈止损不能为负数';
-    }
-    if (payload.take_profit_amount > payload.position_amount * payload.leverage) {
-        return '止盈金额不建议大于单笔名义仓位';
-    }
-    if (payload.stop_loss_amount > payload.position_amount) {
-        return '止损金额不能大于单笔逐仓金额';
-    }
-    if (payload.maker_fee < 0 || payload.taker_fee < 0 || payload.maker_fee > 0.1 || payload.taker_fee > 0.1) {
-        return '手续费率必须在 0 到 0.1 之间';
     }
     if (payload.slippage_rate < 0 || payload.slippage_rate > 0.1) {
         return '滑点率必须在 0 到 0.1 之间';
@@ -137,19 +126,12 @@ function validateBacktestPayload(payload) {
 
 
 function validateOptimizationPayload(payload) {
-    return validateBacktestPayload({
-        ...payload,
-        context_timeframe: '15m',
-        timeframe: '5m',
-        backtest_days: 30,
-        context_lookback: 192,
-        entry_lookback: 30,
-    });
+    return validateBacktestPayload(payload);
 }
 
 
 function bindRealtimeChecks() {
-    const ids = ['symbol', 'position-amount', 'leverage'];
+    const ids = ['symbol', 'cash', 'opening-amount', 'leverage', 'taker-fee'];
     for (const id of ids) {
         const el = document.getElementById(id);
         if (el) {
@@ -172,25 +154,25 @@ function updateOrderCheck() {
 
 function getOrderCheck(payload) {
     const minNotional = MIN_NOTIONAL_BY_SYMBOL[payload.symbol] || 5;
-    const notional = payload.position_amount * payload.leverage;
+    const notional = payload.opening_amount * payload.leverage;
     const base = payload.symbol + ' 估算最小名义仓位 ' + formatNumber(minNotional, 2) + 'U，当前 ' +
-        formatNumber(payload.position_amount, 2) + 'U × x' + formatNumber(payload.leverage, 0) + ' = ' +
+        formatNumber(payload.opening_amount, 2) + 'U × x' + formatNumber(payload.leverage, 0) + ' = ' +
         formatNumber(notional, 2) + 'U';
 
     if (notional >= minNotional) {
         return { ok: true, message: base + '，可开仓' };
     }
 
-    const suggested = LEVERAGE_OPTIONS.find(item => payload.position_amount * item >= minNotional);
+    const suggested = LEVERAGE_OPTIONS.find(item => payload.opening_amount * item >= minNotional);
     if (suggested) {
         return {
             ok: false,
-            message: base + '，实盘可能无法开仓；建议至少 x' + suggested + '，或提高逐仓金额/换交易对象',
+            message: base + '，实盘可能无法开仓；建议至少 x' + suggested + '，或提高开仓金额/换交易对象',
         };
     }
     return {
         ok: false,
-        message: base + '，实盘可能无法开仓；当前逐仓金额过小，x150 也不够最小名义仓位',
+        message: base + '，实盘可能无法开仓；当前开仓金额过小，x150 也不够最小名义仓位',
     };
 }
 
@@ -199,17 +181,12 @@ function collectBacktestPayload() {
     return {
         symbol: document.getElementById('symbol').value,
         timeframe: document.getElementById('timeframe').value,
-        context_timeframe: document.getElementById('context-timeframe').value,
-        strategy: document.getElementById('strategy').value,
+        mode: document.getElementById('mode').value,
         backtest_days: numberValue('backtest-days', 30),
-        context_lookback: numberValue('context-lookback', 192),
-        entry_lookback: numberValue('entry-lookback', 30),
-        lookback: numberValue('entry-lookback', 30),
         cash: numberValue('cash', 100),
-        position_amount: numberValue('position-amount', 10),
+        opening_amount: numberValue('opening-amount', 10),
+        margin_mode: document.getElementById('margin-mode').value,
         leverage: numberValue('leverage', 5),
-        take_profit_amount: numberValue('take-profit-amount', 1),
-        stop_loss_amount: numberValue('stop-loss-amount', 1),
         maker_fee: numberValue('maker-fee', 0.0002),
         taker_fee: numberValue('taker-fee', 0.0005),
         slippage_rate: numberValue('slippage-rate', 0.0002),
@@ -225,9 +202,9 @@ function numberValue(id, fallback) {
 }
 
 
-function updateStrategyDescription() {
-    const select = document.getElementById('strategy');
-    const note = document.getElementById('strategy-desc');
+function updateModeDescription() {
+    const select = document.getElementById('mode');
+    const note = document.getElementById('mode-desc');
     const option = select.options[select.selectedIndex];
     note.textContent = option ? option.dataset.desc || '' : '';
 }
@@ -255,16 +232,23 @@ async function optimizeParams() {
             body: JSON.stringify(payload),
         });
         const created = await resp.json();
-        if (!resp.ok || !created.success) {
-            showError(created.error || formatApiError(created));
+        if (!resp.ok) {
+            showError(formatApiError(created));
+            return;
+        }
+        if (!created.success) {
+            showError(created.error || '智能搜索启动失败');
             return;
         }
         const jobId = created.job_id;
         while (true) {
             const jobResp = await fetch('/api/optimize/jobs/' + jobId);
             const data = await jobResp.json();
-            if (!jobResp.ok || !data.success) {
-                throw new Error(data.error || formatApiError(data));
+            if (!jobResp.ok) {
+                throw new Error(formatApiError(data));
+            }
+            if (!data.success) {
+                throw new Error(data.error || '智能搜索失败');
             }
             const evaluated = data.evaluated_count || 0;
             const total = data.total_budget || 0;
@@ -308,6 +292,9 @@ async function loadDataStatus(successMessage) {
     try {
         const resp = await fetch('/api/data-status');
         const data = await resp.json();
+        if (!resp.ok) {
+            throw new Error(formatApiError(data));
+        }
         renderDataStatusTable(data);
         statusText.textContent = successMessage || '数据状态已更新';
     } catch (err) {
@@ -324,10 +311,9 @@ async function fetchSelectedData() {
     const statusText = document.getElementById('data-status-text');
     const symbol = document.getElementById('symbol').value;
     const days = parseInt(document.getElementById('fetch-days').value) || 365;
-    const timeframes = Array.from(new Set([
-        document.getElementById('context-timeframe').value,
-        document.getElementById('timeframe').value,
-    ]));
+    const timeframes = Array.from(
+        new Set([document.getElementById('timeframe').value, '1h', '4h'])
+    );
 
     btn.disabled = true;
     statusText.innerHTML = '<span class="spinner"></span>正在拉取 ' + symbol + ' ' + timeframes.join(' + ') + '...';
@@ -342,8 +328,10 @@ async function fetchSelectedData() {
             });
             const data = await resp.json();
 
-            if (!data.success) {
-                statusText.textContent = data.error || '数据拉取失败';
+            if (!resp.ok || !data.success) {
+                statusText.textContent = resp.ok
+                    ? (data.error || '数据拉取失败')
+                    : formatApiError(data);
                 return;
             }
             const rows = data.rows == null ? '--' : data.rows.toLocaleString();
@@ -537,7 +525,7 @@ function renderTradesTable(trades) {
     tbody.innerHTML = '';
 
     if (!trades || trades.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="14" class="empty-cell">无交易记录</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="18" class="empty-cell">无交易记录</td></tr>';
         return;
     }
 
@@ -546,25 +534,25 @@ function renderTradesTable(trades) {
     for (const t of recentTrades) {
         const row = document.createElement('tr');
         const pnlClass = t.pnl >= 0 ? 'positive' : 'negative';
-        const pnlPctClass = t.pnl_pct >= 0 ? 'positive' : 'negative';
-        const sideText = t.side === 'short' ? '做空' : '做多';
-        const sideClass = t.side === 'short' ? 'negative' : 'positive';
-
         row.innerHTML =
-            '<td class="' + sideClass + '">' + sideText + '</td>' +
-            '<td>' + formatTime(t.entry_time) + '</td>' +
-            '<td>' + formatTime(t.exit_time) + '</td>' +
-            '<td>' + formatNumber(t.entry_price, 2) + '</td>' +
-            '<td>' + formatNumber(t.exit_price, 2) + '</td>' +
-            '<td>' + formatNumber(t.margin_amount, 2) + '</td>' +
-            '<td>' + formatNumber(t.notional_amount, 2) + '</td>' +
-            '<td>' + formatNumber(t.liquidation_price, 2) + '</td>' +
-            '<td>' + formatNumber(t.entry_score, 0) + '</td>' +
-            '<td title="' + escapeHtml(t.entry_context || '') + '">' + escapeHtml(t.entry_reason || '策略信号') + '</td>' +
-            '<td>' + formatNumber(t.funding_fee, 4) + '</td>' +
-            '<td class="' + pnlClass + '">' + t.pnl.toFixed(2) + '</td>' +
-            '<td class="' + pnlPctClass + '">' + t.pnl_pct.toFixed(2) + '%</td>' +
-            '<td>' + (t.exit_reason || '策略平仓') + '</td>';
+            '<td>' + escapeHtml(t.strategy_source || '--') + '</td>' +
+            '<td>' + escapeHtml(t.mode || '--') + '</td>' +
+            '<td>' + escapeHtml(t.margin_mode || '--') + '</td>' +
+            '<td>' + escapeHtml(t.environment_1h || '--') + '</td>' +
+            '<td>' + escapeHtml(t.filter_4h || '--') + '</td>' +
+            '<td>' + formatTime(t.signal_time) + '</td>' +
+            '<td>' + formatNumber(t.signal_price, 2) + '</td>' +
+            '<td>' + formatTime(t.fill_time) + '</td>' +
+            '<td>' + formatNumber(t.fill_price, 2) + '</td>' +
+            '<td>' + formatNumber(t.atr_snapshot, 4) + '</td>' +
+            '<td>' + formatNumber(t.stop_price, 2) + '</td>' +
+            '<td>' + formatNumber(t.target_price, 2) + '</td>' +
+            '<td>' + formatNumber(t.expected_stop_amount, 2) + '</td>' +
+            '<td>' + formatNumber(t.expected_target_amount, 2) + '</td>' +
+            '<td class="' + pnlClass + '">' + formatNumber(t.pnl, 2) + '</td>' +
+            '<td>' + formatNumber(t.entry_commission, 4) + '</td>' +
+            '<td>' + formatNumber(t.exit_commission, 4) + '</td>' +
+            '<td>' + formatNumber(t.funding_fee, 4) + '</td>';
 
         tbody.appendChild(row);
     }
@@ -587,7 +575,7 @@ function renderOptimizationTable(candidates, summary) {
         const text = evaluated > 0
             ? '没有通过严格过滤的组合，已过滤 ' + filtered + ' / ' + evaluated + ' 个'
             : '尚未搜索';
-        tbody.innerHTML = '<tr><td colspan="23" class="empty-cell">' + text + '</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="19" class="empty-cell">' + text + '</td></tr>';
         return;
     }
 
@@ -601,15 +589,11 @@ function renderOptimizationTable(candidates, summary) {
         const robustness = robustnessBadge(item.robustness_label, item.robustness_score);
         row.innerHTML =
             '<td>' + item.rank + '</td>' +
-            '<td>' + (item.strategy_label || item.strategy || '--') + '</td>' +
+            '<td>' + escapeHtml(item.mode_label || item.mode || '--') + '</td>' +
             '<td>' + badge + '</td>' +
-            '<td>' + (item.context_timeframe || '--') + '</td>' +
             '<td>' + (item.timeframe || '--') + '</td>' +
-            '<td>' + item.context_lookback + '</td>' +
-            '<td>' + (item.entry_lookback || item.lookback) + '</td>' +
+            '<td>' + escapeHtml(item.margin_mode || '--') + '</td>' +
             '<td>x' + formatNumber(item.leverage, 0) + '</td>' +
-            '<td>' + formatNumber(item.take_profit_amount, 2) + '</td>' +
-            '<td>' + formatNumber(item.stop_loss_amount, 2) + '</td>' +
             '<td class="' + returnClass + '">' + formatNumber(item.total_return_pct, 2) + '</td>' +
             '<td class="' + outReturnClass + '">' + formatNumber(item.out_sample_return_pct, 2) + '</td>' +
             '<td>' + formatNumber(item.random_pass_rate_pct, 0) + '%</td>' +
@@ -633,15 +617,11 @@ function applyOptimizationCandidate(index) {
     const item = optimizationCandidates[index];
     if (!item) return;
 
-    document.getElementById('strategy').value = item.strategy;
-    document.getElementById('context-timeframe').value = item.context_timeframe;
+    document.getElementById('mode').value = item.mode;
     document.getElementById('timeframe').value = item.timeframe;
-    document.getElementById('context-lookback').value = item.context_lookback;
-    document.getElementById('entry-lookback').value = item.entry_lookback || item.lookback;
+    document.getElementById('margin-mode').value = item.margin_mode;
     document.getElementById('leverage').value = String(item.leverage);
-    document.getElementById('take-profit-amount').value = item.take_profit_amount;
-    document.getElementById('stop-loss-amount').value = item.stop_loss_amount;
-    updateStrategyDescription();
+    updateModeDescription();
     updateOrderCheck();
 
     const status = document.getElementById('status');
