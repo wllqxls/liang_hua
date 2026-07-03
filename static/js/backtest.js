@@ -582,8 +582,8 @@ function renderOptimizationTable(candidates, summary) {
     tbody.innerHTML = '';
 
     if (!candidates || candidates.length === 0) {
-        const evaluated = summary && summary.evaluated_count ? summary.evaluated_count : 0;
-        const filtered = summary && summary.filtered_count ? summary.filtered_count : 0;
+        const evaluated = finiteNumber(summary && summary.evaluated_count, 0);
+        const filtered = finiteNumber(summary && summary.filtered_count, 0);
         const text = evaluated > 0
             ? '没有通过严格过滤的组合，已过滤 ' + filtered + ' / ' + evaluated + ' 个'
             : '尚未搜索';

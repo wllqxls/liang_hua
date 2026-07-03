@@ -22,6 +22,8 @@ def test_frontend_behavior_in_node_vm() -> None:
         cwd=ROOT,
         capture_output=True,
         check=False,
+        encoding='utf-8',
+        errors='replace',
         text=True,
     )
 

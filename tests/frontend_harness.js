@@ -197,6 +197,13 @@ async function assertOperationController(api, context, document) {
 
 function assertEscaping(api, document) {
     const attack = '<img src=x onerror=alert(1)>';
+    api.renderOptimizationTable([], {
+        evaluated_count: 1,
+        filtered_count: attack,
+    });
+    const summaryHtml = document.getElementById('optimization-tbody').innerHTML;
+    assert.doesNotMatch(summaryHtml, /<img/);
+
     api.renderDataStatusTable([{ symbol: attack, timeframe: attack, exists: true, rows: 1, file_size_kb: 1 }]);
     api.renderOptimizationTable([{
         rank: attack, mode_label: attack, quality_label: attack, quality_grade: attack,
