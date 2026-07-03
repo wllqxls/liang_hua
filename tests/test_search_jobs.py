@@ -154,8 +154,12 @@ def test_candidate_search_reserves_time_for_validation(monkeypatch: Any) -> None
     monkeypatch.setattr(routes, 'SEARCH_SOFT_LIMIT_SECONDS', 480.0)
     monkeypatch.setattr(routes, 'SEARCH_HARD_LIMIT_SECONDS', 600.0)
 
-    assert routes._candidate_budget_exhausted(0.0, evaluated_count=10, now=300.0) is True
-    assert routes._candidate_budget_exhausted(0.0, evaluated_count=100, now=100.0) is False
+    assert routes._candidate_budget_exhausted(
+        0.0, attempt_count=10, duration_total=300.0, now=300.0,
+    ) is True
+    assert routes._candidate_budget_exhausted(
+        0.0, attempt_count=100, duration_total=100.0, now=100.0,
+    ) is False
 
 
 def test_candidate_evaluation_uses_signal_engine_and_keeps_request_values_out_of_candidate(
@@ -747,3 +751,135 @@ def test_long_window_data_bounds_failure_marks_validation_incomplete(
     assert calls == 0
     assert completed is False
     assert failed is True
+
+
+def _run_four_candidate_pipeline(
+    monkeypatch: Any,
+    *,
+    fail_long_leverages: set[float] | None = None,
+    deadline_long_leverage: float | None = None,
+) -> tuple[OptimizationResponse, list[tuple[float, int]]]:
+    candidates = [
+        SearchCandidate(SignalMode.KEY_LEVEL, '5m', leverage, MarginMode.CROSS)
+        for leverage in [10, 7, 5, 3]
+    ]
+    clock = {'now': 0.0}
+    long_calls: list[tuple[float, int]] = []
+    failing = fail_long_leverages or set()
+
+    def fake_run(self: object, **kwargs: Any) -> object:
+        days = round((kwargs['window_end'] - kwargs['window_start']).total_seconds() / 86400)
+        leverage = float(kwargs['leverage'])
+        if days in {90, 180}:
+            long_calls.append((leverage, days))
+            if leverage in failing:
+                raise RuntimeError('long validation failed')
+            if leverage == deadline_long_leverage:
+                clock['now'] = routes.SEARCH_HARD_LIMIT_SECONDS
+        return SimpleNamespace(
+            total_return_pct=leverage + 10,
+            win_rate_pct=60,
+            max_drawdown_pct=-5,
+            sharpe_ratio=1.5,
+            num_trades=8,
+            trade_list=[{'pnl': value} for value in [2, -1, 2, -1, 2, -1, 2, -1]],
+        )
+
+    monkeypatch.setattr(routes.time, 'monotonic', lambda: clock['now'])
+    monkeypatch.setattr(routes, 'available_entry_timeframes', lambda *_: ['5m'])
+    monkeypatch.setattr(routes, 'build_stage_one_candidates', lambda **_: candidates)
+    monkeypatch.setattr(routes, 'build_stage_two_candidates', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        routes, '_load_data_bounds',
+        lambda *_: (pd.Timestamp('2025-01-01'), pd.Timestamp('2025-07-01')),
+    )
+    monkeypatch.setattr(routes.BacktestEngine, 'run_signal_mode', fake_run)
+
+    response = routes._progressive_optimize(
+        BacktestRequest(backtest_days=60),
+        lambda **_: None,
+    )
+    return response, long_calls
+
+
+def test_long_validation_backfills_rank_four_when_rank_two_fails(monkeypatch: Any) -> None:
+    response, long_calls = _run_four_candidate_pipeline(
+        monkeypatch,
+        fail_long_leverages={7},
+    )
+
+    assert [item.leverage for item in response.candidates[:3]] == [10, 5, 3]
+    assert all(item.long_window_days > 0 for item in response.candidates[:3])
+    assert [leverage for leverage, days in long_calls if days == 90] == [10, 7, 5, 3]
+    assert response.partial is True
+
+
+def test_continuous_long_failures_leave_no_unvalidated_recommendations(
+    monkeypatch: Any,
+) -> None:
+    response, long_calls = _run_four_candidate_pipeline(
+        monkeypatch,
+        fail_long_leverages={10, 7, 5, 3},
+    )
+
+    assert len(long_calls) == 4
+    assert response.candidates == []
+    assert response.success is False
+    assert response.partial is True
+
+
+def test_deadline_during_backfill_returns_only_completed_long_candidates(
+    monkeypatch: Any,
+) -> None:
+    response, long_calls = _run_four_candidate_pipeline(
+        monkeypatch,
+        deadline_long_leverage=7,
+    )
+
+    assert long_calls == [(10.0, 90), (10.0, 180), (7.0, 90)]
+    assert [item.leverage for item in response.candidates] == [10]
+    assert response.candidates[0].long_window_days > 0
+    assert response.partial is True
+
+
+def test_slow_failed_attempts_shrink_candidate_budget(monkeypatch: Any) -> None:
+    candidates = [
+        SearchCandidate(SignalMode.KEY_LEVEL, '5m', leverage, MarginMode.CROSS)
+        for leverage in [1, 2, 3, 5, 7, 10]
+    ]
+    clock = {'now': 0.0}
+    in_sample_attempts = 0
+
+    def fake_run(self: object, **kwargs: Any) -> object:
+        nonlocal in_sample_attempts
+        days = round((kwargs['window_end'] - kwargs['window_start']).total_seconds() / 86400)
+        clock['now'] += 100.0
+        if days == 42:
+            in_sample_attempts += 1
+            if in_sample_attempts <= 2:
+                raise RuntimeError('slow failure')
+        return SimpleNamespace(
+            total_return_pct=12, win_rate_pct=60, max_drawdown_pct=-5,
+            sharpe_ratio=1.5, num_trades=8,
+            trade_list=[{'pnl': value} for value in [2, -1, 2, -1, 2, -1, 2, -1]],
+        )
+
+    monkeypatch.setattr(routes.time, 'monotonic', lambda: clock['now'])
+    monkeypatch.setattr(routes, 'available_entry_timeframes', lambda *_: ['5m'])
+    monkeypatch.setattr(routes, 'build_stage_one_candidates', lambda **_: candidates)
+    monkeypatch.setattr(routes, 'build_stage_two_candidates', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        routes, '_load_data_bounds',
+        lambda *_: (pd.Timestamp('2025-01-01'), pd.Timestamp('2025-07-01')),
+    )
+    monkeypatch.setattr(routes.BacktestEngine, 'run_signal_mode', fake_run)
+
+    response = routes._progressive_optimize(
+        BacktestRequest(backtest_days=60),
+        lambda **_: None,
+    )
+
+    assert in_sample_attempts == 3
+    assert response.evaluated_count == 3  # candidate + OOS + first random succeeded
+    assert response.failure_count == 2
+    assert response.partial is True

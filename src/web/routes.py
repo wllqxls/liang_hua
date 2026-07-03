@@ -127,6 +127,14 @@ class ValidationReport:
     passes_filter: bool
 
 
+@dataclass
+class EvaluationTiming:
+    """Wall-clock cost for every engine attempt, including failures."""
+
+    attempt_count: int = 0
+    duration_total: float = 0.0
+
+
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
     """回测主页面。"""
@@ -381,6 +389,7 @@ def _progressive_optimize(
     failure_count = 0
     partial = False
     evaluated_candidates: set[SearchCandidate] = set()
+    timing = EvaluationTiming()
 
     def hard_deadline_reached() -> bool:
         return time.monotonic() - started_at >= SEARCH_HARD_LIMIT_SECONDS
@@ -389,7 +398,11 @@ def _progressive_optimize(
         if candidate in evaluated_candidates:
             continue
         evaluated_candidates.add(candidate)
-        if _candidate_budget_exhausted(started_at, evaluated_count):
+        if _candidate_budget_exhausted(
+            started_at,
+            attempt_count=timing.attempt_count,
+            duration_total=timing.duration_total,
+        ):
             partial = True
             break
         item, filtered, failed = _evaluate_progressive_candidate(
@@ -398,6 +411,7 @@ def _progressive_optimize(
             candidate,
             bounds_cache,
             hard_deadline_reached,
+            timing,
         )
         if failed:
             failure_count += 1
@@ -430,7 +444,11 @@ def _progressive_optimize(
         if candidate in evaluated_candidates:
             continue
         evaluated_candidates.add(candidate)
-        if _candidate_budget_exhausted(started_at, evaluated_count):
+        if _candidate_budget_exhausted(
+            started_at,
+            attempt_count=timing.attempt_count,
+            duration_total=timing.duration_total,
+        ):
             partial = True
             break
         item, filtered, failed = _evaluate_progressive_candidate(
@@ -439,6 +457,7 @@ def _progressive_optimize(
             candidate,
             bounds_cache,
             hard_deadline_reached,
+            timing,
         )
         if failed:
             failure_count += 1
@@ -485,6 +504,7 @@ def _progressive_optimize(
             data_start=data_start,
             data_end=data_end,
             hard_deadline_reached=hard_deadline_reached,
+            timing=timing,
         )
         evaluated_count += calls
         if validation is None:
@@ -517,31 +537,32 @@ def _progressive_optimize(
         )
 
     ranked = sorted(validated_pool, key=lambda item: item['score'], reverse=True)[:10]
-    long_validation_items = ranked[:3]
-    for index, item in enumerate(long_validation_items):
+    long_validated: list[dict] = []
+    failed_long_validation: list[dict] = []
+    for item in ranked:
+        if len(long_validated) >= 3:
+            break
         if hard_deadline_reached():
             partial = True
-            for incomplete in long_validation_items[index:]:
-                ranked.remove(incomplete)
             break
         long_return, long_days, calls, completed, failed = _long_window_validation(
             engine,
             req,
             item,
             hard_deadline_reached,
+            timing,
         )
         evaluated_count += calls
         if not completed:
             partial = True
-            ranked.remove(item)
+            failed_long_validation.append(item)
             if failed:
                 failure_count += 1
                 continue
-            for incomplete in long_validation_items[index + 1:]:
-                ranked.remove(incomplete)
             break
         item['long_window_return_pct'] = long_return
         item['long_window_days'] = long_days
+        long_validated.append(item)
         progress(
             stage='长窗口验证',
             evaluated_count=evaluated_count,
@@ -550,6 +571,10 @@ def _progressive_optimize(
             failure_count=failure_count,
             partial=partial,
         )
+
+    ranked = [item for item in ranked if item not in failed_long_validation]
+    if len(long_validated) < 3:
+        ranked = long_validated
 
     candidates = [
         OptimizationCandidate(rank=index, **item)
@@ -569,17 +594,18 @@ def _progressive_optimize(
 
 def _candidate_budget_exhausted(
     started_at: float,
-    evaluated_count: int,
     *,
+    attempt_count: int,
+    duration_total: float,
     now: float | None = None,
 ) -> bool:
     """Stop candidate generation early enough to reserve validation time."""
     elapsed = max(0.0, (time.monotonic() if now is None else now) - started_at)
     if elapsed >= SEARCH_SOFT_LIMIT_SECONDS:
         return True
-    if evaluated_count < 3:
+    if attempt_count < 3:
         return False
-    average_seconds = elapsed / evaluated_count
+    average_seconds = duration_total / attempt_count
     return elapsed + average_seconds * VALIDATION_BUDGET >= SEARCH_HARD_LIMIT_SECONDS
 
 
@@ -589,6 +615,7 @@ def _evaluate_progressive_candidate(
     candidate: SearchCandidate,
     bounds_cache: dict[str, tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp, int]],
     hard_deadline_reached: Callable[[], bool] | None = None,
+    timing: EvaluationTiming | None = None,
 ) -> tuple[dict | None, bool, bool]:
     try:
         if candidate.timeframe not in bounds_cache:
@@ -603,7 +630,9 @@ def _evaluate_progressive_candidate(
     if hard_deadline_reached is not None and hard_deadline_reached():
         return None, False, False
     try:
-        result = engine.run_signal_mode(
+        result = _timed_run_signal_mode(
+            engine,
+            timing,
             symbol=req.symbol,
             timeframe=candidate.timeframe,
             mode=candidate.mode,
@@ -686,6 +715,7 @@ def _long_window_validation(
     req: BacktestRequest,
     item: dict,
     hard_deadline_reached: Callable[[], bool],
+    timing: EvaluationTiming | None = None,
 ) -> tuple[float, int, int, bool, bool]:
     try:
         data_start, data_end = _load_data_bounds(engine, req.symbol, item['timeframe'])
@@ -700,7 +730,7 @@ def _long_window_validation(
         start = max(data_start, data_end - pd.Timedelta(days=days))
         actual_days = max(1, math.ceil((data_end - start).total_seconds() / 86400))
         try:
-            result = _run_candidate_window(engine, req, item, start, data_end)
+            result = _run_candidate_window(engine, req, item, start, data_end, timing)
         except Exception as exc:
             _log_safe_optimizer_error('optimizer_long_validation_failed', exc)
             return (min(returns) if returns else 0.0), longest, len(returns), False, True
@@ -836,12 +866,13 @@ def _validate_candidate(
     data_start: pd.Timestamp,
     data_end: pd.Timestamp,
     hard_deadline_reached: Callable[[], bool],
+    timing: EvaluationTiming | None = None,
 ) -> tuple[ValidationReport | None, int, bool]:
     if hard_deadline_reached():
         return None, 0, False
     completed_calls = 0
     try:
-        out_result = _run_candidate_window(engine, req, item, out_start, out_end)
+        out_result = _run_candidate_window(engine, req, item, out_start, out_end, timing)
         if hard_deadline_reached():
             return None, 0, False
         completed_calls += 1
@@ -875,7 +906,7 @@ def _validate_candidate(
         if hard_deadline_reached():
             return None, completed_calls, False
         try:
-            random_result = _run_candidate_window(engine, req, item, start, end)
+            random_result = _run_candidate_window(engine, req, item, start, end, timing)
             if hard_deadline_reached():
                 return None, completed_calls, False
             completed_calls += 1
@@ -925,8 +956,11 @@ def _run_candidate_window(
     item: dict,
     start: pd.Timestamp,
     end: pd.Timestamp,
+    timing: EvaluationTiming | None = None,
 ) -> object:
-    return engine.run_signal_mode(
+    return _timed_run_signal_mode(
+        engine,
+        timing,
         symbol=req.symbol,
         timeframe=item.get('timeframe', req.timeframe),
         mode=item['mode'],
@@ -942,6 +976,21 @@ def _run_candidate_window(
         funding_rate=req.funding_rate,
         maintenance_margin_rate=req.maintenance_margin_rate,
     )
+
+
+def _timed_run_signal_mode(
+    engine: BacktestEngine,
+    timing: EvaluationTiming | None,
+    **kwargs: object,
+) -> object:
+    """Run one engine attempt and record its cost even when it fails."""
+    started_at = time.monotonic()
+    try:
+        return engine.run_signal_mode(**kwargs)
+    finally:
+        if timing is not None:
+            timing.attempt_count += 1
+            timing.duration_total += max(0.0, time.monotonic() - started_at)
 
 
 def _random_validation_windows(
