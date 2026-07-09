@@ -24,6 +24,9 @@ DEFAULT_DATA_DIR = PROJECT_ROOT / 'data'
 WINDOW_COUNT = 12
 WINDOW_DAYS = 30
 ANNUAL_DAYS = 365
+ENTRY_WARMUP_BARS = 21
+HOUR_WARMUP_BARS = 20
+FOUR_HOUR_WARMUP_BARS = 30
 MODES = (SignalMode.KEY_LEVEL, SignalMode.RSI_REVERSAL, SignalMode.KEY_LEVEL_RSI)
 MARGIN_MODES = (MarginMode.ISOLATED, MarginMode.CROSS)
 TIMEFRAME_DELTAS = {
@@ -171,13 +174,14 @@ def _preflight_data_coverage(
         frames[required_timeframe] = frame
 
     end_time = _as_utc_timestamp(frames[timeframe].index.max())
-    required_start = end_time - pd.Timedelta(days=days) + _timeframe_delta(timeframe)
+    annual_start = end_time - pd.Timedelta(days=days) + _timeframe_delta(timeframe)
+    required_start = annual_start - _warmup_duration(timeframe)
     for required_timeframe, frame in frames.items():
         start_time = _as_utc_timestamp(frame.index.min())
         if start_time > required_start:
             raise ValueError(
                 f'{symbol} {required_timeframe} 本地数据历史不足，'
-                f'需要覆盖到 {required_start.isoformat()}，实际从 {start_time.isoformat()} 开始'
+                f'需要覆盖 warmup 到 {required_start.isoformat()}，实际从 {start_time.isoformat()} 开始'
             )
     return end_time
 
@@ -205,6 +209,14 @@ def _timeframe_delta(timeframe: str) -> pd.Timedelta:
         return TIMEFRAME_DELTAS[timeframe]
     except KeyError as exc:
         raise ValueError('timeframe must be 5m or 15m') from exc
+
+
+def _warmup_duration(timeframe: str) -> pd.Timedelta:
+    return max(
+        ENTRY_WARMUP_BARS * _timeframe_delta(timeframe),
+        HOUR_WARMUP_BARS * pd.Timedelta(hours=1),
+        FOUR_HOUR_WARMUP_BARS * pd.Timedelta(hours=4),
+    )
 
 
 def _as_utc_timestamp(value: object) -> pd.Timestamp:

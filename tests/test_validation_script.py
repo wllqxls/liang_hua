@@ -99,7 +99,7 @@ def test_default_data_dir_is_project_root_based(monkeypatch: Any, tmp_path: Path
             captured['data_dir'] = Path(data_dir)
 
         def load_data(self, filepath: Path) -> pd.DataFrame:
-            return _frame('2025-01-01', '2026-01-01')
+            return _frame('2024-12-01', '2026-01-01')
 
         def run_signal_mode(self, **kwargs: Any) -> BacktestResult:
             return _result()
@@ -118,8 +118,8 @@ def test_default_data_dir_is_project_root_based(monkeypatch: Any, tmp_path: Path
 def test_preflight_requires_entry_1h_and_4h_coverage(tmp_path: Path) -> None:
     data_dir = tmp_path / 'data'
     data_dir.mkdir()
-    _frame('2025-01-01', '2026-01-01').to_csv(data_dir / 'ETH_USDT_5m.csv')
-    _frame('2025-01-01', '2026-01-01').to_csv(data_dir / 'ETH_USDT_1h.csv')
+    _frame('2024-12-01', '2026-01-01').to_csv(data_dir / 'ETH_USDT_5m.csv')
+    _frame('2024-12-01', '2026-01-01').to_csv(data_dir / 'ETH_USDT_1h.csv')
     _frame('2025-12-01', '2026-01-01').to_csv(data_dir / 'ETH_USDT_4h.csv')
 
     with pytest.raises(ValueError, match='ETH/USDT 4h'):
@@ -129,6 +129,27 @@ def test_preflight_requires_entry_1h_and_4h_coverage(tmp_path: Path) -> None:
             output_path=tmp_path / 'strategy-validation.md',
             data_dir=data_dir,
         )
+
+
+def test_preflight_rejects_data_starting_at_annual_start_without_warmup(tmp_path: Path) -> None:
+    data_dir = tmp_path / 'data'
+    data_dir.mkdir()
+    end_time = pd.Timestamp('2026-01-01 00:00:00+00:00')
+    annual_start = end_time - pd.Timedelta(days=365) + pd.Timedelta(minutes=5)
+    for timeframe in ['5m', '1h', '4h']:
+        _frame(annual_start, end_time).to_csv(data_dir / f'ETH_USDT_{timeframe}.csv')
+
+    with pytest.raises(ValueError) as exc_info:
+        validate_strategies.run_validation_matrix(
+            symbol='ETH/USDT',
+            days=365,
+            output_path=tmp_path / 'strategy-validation.md',
+            data_dir=data_dir,
+        )
+
+    message = str(exc_info.value)
+    assert 'ETH/USDT 5m' in message
+    assert '2024-12-27T00:05:00+00:00' in message
 
 
 def test_run_validation_matrix_covers_every_mode_margin_pair_and_writes_markdown(
@@ -142,7 +163,7 @@ def test_run_validation_matrix_covers_every_mode_margin_pair_and_writes_markdown
             self.data_dir = Path(data_dir)
 
         def load_data(self, filepath: Path) -> pd.DataFrame:
-            return _frame('2025-01-01', '2026-01-01')
+            return _frame('2024-12-01', '2026-01-01')
 
         def run_signal_mode(self, **kwargs: Any) -> BacktestResult:
             calls.append(kwargs)
@@ -218,10 +239,8 @@ def _result() -> BacktestResult:
     )
 
 
-def _frame(start: str, end: str) -> pd.DataFrame:
-    index = pd.DatetimeIndex(
-        [pd.Timestamp(start, tz='UTC'), pd.Timestamp(end, tz='UTC')]
-    )
+def _frame(start: str | pd.Timestamp, end: str | pd.Timestamp) -> pd.DataFrame:
+    index = pd.DatetimeIndex([_utc(start), _utc(end)])
     return pd.DataFrame(
         {
             'Open': [100.0, 101.0],
@@ -232,3 +251,10 @@ def _frame(start: str, end: str) -> pd.DataFrame:
         },
         index=index,
     )
+
+
+def _utc(value: str | pd.Timestamp) -> pd.Timestamp:
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is None:
+        return timestamp.tz_localize('UTC')
+    return timestamp.tz_convert('UTC')
