@@ -1,7 +1,6 @@
 ﻿from __future__ import annotations
 
-from src.strategies.key_level_scoring import KeyLevelScoring
-from src.strategies.ma_cross import MovingAverageCross
+from src.backtest.optimizer import build_stage_one_candidates
 from src.strategies.risk import (
     build_long_risk_prices,
     build_risk_prices,
@@ -9,8 +8,9 @@ from src.strategies.risk import (
     estimate_liquidation_price,
     strong_context_trend_allows_side,
 )
-from src.strategies.rsi_reversion import RSIReversion
-from src.strategies.sr_breakout import SRBreakout, SupportResistanceBreakout
+from src.strategies.signal_models import MarginMode, SignalMode
+from src.web.routes import MODE_OPTIONS
+from src.web.schemas import BacktestRequest
 
 
 class FakeSeries:
@@ -42,30 +42,39 @@ class FakeContextData:
             self.ContextFastMA = FakeSeries(fast_ma)
 
 
-def test_sr_breakout_default_parameters() -> None:
-    assert SRBreakout.lookback == 20
-    assert SRBreakout.atr_mult == 2.0
+def test_index_exposes_only_stable_signal_modes() -> None:
+    assert [item['value'] for item in MODE_OPTIONS] == [
+        'KEY_LEVEL',
+        'RSI_REVERSAL',
+        'KEY_LEVEL_RSI',
+    ]
 
 
-def test_key_level_scoring_default_parameters() -> None:
-    assert KeyLevelScoring.lookback == 20
-    assert KeyLevelScoring.min_score == 5
-    assert KeyLevelScoring.volume_confirm == 1.2
-    assert KeyLevelScoring.wick_reject_ratio == 0.45
+def test_api_schema_exposes_only_stable_signal_modes() -> None:
+    schema = BacktestRequest.model_json_schema()
+    mode_ref = schema['properties']['mode']['$ref'].split('/')[-1]
+
+    assert schema['$defs'][mode_ref]['enum'] == [
+        'KEY_LEVEL',
+        'RSI_REVERSAL',
+        'KEY_LEVEL_RSI',
+    ]
 
 
-def test_support_resistance_alias_reuses_strategy() -> None:
-    assert issubclass(SupportResistanceBreakout, SRBreakout)
+def test_optimizer_candidates_cover_only_stable_signal_modes() -> None:
+    candidates = build_stage_one_candidates(
+        entry_timeframes=['5m'],
+        modes=list(SignalMode),
+        margin_mode=MarginMode.ISOLATED,
+        current_leverage=5,
+        seed_key='stable-modes',
+    )
 
-
-def test_moving_average_cross_default_parameters() -> None:
-    assert MovingAverageCross.lookback == 30
-
-
-def test_rsi_reversion_default_parameters() -> None:
-    assert RSIReversion.lookback == 14
-    assert RSIReversion.lower == 30
-    assert RSIReversion.upper == 70
+    assert {candidate.mode.value for candidate in candidates} == {
+        'KEY_LEVEL',
+        'RSI_REVERSAL',
+        'KEY_LEVEL_RSI',
+    }
 
 
 def test_fractional_order_size_uses_margin_and_leverage() -> None:

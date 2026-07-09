@@ -1,6 +1,6 @@
 ﻿# liang_hua
 
-本项目是一个全自动量化交易机器人的第一阶段 MVP：在本机网页中选择交易对象、周期、策略和参数，然后使用历史 K 线数据运行回测，展示收益曲线、胜率、回撤、夏普比率和交易明细。
+本项目是一个全自动量化交易机器人的第一阶段 MVP：在本机网页中选择交易对象、入场周期、信号模式、保证金模式和成本参数，然后使用历史 K 线数据运行回测，展示收益曲线、胜率、回撤、夏普比率和交易明细。
 
 ## 当前功能
 
@@ -10,12 +10,16 @@
 - ccxt 拉取交易所 K 线数据
 - CSV 本地数据缓存
 - backtesting.py 回测引擎封装
-- 支撑阻力突破、均线金叉死叉、RSI 超卖反弹等规则策略
+- 三种稳定信号模式：`KEY_LEVEL`、`RSI_REVERSAL`、`KEY_LEVEL_RSI`
+- 入场周期支持 `5m`、`15m`，并强制使用已收盘 `1h` 和 `4h` 上下文
 - 确定性渐进参数搜索、样本外和随机窗口稳健性验证
 - 小资金小数仓位回测，初始资金最低 10 USDT
-- 支持单笔逐仓金额、杠杆、USDT 金额止盈止损、maker/taker 手续费参数
+- 支持逐仓/全仓、单笔开仓金额、杠杆、maker/taker 手续费、滑点、资金费率和维持保证金率
+- 交易记录包含冻结 ATR、预期止损/止盈 USDT 金额、实际成交价、实际出场价和实际盈亏
 
-当前策略是规则策略，不是 AI 自动交易。参数搜索已经实现，但实时行情、模拟订单、持仓同步和实盘下单尚未实现。
+当前策略是规则信号，不是 AI 自动交易。参数搜索已经实现，但实时行情、模拟订单、持仓同步和实盘下单尚未实现。
+
+未通过 `scripts/validate_strategies.py` 阈值验证的模式，保持不可用于未来自动化 testnet 执行。
 
 ## 阶段状态
 
@@ -74,6 +78,34 @@ http://127.0.0.1:8000
 python -m src.data.fetcher --symbol BTC/USDT --timeframe 1h --days 365
 ```
 
+信号模式回测需要同时存在入场周期、`1h`、`4h` 数据。例如验证 ETH/USDT 5m：
+
+```powershell
+python -m src.data.fetcher --symbol ETH/USDT --timeframe 5m --days 365
+python -m src.data.fetcher --symbol ETH/USDT --timeframe 1h --days 365
+python -m src.data.fetcher --symbol ETH/USDT --timeframe 4h --days 365
+```
+
+## API 请求字段
+
+`POST /api/backtest` 和优化接口使用同一组核心字段：
+
+| 字段 | 可选值 / 范围 | 默认值 |
+|---|---:|---:|
+| `symbol` | 如 `BTC/USDT`、`ETH/USDT` | `BTC/USDT` |
+| `timeframe` | `5m`、`15m` | `5m` |
+| `mode` | `KEY_LEVEL`、`RSI_REVERSAL`、`KEY_LEVEL_RSI` | `KEY_LEVEL` |
+| `backtest_days` | `1` 到 `3650` | `30` |
+| `cash` | `>= 10` | `100` |
+| `opening_amount` | `>= 0.1` 且不能超过 `cash` | `10` |
+| `margin_mode` | `ISOLATED`、`CROSS` | `ISOLATED` |
+| `leverage` | `1` 到 `150` | `5` |
+| `maker_fee` | `0` 到 `0.1` | `0.0002` |
+| `taker_fee` | `0` 到 `0.1` | `0.0005` |
+| `slippage_rate` | `0` 到 `0.1` | `0.0002` |
+| `funding_rate` | `0` 到 `0.1` | `0.0001` |
+| `maintenance_margin_rate` | `0` 到 `0.1` | `0.005` |
+
 ## 运行测试
 
 ```powershell
@@ -81,6 +113,14 @@ pytest
 ```
 
 测试使用本地构造的数据，不依赖网络。
+
+## 策略验证矩阵
+
+```powershell
+python scripts\validate_strategies.py --symbol ETH/USDT --days 365 --output docs\strategy-validation.md
+```
+
+验证脚本会对三种稳定信号模式和两种保证金模式生成 6 行结果，每行必须明确为 `通过` 或 `未通过验证`，失败原因写入 Markdown。
 
 ## 安全说明
 

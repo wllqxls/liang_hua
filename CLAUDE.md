@@ -30,6 +30,10 @@ liang_hua/
 ├── .env                   # 真实密钥（git 忽略）
 ├── .gitignore
 ├── main.py                # FastAPI 入口
+├── scripts/
+│   └── validate_strategies.py # 稳定信号模式验证矩阵
+├── docs/
+│   └── strategy-validation.md # 最近一次策略验证报告
 ├── src/
 │   ├── __init__.py
 │   ├── data/
@@ -38,14 +42,16 @@ liang_hua/
 │   ├── backtest/
 │   │   ├── __init__.py
 │   │   ├── engine.py      # 回测引擎封装
-│   │   └── optimizer.py   # 渐进式参数搜索
+│   │   ├── optimizer.py   # 渐进式参数搜索
+│   │   └── signal_simulator.py # 信号模式成交/出场模拟
 │   ├── strategies/
 │   │   ├── __init__.py
-│   │   ├── sr_breakout.py # 支撑位阻力位突破策略
-│   │   ├── ma_cross.py
-│   │   ├── rsi_reversion.py
-│   │   ├── key_level_scoring.py
-│   │   └── risk.py        # 仓位及止盈止损换算
+│   │   ├── signal_models.py
+│   │   ├── signal_dispatcher.py
+│   │   ├── signal_evaluators.py
+│   │   ├── market_context.py
+│   │   ├── indicators.py
+│   │   └── risk.py        # 仓位及风险换算
 │   └── web/
 │       ├── __init__.py
 │       ├── routes.py      # FastAPI 路由
@@ -64,8 +70,24 @@ liang_hua/
     ├── __init__.py
     ├── test_fetcher.py
     ├── test_engine.py
-    └── test_strategies.py
+    ├── test_strategies.py
+    └── test_validation_script.py
 ```
+
+## 当前入口模式
+
+只允许以下信号模式作为 Web、API、优化器和验证脚本的主动入口：
+
+- `KEY_LEVEL`
+- `RSI_REVERSAL`
+- `KEY_LEVEL_RSI`
+
+保证金模式只允许：
+
+- `ISOLATED`
+- `CROSS`
+
+`SRBreakout`、`MovingAverageCross`、`RSIReversion`、`KeyLevelScoring` 等旧类文件可以保留，但不能重新注册为主动入口策略。
 
 ## 编码约定
 
@@ -90,6 +112,8 @@ liang_hua/
 - 时间戳用 ISO 8601 字符串（`2024-01-01T00:00:00`）
 - 数据文件命名：`{SYMBOL}_{TIMEFRAME}.csv`，如 `BTC_USDT_1h.csv`
 - SYMBOL 中 `/` 替换为 `_`
+- 信号模式回测必须同时存在入场周期、`1h`、`4h` 已收盘上下文数据
+- `data/` 下行情文件由程序写入，git 忽略，不纳入提交
 
 ### 安全红线
 - `.env` 在 `.gitignore` 中，绝对不能提交
@@ -102,6 +126,7 @@ liang_hua/
 - 测试数据用 fixtures，不依赖网络
 - 回测相关测试用人工构造的小数据集
 - 每个模块改完就跑相关测试
+- 策略验证报告用真实本地行情数据生成，输出到 `docs/strategy-validation.md`
 
 ## 运行方式
 
@@ -115,9 +140,38 @@ python main.py
 # 运行测试
 pytest
 
+# 运行完整测试
+C:\KUN\liang_hua\.venv\Scripts\python.exe -m pytest -q
+
 # 单独拉数据
 python -m src.data.fetcher
+
+# 拉取 ETH/USDT 4h 上下文
+C:\KUN\liang_hua\.venv\Scripts\python.exe -m src.data.fetcher --symbol ETH/USDT --timeframe 4h --days 365
+
+# 生成策略验证矩阵
+C:\KUN\liang_hua\.venv\Scripts\python.exe scripts\validate_strategies.py --symbol ETH/USDT --days 365 --output docs\strategy-validation.md
 ```
+
+## 策略验证规则
+
+`scripts/validate_strategies.py` 必须覆盖 3 个信号模式 × 2 个保证金模式。
+
+每个组合必须运行：
+
+- 12 个不重叠的 30 天窗口
+- 1 个 365 天窗口
+
+只有同时满足以下阈值才可标记为 `通过`：
+
+- 平均窗口收益为正
+- 最差窗口收益大于 `-40%`
+- 全年收益为正
+- 最大回撤小于 `30%`
+- Profit Factor 大于等于 `1.05`
+- 年化交易次数大于等于 `50`
+
+未通过验证的模式保持不可用于未来自动化 testnet 执行。
 
 ## 开发流程
 
