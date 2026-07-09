@@ -20,10 +20,16 @@ from src.strategies.signal_models import MarginMode, SignalMode
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEFRAME = '5m'
+DEFAULT_DATA_DIR = PROJECT_ROOT / 'data'
 WINDOW_COUNT = 12
 WINDOW_DAYS = 30
+ANNUAL_DAYS = 365
 MODES = (SignalMode.KEY_LEVEL, SignalMode.RSI_REVERSAL, SignalMode.KEY_LEVEL_RSI)
 MARGIN_MODES = (MarginMode.ISOLATED, MarginMode.CROSS)
+TIMEFRAME_DELTAS = {
+    '5m': pd.Timedelta(minutes=5),
+    '15m': pd.Timedelta(minutes=15),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,13 +70,26 @@ def run_validation_matrix(
     days: int,
     output_path: Path,
     timeframe: str = DEFAULT_TIMEFRAME,
-    data_dir: Path | str = './data',
+    data_dir: Path | str | None = None,
 ) -> list[ValidationRow]:
     """Run all stable signal modes across isolated and cross margin."""
-    engine = BacktestEngine(data_dir=data_dir)
-    end_time = _data_end_time(engine, Path(data_dir), symbol, timeframe)
-    windows = _non_overlapping_windows(end_time=end_time, count=WINDOW_COUNT, days=WINDOW_DAYS)
-    annual_start = end_time - pd.Timedelta(days=days)
+    _validate_days(days)
+    resolved_data_dir = Path(data_dir) if data_dir is not None else DEFAULT_DATA_DIR
+    engine = BacktestEngine(data_dir=resolved_data_dir)
+    end_time = _preflight_data_coverage(
+        engine,
+        resolved_data_dir,
+        symbol,
+        timeframe,
+        days=days,
+    )
+    windows = _non_overlapping_windows(
+        end_time=end_time,
+        count=WINDOW_COUNT,
+        days=WINDOW_DAYS,
+        timeframe=timeframe,
+    )
+    annual_start = end_time - pd.Timedelta(days=days) + _timeframe_delta(timeframe)
 
     rows: list[ValidationRow] = []
     for mode in MODES:
@@ -126,20 +145,41 @@ def run_validation_matrix(
     return rows
 
 
-def _data_end_time(
+def _validate_days(days: int) -> None:
+    if days != ANNUAL_DAYS:
+        raise ValueError('strategy validation requires exactly one 365-day annual window')
+
+
+def _preflight_data_coverage(
     engine: BacktestEngine,
     data_dir: Path,
     symbol: str,
     timeframe: str,
+    *,
+    days: int,
 ) -> pd.Timestamp:
     safe_symbol = symbol.replace('/', '_')
-    df = engine.load_data(data_dir / f'{safe_symbol}_{timeframe}.csv')
-    if df.empty:
-        raise ValueError(f'{symbol} {timeframe} 数据为空，无法验证')
-    end_time = pd.Timestamp(df.index.max())
-    if end_time.tzinfo is None:
-        return end_time.tz_localize('UTC')
-    return end_time.tz_convert('UTC')
+    frames: dict[str, pd.DataFrame] = {}
+    required_timeframes = (timeframe, '1h', '4h')
+    for required_timeframe in required_timeframes:
+        path = data_dir / f'{safe_symbol}_{required_timeframe}.csv'
+        if type(engine) is BacktestEngine and not path.exists():
+            raise FileNotFoundError(f'缺少本地数据文件: {symbol} {required_timeframe} ({path})')
+        frame = engine.load_data(path)
+        if frame.empty:
+            raise ValueError(f'{symbol} {required_timeframe} 数据为空，无法验证')
+        frames[required_timeframe] = frame
+
+    end_time = _as_utc_timestamp(frames[timeframe].index.max())
+    required_start = end_time - pd.Timedelta(days=days) + _timeframe_delta(timeframe)
+    for required_timeframe, frame in frames.items():
+        start_time = _as_utc_timestamp(frame.index.min())
+        if start_time > required_start:
+            raise ValueError(
+                f'{symbol} {required_timeframe} 本地数据历史不足，'
+                f'需要覆盖到 {required_start.isoformat()}，实际从 {start_time.isoformat()} 开始'
+            )
+    return end_time
 
 
 def _non_overlapping_windows(
@@ -147,14 +187,31 @@ def _non_overlapping_windows(
     end_time: pd.Timestamp,
     count: int,
     days: int,
+    timeframe: str,
 ) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
-    start_time = end_time - pd.Timedelta(days=count * days)
+    step = _timeframe_delta(timeframe)
+    final_start = end_time - pd.Timedelta(days=days) + step
+    start_time = final_start - pd.Timedelta(days=(count - 1) * days)
     windows: list[tuple[pd.Timestamp, pd.Timestamp]] = []
     for index in range(count):
         start = start_time + pd.Timedelta(days=index * days)
-        end = start + pd.Timedelta(days=days)
+        end = start + pd.Timedelta(days=days) - step
         windows.append((start, end))
     return windows
+
+
+def _timeframe_delta(timeframe: str) -> pd.Timedelta:
+    try:
+        return TIMEFRAME_DELTAS[timeframe]
+    except KeyError as exc:
+        raise ValueError('timeframe must be 5m or 15m') from exc
+
+
+def _as_utc_timestamp(value: object) -> pd.Timestamp:
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is None:
+        return timestamp.tz_localize('UTC')
+    return timestamp.tz_convert('UTC')
 
 
 def _metrics(

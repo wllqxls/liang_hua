@@ -6,6 +6,7 @@ import sys
 from typing import Any
 
 import pandas as pd
+import pytest
 
 from scripts import validate_strategies
 from src.backtest.engine import BacktestResult
@@ -67,6 +68,69 @@ def test_evaluate_thresholds_reports_each_failed_gate() -> None:
     ]
 
 
+def test_validation_windows_do_not_share_inclusive_boundaries() -> None:
+    windows = validate_strategies._non_overlapping_windows(
+        end_time=pd.Timestamp('2026-01-01 00:00:00+00:00'),
+        count=3,
+        days=30,
+        timeframe='5m',
+    )
+
+    ordered = sorted(windows)
+    for previous, current in zip(ordered, ordered[1:]):
+        assert previous[1] == current[0] - pd.Timedelta(minutes=5)
+        assert previous[1] < current[0]
+
+
+def test_validation_requires_exact_365_day_contract(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match='365'):
+        validate_strategies.run_validation_matrix(
+            symbol='ETH/USDT',
+            days=180,
+            output_path=tmp_path / 'strategy-validation.md',
+        )
+
+
+def test_default_data_dir_is_project_root_based(monkeypatch: Any, tmp_path: Path) -> None:
+    captured: dict[str, Path] = {}
+
+    class FakeEngine:
+        def __init__(self, data_dir: str | Path) -> None:
+            captured['data_dir'] = Path(data_dir)
+
+        def load_data(self, filepath: Path) -> pd.DataFrame:
+            return _frame('2025-01-01', '2026-01-01')
+
+        def run_signal_mode(self, **kwargs: Any) -> BacktestResult:
+            return _result()
+
+    monkeypatch.setattr(validate_strategies, 'BacktestEngine', FakeEngine)
+
+    validate_strategies.run_validation_matrix(
+        symbol='ETH/USDT',
+        days=365,
+        output_path=tmp_path / 'strategy-validation.md',
+    )
+
+    assert captured['data_dir'] == validate_strategies.PROJECT_ROOT / 'data'
+
+
+def test_preflight_requires_entry_1h_and_4h_coverage(tmp_path: Path) -> None:
+    data_dir = tmp_path / 'data'
+    data_dir.mkdir()
+    _frame('2025-01-01', '2026-01-01').to_csv(data_dir / 'ETH_USDT_5m.csv')
+    _frame('2025-01-01', '2026-01-01').to_csv(data_dir / 'ETH_USDT_1h.csv')
+    _frame('2025-12-01', '2026-01-01').to_csv(data_dir / 'ETH_USDT_4h.csv')
+
+    with pytest.raises(ValueError, match='ETH/USDT 4h'):
+        validate_strategies.run_validation_matrix(
+            symbol='ETH/USDT',
+            days=365,
+            output_path=tmp_path / 'strategy-validation.md',
+            data_dir=data_dir,
+        )
+
+
 def test_run_validation_matrix_covers_every_mode_margin_pair_and_writes_markdown(
     tmp_path: Path,
     monkeypatch: Any,
@@ -74,22 +138,11 @@ def test_run_validation_matrix_covers_every_mode_margin_pair_and_writes_markdown
     calls: list[dict[str, Any]] = []
 
     class FakeEngine:
-        def __init__(self, data_dir: str | Path = './data') -> None:
+        def __init__(self, data_dir: str | Path) -> None:
             self.data_dir = Path(data_dir)
 
         def load_data(self, filepath: Path) -> pd.DataFrame:
-            end = pd.Timestamp('2026-01-01 00:00:00+00:00')
-            start = end - pd.Timedelta(days=400)
-            return pd.DataFrame(
-                {
-                    'Open': [100.0, 101.0],
-                    'High': [101.0, 102.0],
-                    'Low': [99.0, 100.0],
-                    'Close': [100.5, 101.5],
-                    'Volume': [10.0, 11.0],
-                },
-                index=pd.DatetimeIndex([start, end]),
-            )
+            return _frame('2025-01-01', '2026-01-01')
 
         def run_signal_mode(self, **kwargs: Any) -> BacktestResult:
             calls.append(kwargs)
@@ -146,4 +199,36 @@ def test_run_validation_matrix_covers_every_mode_margin_pair_and_writes_markdown
         assert all(call['leverage'] == 5 for call in group_calls)
         ordered = sorted(window_calls, key=lambda item: item['window_start'])
         for previous, current in zip(ordered, ordered[1:]):
-            assert previous['window_end'] <= current['window_start']
+            assert previous['window_end'] < current['window_start']
+
+
+def _result() -> BacktestResult:
+    return BacktestResult(
+        total_return_pct=12.0,
+        win_rate_pct=55.0,
+        max_drawdown_pct=-8.0,
+        sharpe_ratio=1.2,
+        num_trades=60,
+        equity_curve=[],
+        trade_list=[
+            {'pnl': 2.0},
+            {'pnl': -1.0},
+            {'pnl': 1.0},
+        ],
+    )
+
+
+def _frame(start: str, end: str) -> pd.DataFrame:
+    index = pd.DatetimeIndex(
+        [pd.Timestamp(start, tz='UTC'), pd.Timestamp(end, tz='UTC')]
+    )
+    return pd.DataFrame(
+        {
+            'Open': [100.0, 101.0],
+            'High': [101.0, 102.0],
+            'Low': [99.0, 100.0],
+            'Close': [100.5, 101.5],
+            'Volume': [10.0, 11.0],
+        },
+        index=index,
+    )
