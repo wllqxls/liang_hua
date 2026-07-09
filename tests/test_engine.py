@@ -11,7 +11,6 @@ import pytest
 from src.backtest import engine as engine_module
 from src.backtest.engine import BacktestEngine, _filter_recent_days, _merge_context_features
 from src.strategies.signal_models import FilterLabel, MarginMode, Signal, SignalMode, SimulationTrade
-from src.strategies.sr_breakout import SRBreakout
 
 
 class FakeFetcher:
@@ -68,23 +67,45 @@ def test_load_data_rejects_missing_columns(tmp_path: Path) -> None:
         BacktestEngine(tmp_path).load_data(data_file)
 
 
-def test_run_returns_backtest_result(tmp_path: Path, sample_ohlcv: pd.DataFrame) -> None:
-    data_file = tmp_path / "BTC_USDT_1h.csv"
-    sample_ohlcv.to_csv(data_file)
+def test_run_signal_mode_returns_backtest_result(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    for timeframe, frequency in {'5m': '5min', '1h': '1h', '4h': '4h'}.items():
+        index = pd.date_range('2026-01-01', periods=2, freq=frequency, tz='UTC')
+        pd.DataFrame(
+            {'Open': 100.0, 'High': 101.0, 'Low': 99.0, 'Close': 100.0, 'Volume': 1.0},
+            index=index,
+        ).to_csv(tmp_path / f'BTC_USDT_{timeframe}.csv')
 
-    result = BacktestEngine(tmp_path).run(
-        SRBreakout,
-        symbol="BTC/USDT",
-        timeframe="1h",
-        cash=100_000,
-        commission=0.001,
-        lookback=5,
+    signal_time = pd.Timestamp('2026-01-01 00:05', tz='UTC')
+
+    monkeypatch.setattr(
+        engine_module,
+        'build_market_snapshots',
+        lambda *args, **kwargs: pd.Series([object()], index=[signal_time]),
+    )
+
+    class FakeSimulator:
+        def run(self, snapshots: pd.Series, **kwargs: Any) -> SimpleNamespace:
+            assert kwargs['mode'] is SignalMode.KEY_LEVEL
+            return SimpleNamespace(
+                trades=(),
+                equity_curve=pd.Series([100.0, 101.0], index=[signal_time, signal_time + pd.Timedelta(minutes=5)]),
+            )
+
+    monkeypatch.setattr(engine_module, 'SignalSimulator', FakeSimulator)
+
+    result = BacktestEngine(tmp_path).run_signal_mode(
+        mode=SignalMode.KEY_LEVEL,
+        cash=100,
+        opening_amount=10,
     )
 
     assert isinstance(result.total_return_pct, float)
     assert isinstance(result.win_rate_pct, float)
     assert result.num_trades >= 0
-    assert len(result.equity_curve) == len(sample_ohlcv)
+    assert len(result.equity_curve) == 2
 
 
 def test_context_features_align_to_entry_timeframe(sample_ohlcv: pd.DataFrame) -> None:
