@@ -85,6 +85,7 @@ class DataFetcher:
         symbol: str = "BTC/USDT",
         timeframe: str = "1h",
         since: datetime | None = None,
+        until: datetime | None = None,
         limit: int | None = None,
     ) -> pd.DataFrame:
         """从交易所拉取 OHLCV 数据。
@@ -93,6 +94,7 @@ class DataFetcher:
             symbol: 交易对象，如 BTC/USDT、ETH/USDT
             timeframe: K 线周期，1m/5m/15m/1h/4h/1d/1w
             since: 起始时间（UTC），None 表示最近 1 年
+            until: 结束时间（UTC，包含边界），None 表示拉到交易所可用最新数据
             limit: 拉取条数（交易所单次通常最大 1000）
 
         Returns:
@@ -102,6 +104,7 @@ class DataFetcher:
             since = datetime.now(timezone.utc) - timedelta(days=365)
 
         since_ms = int(since.timestamp() * 1000)
+        until_ms = int(until.timestamp() * 1000) if until is not None else None
         all_candles: list[list[float]] = []
 
         logger.info(
@@ -124,10 +127,18 @@ class DataFetcher:
             if not new_candles:
                 break
 
-            all_candles.extend(new_candles)
+            if until_ms is None:
+                filtered_candles = new_candles
+            else:
+                filtered_candles = [candle for candle in new_candles if int(candle[0]) <= until_ms]
+
+            all_candles.extend(filtered_candles)
 
             # 下一批的起始时间
             last_ts = new_candles[-1][0]
+            if until_ms is not None and int(last_ts) >= until_ms:
+                break
+
             if last_ts == since_ms and len(new_candles) == 1:
                 break
 
@@ -158,6 +169,7 @@ class DataFetcher:
         symbol: str = "BTC/USDT",
         timeframe: str = "1h",
         since: datetime | None = None,
+        until: datetime | None = None,
         data_dir: str = "./data",
     ) -> Path:
         """拉取数据并保存到 CSV。
@@ -165,7 +177,7 @@ class DataFetcher:
         Returns:
             保存的文件路径
         """
-        df = self.fetch_ohlcv(symbol=symbol, timeframe=timeframe, since=since)
+        df = self.fetch_ohlcv(symbol=symbol, timeframe=timeframe, since=since, until=until)
 
         # 文件命名：BTC_USDT_1h.csv
         safe_symbol = symbol.replace("/", "_")
