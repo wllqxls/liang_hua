@@ -21,6 +21,15 @@ def test_backtest_api_rejects_legacy_strategy_contract() -> None:
 
 
 def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
+    seen_data_dirs: list[Path] = []
+
+    original_engine = routes.BacktestEngine
+
+    class SpyEngine(original_engine):
+        def __init__(self, data_dir: str | Path = './data') -> None:
+            seen_data_dirs.append(Path(data_dir))
+            super().__init__(data_dir=data_dir)
+
     def fake_run(self: object, **kwargs: Any) -> BacktestResult:
         assert kwargs["opening_amount"] == 10
         assert kwargs["backtest_days"] == 30
@@ -45,7 +54,8 @@ def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
             trade_list=[],
         )
 
-    monkeypatch.setattr(routes.BacktestEngine, "run_signal_mode", fake_run)
+    monkeypatch.setattr(routes, 'BacktestEngine', SpyEngine)
+    monkeypatch.setattr(SpyEngine, "run_signal_mode", fake_run)
     client = TestClient(app)
 
     response = client.post(
@@ -53,6 +63,7 @@ def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
         json={
             "symbol": "BTC/USDT",
             "timeframe": "5m",
+            "data_year": 2025,
             "mode": "KEY_LEVEL_RSI",
             "backtest_days": 30,
             "cash": 100_000,
@@ -74,6 +85,7 @@ def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
     assert payload["total_funding_fee"] == 0.12
     assert payload["result_path"] == "results/demo.json"
     assert payload["equity_curve"][0]["equity"] == 100_000.0
+    assert seen_data_dirs == [Path('data') / '2025']
 
 
 def test_index_renders_signal_mode_names() -> None:
@@ -352,66 +364,77 @@ def test_optimize_fee_validation_does_not_call_pipeline(monkeypatch: Any) -> Non
     assert calls == 0
 
 
-def test_data_status_api_reports_local_csv(tmp_path: Path, monkeypatch: Any) -> None:
-    monkeypatch.chdir(tmp_path)
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    pd.DataFrame(
-        {
-            "timestamp": ["2024-01-01T00:00:00+00:00"],
-            "Open": [1.0],
-            "High": [2.0],
-            "Low": [0.5],
-            "Close": [1.5],
-            "Volume": [10.0],
-        }
-    ).to_csv(data_dir / "BTC_USDT_1h.csv", index=False)
+def test_progressive_optimizer_uses_selected_year_data_dir(monkeypatch: Any) -> None:
+    seen_paths: list[Path] = []
+
+    def fake_available_entry_timeframes(data_dir: Path, symbol: str) -> list[str]:
+        seen_paths.append(data_dir)
+        return []
+
+    monkeypatch.setattr(routes, 'available_entry_timeframes', fake_available_entry_timeframes)
+
+    req = routes.BacktestRequest(symbol='BTC/USDT', timeframe='5m', data_year=2025)
+    response = routes._progressive_optimize(req, lambda **_: None)
+
+    assert response.success is False
+    assert seen_paths == [Path('data') / '2025']
+
+
+def test_data_status_api_reports_selected_symbol_and_year(monkeypatch: Any) -> None:
+    calls: list[tuple[Path, str, int]] = []
+
+    def fake_inspect(data_dir: str | Path, symbol: str, year: int) -> list[Any]:
+        calls.append((Path(data_dir), symbol, year))
+        return [
+            routes.DataStatus(symbol=symbol, timeframe='5m', year=year, exists=True, rows=2),
+            routes.DataStatus(symbol=symbol, timeframe='15m', year=year, exists=False),
+            routes.DataStatus(symbol=symbol, timeframe='1h', year=year, exists=True, rows=1),
+            routes.DataStatus(symbol=symbol, timeframe='4h', year=year, exists=False),
+        ]
+
+    monkeypatch.setattr(routes, 'inspect_year_data', fake_inspect)
 
     client = TestClient(app)
-    response = client.get("/api/data-status")
+    response = client.get("/api/data-status?symbol=ETH/USDT&year=2025")
 
     assert response.status_code == 200
     payload = response.json()
-    btc_1h = next(item for item in payload if item["symbol"] == "BTC/USDT" and item["timeframe"] == "1h")
-    assert btc_1h["exists"] is True
-    assert btc_1h["rows"] == 1
+    assert calls == [(Path('data'), 'ETH/USDT', 2025)]
+    assert [item['timeframe'] for item in payload] == ['5m', '15m', '1h', '4h']
+    assert payload[0]['year'] == 2025
+    assert payload[0]['rows'] == 2
 
 
-def test_fetch_data_api_saves_csv(tmp_path: Path, monkeypatch: Any) -> None:
-    monkeypatch.chdir(tmp_path)
+def test_fetch_data_api_fetches_selected_year_all_timeframes(monkeypatch: Any) -> None:
+    calls: list[tuple[str, int, Path]] = []
 
-    class FakeFetcher:
-        def fetch_and_save(self, symbol: str, timeframe: str, since: object, data_dir: str) -> Path:
-            path = Path(data_dir) / f"{symbol.replace('/', '_')}_{timeframe}.csv"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            pd.DataFrame(
-                {
-                    "timestamp": ["2024-01-01T00:00:00+00:00", "2024-01-01T01:00:00+00:00"],
-                    "Open": [1.0, 1.1],
-                    "High": [2.0, 2.1],
-                    "Low": [0.5, 0.6],
-                    "Close": [1.5, 1.6],
-                    "Volume": [10.0, 11.0],
-                }
-            ).to_csv(path, index=False)
-            return path
+    def fake_fetch(symbol: str, year: int, *, data_dir: str | Path) -> list[Any]:
+        calls.append((symbol, year, Path(data_dir)))
+        return [
+            routes.DataStatus(symbol=symbol, timeframe='5m', year=year, exists=True, rows=10),
+            routes.DataStatus(symbol=symbol, timeframe='15m', year=year, exists=True, rows=4),
+            routes.DataStatus(symbol=symbol, timeframe='1h', year=year, exists=True, rows=2),
+            routes.DataStatus(symbol=symbol, timeframe='4h', year=year, exists=True, rows=1),
+        ]
 
-    monkeypatch.setattr(routes, "DataFetcher", FakeFetcher)
+    monkeypatch.setattr(routes, 'fetch_symbol_year', fake_fetch)
     client = TestClient(app)
 
-    response = client.post("/api/fetch-data", json={"symbol": "BTC/USDT", "timeframe": "1h", "days": 30})
+    response = client.post("/api/fetch-data", json={"symbol": "BTC/USDT", "year": 2025})
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["success"] is True
-    assert payload["rows"] == 2
-    assert (tmp_path / "data" / "BTC_USDT_1h.csv").exists()
+    assert payload["symbol"] == "BTC/USDT"
+    assert payload["year"] == 2025
+    assert [item['timeframe'] for item in payload['items']] == ['5m', '15m', '1h', '4h']
+    assert calls == [('BTC/USDT', 2025, Path('data'))]
 
 
 def test_fetch_data_api_rejects_unsupported_symbol() -> None:
     client = TestClient(app)
 
-    response = client.post("/api/fetch-data", json={"symbol": "NOT/USDT", "timeframe": "1h", "days": 30})
+    response = client.post("/api/fetch-data", json={"symbol": "NOT/USDT", "year": 2025})
 
     assert response.status_code == 200
     payload = response.json()
@@ -422,14 +445,13 @@ def test_fetch_data_api_rejects_unsupported_symbol() -> None:
 def test_fetch_data_api_returns_fetch_error(tmp_path: Path, monkeypatch: Any) -> None:
     monkeypatch.chdir(tmp_path)
 
-    class FailingFetcher:
-        def fetch_and_save(self, symbol: str, timeframe: str, since: object, data_dir: str) -> Path:
-            raise OSError("network unavailable")
+    def failing_fetch(symbol: str, year: int, *, data_dir: str | Path) -> list[Any]:
+        raise OSError("network unavailable")
 
-    monkeypatch.setattr(routes, "DataFetcher", FailingFetcher)
+    monkeypatch.setattr(routes, "fetch_symbol_year", failing_fetch)
     client = TestClient(app)
 
-    response = client.post("/api/fetch-data", json={"symbol": "BTC/USDT", "timeframe": "1h", "days": 30})
+    response = client.post("/api/fetch-data", json={"symbol": "BTC/USDT", "year": 2025})
 
     assert response.status_code == 200
     payload = response.json()

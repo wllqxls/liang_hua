@@ -17,7 +17,6 @@ from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 
-import ccxt
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -33,7 +32,7 @@ from src.backtest.optimizer import (
     build_stage_one_candidates,
     build_stage_two_candidates,
 )
-from src.data.fetcher import DataFetcher
+from src.data.yearly import fetch_symbol_year, inspect_year_data
 from src.strategies.signal_models import SignalMode
 from src.web.schemas import (
     BacktestRequest,
@@ -82,6 +81,8 @@ SYMBOLS = [
     "XRP/USDT", "ADA/USDT", "DOGE/USDT", "AVAX/USDT",
 ]
 
+DATA_ROOT = Path('./data')
+
 MIN_QUALITY_TRADES = 5
 MAX_ALLOWED_DRAWDOWN_PCT = -30.0
 MIN_ALLOWED_WIN_RATE_PCT = 28.0
@@ -97,6 +98,11 @@ MAX_STORED_OPTIMIZATION_JOBS = 20
 
 _optimization_jobs: OrderedDict[str, dict] = OrderedDict()
 _optimization_jobs_lock = threading.Lock()
+
+
+def _request_data_dir(year: int) -> Path:
+    """Return the selected yearly market-data directory for a request."""
+    return DATA_ROOT / str(year)
 
 
 @dataclass
@@ -153,7 +159,7 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
     _validate_request_funds(req)
 
     try:
-        engine = BacktestEngine(data_dir="./data")
+        engine = BacktestEngine(data_dir=_request_data_dir(req.data_year))
         result = engine.run_signal_mode(
             symbol=req.symbol,
             timeframe=req.timeframe,
@@ -229,11 +235,12 @@ def _log_safe_optimizer_error(event: str, error: Exception) -> None:
 async def create_optimization_job(req: BacktestRequest) -> OptimizationJobCreated:
     """Start one progressive optimization job in a background thread."""
     _validate_request_funds(req)
-    timeframes = available_entry_timeframes(Path('./data'), req.symbol)
+    data_dir = _request_data_dir(req.data_year)
+    timeframes = available_entry_timeframes(data_dir, req.symbol)
     if not timeframes:
         return OptimizationJobCreated(
             success=False,
-            error='没有可用入场周期，请补齐同一币种的 5m/15m 入场数据及 1h、4h 数据',
+            error=f'没有可用入场周期，请补齐 {req.data_year} 年同一币种的 5m/15m 入场数据及 1h、4h 数据',
         )
 
     with _optimization_jobs_lock:
@@ -362,7 +369,8 @@ def _progressive_optimize(
 ) -> OptimizationResponse:
     """Run deterministic coarse, local, and robustness search stages."""
     started_at = time.monotonic()
-    entry_timeframes = available_entry_timeframes(Path('./data'), req.symbol)
+    data_dir = _request_data_dir(req.data_year)
+    entry_timeframes = available_entry_timeframes(data_dir, req.symbol)
     if not entry_timeframes:
         return OptimizationResponse(success=False, candidates=[], error='没有可用入场周期')
     seed_key = '|'.join([
@@ -381,7 +389,7 @@ def _progressive_optimize(
     )
     stage_two_upper_bound = min(STAGE_TWO_BUDGET, min(len(stage_one), 12) * 2)
     total_budget = len(stage_one) + stage_two_upper_bound + VALIDATION_BUDGET
-    engine = BacktestEngine(data_dir='./data')
+    engine = BacktestEngine(data_dir=data_dir)
     bounds_cache: dict[str, tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp, int]] = {}
     rankless: list[dict] = []
     evaluated_count = 0
@@ -486,7 +494,7 @@ def _progressive_optimize(
             partial = True
             break
         try:
-            data_start, data_end = _load_data_bounds(engine, req.symbol, item['timeframe'])
+            data_start, data_end = _load_data_bounds(engine, req.symbol, item['timeframe'], data_dir)
         except Exception as exc:
             _log_safe_optimizer_error('optimizer_validation_bounds_failed', exc)
             failure_count += 1
@@ -619,7 +627,7 @@ def _evaluate_progressive_candidate(
 ) -> tuple[dict | None, bool, bool]:
     try:
         if candidate.timeframe not in bounds_cache:
-            data_start, data_end = _load_data_bounds(engine, req.symbol, candidate.timeframe)
+            data_start, data_end = _load_data_bounds(engine, req.symbol, candidate.timeframe, _request_data_dir(req.data_year))
             in_start, in_end, _, _ = _split_validation_bounds(data_start, data_end, req.backtest_days)
             in_days = max(1, math.ceil((in_end - in_start).total_seconds() / 86400))
             bounds_cache[candidate.timeframe] = (data_start, data_end, in_start, in_end, in_days)
@@ -718,7 +726,7 @@ def _long_window_validation(
     timing: EvaluationTiming | None = None,
 ) -> tuple[float, int, int, bool, bool]:
     try:
-        data_start, data_end = _load_data_bounds(engine, req.symbol, item['timeframe'])
+        data_start, data_end = _load_data_bounds(engine, req.symbol, item['timeframe'], _request_data_dir(req.data_year))
     except Exception as exc:
         _log_safe_optimizer_error('optimizer_long_validation_failed', exc)
         return 0.0, 0, 0, False, True
@@ -744,15 +752,18 @@ def _long_window_validation(
 
 
 @router.get("/api/data-status")
-async def data_status() -> list[DataStatus]:
+async def data_status(symbol: str = "BTC/USDT", year: int | None = None) -> list[DataStatus]:
     """检查本地数据文件。"""
-    data_dir = Path("./data")
-    results: list[DataStatus] = []
-
-    for symbol in SYMBOLS[:4]:
-        for tf in ["5m", "15m", "1h", "4h"]:
-            results.append(_inspect_data_file(data_dir, symbol, tf))
-    return results
+    if symbol not in SYMBOLS:
+        raise HTTPException(status_code=422, detail=f"暂不支持的交易对象: {symbol}")
+    selected_year = year or datetime.now(timezone.utc).year
+    try:
+        return [
+            DataStatus.model_validate(item.__dict__)
+            for item in inspect_year_data(DATA_ROOT, symbol, selected_year)
+        ]
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
 
 
 @router.post("/api/fetch-data", response_model=DataFetchResponse)
@@ -760,28 +771,20 @@ async def fetch_data(req: DataFetchRequest) -> DataFetchResponse:
     """拉取历史 K 线数据并保存到本地 CSV。"""
     if req.symbol not in SYMBOLS:
         return _fetch_error_response(req, f"暂不支持的交易对象: {req.symbol}")
-    if req.timeframe not in TIMEFRAMES:
-        return _fetch_error_response(req, f"暂不支持的 K 线周期: {req.timeframe}")
-
-    data_dir = Path("./data")
-    since = datetime.now(timezone.utc) - timedelta(days=req.days)
 
     try:
-        DataFetcher().fetch_and_save(
+        statuses = fetch_symbol_year(
             symbol=req.symbol,
-            timeframe=req.timeframe,
-            since=since,
-            data_dir=str(data_dir),
+            year=req.year,
+            data_dir=DATA_ROOT,
         )
-        status = _inspect_data_file(data_dir, req.symbol, req.timeframe)
         return DataFetchResponse(
             success=True,
             symbol=req.symbol,
-            timeframe=req.timeframe,
-            rows=status.rows,
-            file_size_kb=status.file_size_kb,
+            year=req.year,
+            items=[DataStatus.model_validate(item.__dict__) for item in statuses],
         )
-    except (ccxt.BaseError, OSError, ValueError) as e:
+    except (OSError, RuntimeError, ValueError) as e:
         logger.exception("数据拉取失败")
         return _fetch_error_response(
             req,
@@ -789,37 +792,12 @@ async def fetch_data(req: DataFetchRequest) -> DataFetchResponse:
         )
 
 
-def _inspect_data_file(data_dir: Path, symbol: str, timeframe: str) -> DataStatus:
-    safe_sym = symbol.replace("/", "_")
-    filepath = data_dir / f"{safe_sym}_{timeframe}.csv"
-    exists = filepath.exists()
-    rows = None
-    size = None
-
-    if exists:
-        try:
-            df = pd.read_csv(filepath)
-            rows = len(df)
-            size = filepath.stat().st_size / 1024
-        except (OSError, pd.errors.ParserError):
-            logger.warning("无法读取数据文件: %s", filepath)
-
-    return DataStatus(
-        symbol=symbol,
-        timeframe=timeframe,
-        exists=exists,
-        rows=rows,
-        file_size_kb=round(size, 1) if size else None,
-    )
-
-
 def _fetch_error_response(req: DataFetchRequest, msg: str) -> DataFetchResponse:
     return DataFetchResponse(
         success=False,
         symbol=req.symbol,
-        timeframe=req.timeframe,
-        rows=None,
-        file_size_kb=None,
+        year=req.year,
+        items=[],
         error=msg,
     )
 
@@ -832,9 +810,14 @@ def _error_response(msg: str) -> BacktestResponse:
     )
 
 
-def _load_data_bounds(engine: BacktestEngine, symbol: str, timeframe: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+def _load_data_bounds(
+    engine: BacktestEngine,
+    symbol: str,
+    timeframe: str,
+    data_dir: Path,
+) -> tuple[pd.Timestamp, pd.Timestamp]:
     safe_symbol = symbol.replace("/", "_")
-    filepath = Path("./data") / f"{safe_symbol}_{timeframe}.csv"
+    filepath = data_dir / f"{safe_symbol}_{timeframe}.csv"
     df = engine.load_data(filepath)
     if df.empty:
         raise ValueError("本地数据为空，无法做稳健性验证")

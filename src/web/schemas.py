@@ -4,6 +4,7 @@ Pydantic 数据模型：API 请求/响应结构。
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -18,6 +19,12 @@ class BacktestRequest(BaseModel):
 
     symbol: str = Field(default="BTC/USDT", description="交易对象")
     timeframe: Literal['5m', '15m'] = Field(default="5m", description="入场 K 线周期")
+    data_year: int = Field(
+        default_factory=lambda: datetime.now(timezone.utc).year,
+        ge=2017,
+        le=2100,
+        description="本地数据年份",
+    )
     mode: SignalMode = Field(default=SignalMode.KEY_LEVEL, description="信号模式")
     backtest_days: int = Field(default=30, ge=1, le=3650, description="回测天数")
     cash: float = Field(default=100, ge=10, description="初始资金")
@@ -35,8 +42,12 @@ class DataFetchRequest(BaseModel):
     """历史数据拉取请求参数。"""
 
     symbol: str = Field(default="BTC/USDT", description="交易对象")
-    timeframe: str = Field(default="1h", description="K 线周期")
-    days: int = Field(default=365, ge=1, le=3650, description="拉取天数")
+    year: int = Field(
+        default_factory=lambda: datetime.now(timezone.utc).year,
+        ge=2017,
+        le=2100,
+        description="数据年份",
+    )
 
 
 class TradeItem(BaseModel):
@@ -182,6 +193,7 @@ class DataStatus(BaseModel):
 
     symbol: str
     timeframe: str
+    year: int
     exists: bool
     rows: int | None = None
     file_size_kb: float | None = None
@@ -192,7 +204,6 @@ class DataFetchResponse(BaseModel):
 
     success: bool = True
     symbol: str
-    timeframe: str
-    rows: int | None = None
-    file_size_kb: float | None = None
+    year: int
+    items: list[DataStatus] = Field(default_factory=list)
     error: str | None = None
