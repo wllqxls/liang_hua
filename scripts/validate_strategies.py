@@ -166,8 +166,6 @@ def _preflight_data_coverage(
     required_timeframes = (timeframe, '1h', '4h')
     for required_timeframe in required_timeframes:
         path = data_dir / f'{safe_symbol}_{required_timeframe}.csv'
-        if type(engine) is BacktestEngine and not path.exists():
-            raise FileNotFoundError(f'缺少本地数据文件: {symbol} {required_timeframe} ({path})')
         frame = engine.load_data(path)
         if frame.empty:
             raise ValueError(f'{symbol} {required_timeframe} 数据为空，无法验证')
