@@ -41,6 +41,8 @@ class BacktestRequest(BaseModel):
 class DataFetchRequest(BaseModel):
     """历史数据拉取请求参数。"""
 
+    model_config = ConfigDict(extra='forbid')
+
     symbol: str = Field(default="BTC/USDT", description="交易对象")
     year: int = Field(
         default_factory=lambda: datetime.now(timezone.utc).year,

@@ -20,6 +20,7 @@ build/
 
 # 历史数据（体积大，每次重新拉即可）
 data/*.csv
+data/**/*.csv
 
 # 回测结果（程序生成）
 results/*.json

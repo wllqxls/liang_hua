@@ -442,6 +442,15 @@ def test_fetch_data_api_rejects_unsupported_symbol() -> None:
     assert "暂不支持" in payload["error"]
 
 
+def test_fetch_data_api_rejects_legacy_single_timeframe_fields() -> None:
+    response = TestClient(app).post(
+        "/api/fetch-data",
+        json={"symbol": "BTC/USDT", "year": 2025, "timeframe": "1h", "days": 30},
+    )
+
+    assert response.status_code == 422
+
+
 def test_fetch_data_api_returns_fetch_error(tmp_path: Path, monkeypatch: Any) -> None:
     monkeypatch.chdir(tmp_path)
 
