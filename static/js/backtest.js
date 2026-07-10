@@ -19,6 +19,7 @@ const MIN_NOTIONAL_BY_SYMBOL = {
 const LEVERAGE_OPTIONS = [1, 2, 3, 5, 10, 20, 50, 100, 125, 150];
 
 window.addEventListener('DOMContentLoaded', () => {
+    initializeDataYear();
     updateModeDescription();
     document.getElementById('mode').addEventListener('change', updateModeDescription);
     bindRealtimeChecks();
@@ -187,6 +188,7 @@ function collectBacktestPayload() {
     return {
         symbol: document.getElementById('symbol').value,
         timeframe: document.getElementById('timeframe').value,
+        data_year: requiredNumber('data-year', '数据年份'),
         mode: document.getElementById('mode').value,
         backtest_days: requiredNumber('backtest-days', '回测天数'),
         cash: requiredNumber('cash', '账户总金额'),
@@ -292,15 +294,37 @@ async function optimizeParams() {
 // 数据管理
 // ============================================================
 
+function initializeDataYear() {
+    const input = document.getElementById('data-year');
+    if (String(input.value).trim() === '') {
+        input.value = String(new Date().getFullYear());
+    }
+}
+
+
+function selectedDataYear() {
+    return requiredNumber('data-year', '数据年份');
+}
+
+
 async function loadDataStatus(successMessage) {
     const statusText = document.getElementById('data-status-text');
     const refreshBtn = document.getElementById('refresh-data-btn');
+    const symbol = document.getElementById('symbol').value;
+    let year;
+    try {
+        year = selectedDataYear();
+    } catch (err) {
+        statusText.textContent = err.message;
+        renderDataStatusTable([]);
+        return;
+    }
 
     refreshBtn.disabled = true;
-    statusText.innerHTML = '<span class="spinner"></span>正在读取数据状态...';
+    statusText.innerHTML = '<span class="spinner"></span>正在读取 ' + escapeHtml(symbol) + ' ' + year + ' 年数据状态...';
 
     try {
-        const resp = await fetch('/api/data-status');
+        const resp = await fetch('/api/data-status?symbol=' + encodeURIComponent(symbol) + '&year=' + encodeURIComponent(year));
         const data = await parseApiResponse(resp);
         renderDataStatusTable(data);
         statusText.textContent = successMessage || '数据状态已更新';
@@ -317,40 +341,36 @@ async function fetchSelectedData() {
     const btn = document.getElementById('fetch-data-btn');
     const statusText = document.getElementById('data-status-text');
     const symbol = document.getElementById('symbol').value;
-    let days;
+    let year;
     try {
-        days = requiredNumber('fetch-days', '拉取天数');
+        year = selectedDataYear();
     } catch (err) {
         statusText.textContent = err.message;
         return;
     }
-    const timeframes = Array.from(
-        new Set([document.getElementById('timeframe').value, '1h', '4h'])
-    );
 
     btn.disabled = true;
     statusText.innerHTML = '<span class="spinner"></span>正在拉取 ' + escapeHtml(symbol) + ' ' +
-        timeframes.map(escapeHtml).join(' + ') + '...';
+        year + ' 年全部周期（5m、15m、1h、4h）...';
 
     try {
-        const saved = [];
-        for (const timeframe of timeframes) {
-            const resp = await fetch('/api/fetch-data', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ symbol, timeframe, days }),
-            });
-            const data = await parseApiResponse(resp);
+        const resp = await fetch('/api/fetch-data', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ symbol, year }),
+        });
+        const data = await parseApiResponse(resp);
 
-            if (!data.success) {
-                statusText.textContent = data.error || '数据拉取失败';
-                return;
-            }
-            const rows = data.rows == null ? '--' : data.rows.toLocaleString();
-            saved.push(data.timeframe + ' ' + rows + ' 行');
+        if (!data.success) {
+            statusText.textContent = data.error || '数据拉取失败';
+            return;
         }
+        const saved = (data.items || []).map(item => {
+            const rows = item.rows == null ? '--' : item.rows.toLocaleString();
+            return item.timeframe + ' ' + rows + ' 行';
+        });
 
-        await loadDataStatus('已保存 ' + symbol + '：' + saved.join('，'));
+        await loadDataStatus('已保存 ' + symbol + ' ' + year + ' 年：' + saved.join('，'));
     } catch (err) {
         statusText.textContent = '数据拉取失败: ' + err.message;
     } finally {
@@ -364,7 +384,7 @@ function renderDataStatusTable(items) {
     tbody.innerHTML = '';
 
     if (!items || items.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="empty-cell">暂无数据状态</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="4" class="empty-cell">暂无数据状态</td></tr>';
         return;
     }
 
@@ -373,14 +393,12 @@ function renderDataStatusTable(items) {
         const statusClass = item.exists ? 'positive' : 'negative';
         const statusText = item.exists ? '已存在' : '缺失';
         const rows = item.rows == null ? '--' : formatNumber(item.rows, 0);
-        const size = item.file_size_kb == null ? '--' : formatNumber(item.file_size_kb, 1) + ' KB';
 
         row.innerHTML =
             '<td>' + escapeHtml(item.symbol || '--') + '</td>' +
             '<td>' + escapeHtml(item.timeframe || '--') + '</td>' +
             '<td class="' + statusClass + '">' + statusText + '</td>' +
-            '<td>' + rows + '</td>' +
-            '<td>' + size + '</td>';
+            '<td>' + rows + '</td>';
         tbody.appendChild(row);
     }
 }

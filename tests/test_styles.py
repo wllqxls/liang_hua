@@ -75,6 +75,7 @@ def test_payload_and_validation_match_new_backtest_api() -> None:
 
     assert "mode: document.getElementById('mode').value" in script
     assert "timeframe: document.getElementById('timeframe').value" in script
+    assert "data_year: requiredNumber('data-year'" in script
     assert "margin_mode: document.getElementById('margin-mode').value" in script
     assert "opening_amount: requiredNumber('opening-amount', '开仓金额')" in script
     assert "['5m', '15m'].includes(payload.timeframe)" in script
@@ -82,10 +83,15 @@ def test_payload_and_validation_match_new_backtest_api() -> None:
     assert 'payload.opening_amount * payload.leverage * payload.taker_fee' in script
 
 
-def test_data_fetch_requests_entry_one_hour_and_four_hour_once() -> None:
-    _, script, _ = _sources()
+def test_data_fetch_uses_yearly_single_request_contract() -> None:
+    template, script, _ = _sources()
 
-    assert "new Set([document.getElementById('timeframe').value, '1h', '4h'])" in script
+    assert 'id="data-year"' in template
+    assert 'id="fetch-days"' not in template
+    assert '拉取指定年份全部周期' in template
+    assert "body: JSON.stringify({ symbol, year })" in script
+    assert "fetch('/api/data-status?symbol='" in script
+    assert "new Set([document.getElementById('timeframe').value, '1h', '4h'])" not in script
     assert 'const data = await parseApiResponse(resp);' in script
     assert 'formatApiError(data)' in script
 
@@ -154,8 +160,8 @@ def test_non_2xx_errors_use_api_detail_and_cache_key_is_updated() -> None:
     assert "if (!response.ok)" in script
     assert "if (!created.success)" in script
     assert 'resp.json()' not in script
-    assert '/static/css/style.css?v=runtime-hardening-1' in template
-    assert '/static/js/backtest.js?v=runtime-hardening-1' in template
+    assert '/static/css/style.css?v=yearly-data-1' in template
+    assert '/static/js/backtest.js?v=yearly-data-1' in template
 
 
 def test_form_controls_and_statuses_are_keyboard_and_screen_reader_accessible() -> None:

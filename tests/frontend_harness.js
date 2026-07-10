@@ -10,7 +10,7 @@ const SCRIPT = fs.readFileSync(SCRIPT_PATH, 'utf8');
 const KNOWN_IDS = new Set([
     'mode', 'mode-desc', 'symbol', 'timeframe', 'backtest-days', 'cash',
     'opening-amount', 'margin-mode', 'leverage', 'maker-fee', 'taker-fee',
-    'slippage-rate', 'funding-rate', 'maintenance-margin-rate', 'fetch-days',
+    'slippage-rate', 'funding-rate', 'maintenance-margin-rate', 'data-year',
     'run-btn', 'optimize-btn', 'status', 'results', 'error-msg', 'order-check-msg',
     'fetch-data-btn', 'refresh-data-btn', 'data-status-text', 'data-status-tbody',
     'trades-tbody', 'optimization-tbody', 'equity-chart', 'metric-return',
@@ -93,7 +93,7 @@ function setValues(document) {
         'margin-mode': 'CROSS', leverage: '5', 'maker-fee': '0.0002',
         'taker-fee': '0.0005', 'slippage-rate': '0.0002',
         'funding-rate': '0.0001', 'maintenance-margin-rate': '0.005',
-        'fetch-days': '30',
+        'data-year': '2025',
     };
     for (const [id, value] of Object.entries(values)) document.getElementById(id).value = value;
 }
@@ -246,6 +246,7 @@ async function main() {
     assert.equal(payload.mode, 'RSI_REVERSAL');
     assert.equal(payload.margin_mode, 'CROSS');
     assert.equal(payload.opening_amount, 12.5);
+    assert.equal(payload.data_year, 2025);
     for (const legacy of ['strategy', 'context_timeframe', 'position_amount', 'take_profit_amount']) {
         assert.equal(Object.hasOwn(payload, legacy), false);
     }
@@ -258,15 +259,25 @@ async function main() {
     const fetchCalls = [];
     context.fetch = async (url, options = {}) => {
         fetchCalls.push({ url, options });
-        if (url === '/api/data-status') return response({ body: '[]' });
+        if (url.startsWith('/api/data-status')) return response({ body: '[]' });
         const body = JSON.parse(options.body);
-        return response({ body: JSON.stringify({ success: true, timeframe: body.timeframe, rows: 1 }) });
+        return response({ body: JSON.stringify({
+            success: true,
+            symbol: body.symbol,
+            year: body.year,
+            items: [
+                { symbol: body.symbol, timeframe: '5m', year: body.year, exists: true, rows: 1 },
+                { symbol: body.symbol, timeframe: '15m', year: body.year, exists: true, rows: 1 },
+                { symbol: body.symbol, timeframe: '1h', year: body.year, exists: true, rows: 1 },
+                { symbol: body.symbol, timeframe: '4h', year: body.year, exists: true, rows: 1 },
+            ],
+        }) });
     };
     await api.fetchSelectedData();
-    assert.deepEqual(
-        fetchCalls.filter(call => call.url === '/api/fetch-data').map(call => JSON.parse(call.options.body).timeframe),
-        ['5m', '1h', '4h'],
-    );
+    const yearlyFetches = fetchCalls.filter(call => call.url === '/api/fetch-data');
+    assert.equal(yearlyFetches.length, 1);
+    assert.deepEqual(JSON.parse(yearlyFetches[0].options.body), { symbol: 'BTC/USDT', year: 2025 });
+    assert.equal(fetchCalls.some(call => call.url.includes('year=2025')), true);
 
     context.fetch = async () => response({ ok: false, status: 422, statusText: 'Invalid', body: '{"detail":"backend detail"}' });
     await api.runBacktest();
