@@ -405,6 +405,29 @@ def test_data_status_api_reports_selected_symbol_and_year(monkeypatch: Any) -> N
     assert payload[0]['rows'] == 2
 
 
+def test_data_status_api_reports_all_symbols_when_symbol_omitted(monkeypatch: Any) -> None:
+    calls: list[tuple[str, int]] = []
+
+    def fake_inspect(data_dir: str | Path, symbol: str, year: int) -> list[Any]:
+        calls.append((symbol, year))
+        return [
+            routes.DataStatus(symbol=symbol, timeframe='5m', year=year, exists=True, rows=1),
+            routes.DataStatus(symbol=symbol, timeframe='15m', year=year, exists=False),
+            routes.DataStatus(symbol=symbol, timeframe='1h', year=year, exists=False),
+            routes.DataStatus(symbol=symbol, timeframe='4h', year=year, exists=False),
+        ]
+
+    monkeypatch.setattr(routes, 'inspect_year_data', fake_inspect)
+
+    response = TestClient(app).get('/api/data-status?year=2025')
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert calls == [(symbol, 2025) for symbol in routes.SYMBOLS]
+    assert len(payload) == len(routes.SYMBOLS) * 4
+    assert {item['symbol'] for item in payload} == set(routes.SYMBOLS)
+
+
 def test_fetch_data_api_fetches_selected_year_all_timeframes(monkeypatch: Any) -> None:
     calls: list[tuple[str, int, Path]] = []
 

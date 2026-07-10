@@ -23,6 +23,14 @@
             <div class="collapsible-content">
                 <div class="data-actions">
                     <div class="form-group compact">
+                        <label for="data-symbol">拉取币种</label>
+                        <select id="data-symbol">
+                            {% for s in symbols %}
+                            <option value="{{ s }}" {% if s == 'BTC/USDT' %}selected{% endif %}>{{ s }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group compact">
                         <label for="data-year">数据年份</label>
                         <input type="number" id="data-year" min="2017" max="2100">
                     </div>

@@ -10,7 +10,7 @@ const SCRIPT = fs.readFileSync(SCRIPT_PATH, 'utf8');
 const KNOWN_IDS = new Set([
     'mode', 'mode-desc', 'symbol', 'timeframe', 'backtest-days', 'cash',
     'opening-amount', 'margin-mode', 'leverage', 'maker-fee', 'taker-fee',
-    'slippage-rate', 'funding-rate', 'maintenance-margin-rate', 'data-year',
+    'slippage-rate', 'funding-rate', 'maintenance-margin-rate', 'data-symbol', 'data-year',
     'run-btn', 'optimize-btn', 'status', 'results', 'error-msg', 'order-check-msg',
     'fetch-data-btn', 'refresh-data-btn', 'data-status-text', 'data-status-tbody',
     'trades-tbody', 'optimization-tbody', 'equity-chart', 'metric-return',
@@ -93,7 +93,7 @@ function setValues(document) {
         'margin-mode': 'CROSS', leverage: '5', 'maker-fee': '0.0002',
         'taker-fee': '0.0005', 'slippage-rate': '0.0002',
         'funding-rate': '0.0001', 'maintenance-margin-rate': '0.005',
-        'data-year': '2025',
+        'data-symbol': 'ETH/USDT', 'data-year': '2025',
     };
     for (const [id, value] of Object.entries(values)) document.getElementById(id).value = value;
 }
@@ -259,7 +259,16 @@ async function main() {
     const fetchCalls = [];
     context.fetch = async (url, options = {}) => {
         fetchCalls.push({ url, options });
-        if (url.startsWith('/api/data-status')) return response({ body: '[]' });
+        if (url.startsWith('/api/data-status')) return response({ body: JSON.stringify([
+            { symbol: 'BTC/USDT', timeframe: '5m', year: 2025, exists: true, rows: 1 },
+            { symbol: 'BTC/USDT', timeframe: '15m', year: 2025, exists: false },
+            { symbol: 'BTC/USDT', timeframe: '1h', year: 2025, exists: false },
+            { symbol: 'BTC/USDT', timeframe: '4h', year: 2025, exists: false },
+            { symbol: 'ETH/USDT', timeframe: '5m', year: 2025, exists: true, rows: 2 },
+            { symbol: 'ETH/USDT', timeframe: '15m', year: 2025, exists: true, rows: 2 },
+            { symbol: 'ETH/USDT', timeframe: '1h', year: 2025, exists: true, rows: 2 },
+            { symbol: 'ETH/USDT', timeframe: '4h', year: 2025, exists: true, rows: 2 },
+        ]) });
         const body = JSON.parse(options.body);
         return response({ body: JSON.stringify({
             success: true,
@@ -276,8 +285,12 @@ async function main() {
     await api.fetchSelectedData();
     const yearlyFetches = fetchCalls.filter(call => call.url === '/api/fetch-data');
     assert.equal(yearlyFetches.length, 1);
-    assert.deepEqual(JSON.parse(yearlyFetches[0].options.body), { symbol: 'BTC/USDT', year: 2025 });
-    assert.equal(fetchCalls.some(call => call.url.includes('year=2025')), true);
+    assert.deepEqual(JSON.parse(yearlyFetches[0].options.body), { symbol: 'ETH/USDT', year: 2025 });
+    assert.equal(fetchCalls.some(call => call.url === '/api/data-status?year=2025'), true);
+    const dataRows = document.getElementById('data-status-tbody').children.map(row => row.innerHTML).join('\n');
+    assert.equal(dataRows.includes('BTC/USDT'), true);
+    assert.equal(dataRows.includes('ETH/USDT'), true);
+    assert.equal(dataRows.includes('5m / 15m / 1h / 4h'), true);
 
     context.fetch = async () => response({ ok: false, status: 422, statusText: 'Invalid', body: '{"detail":"backend detail"}' });
     await api.runBacktest();

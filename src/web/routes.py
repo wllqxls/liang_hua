@@ -752,16 +752,20 @@ def _long_window_validation(
 
 
 @router.get("/api/data-status")
-async def data_status(symbol: str = "BTC/USDT", year: int | None = None) -> list[DataStatus]:
+async def data_status(symbol: str | None = None, year: int | None = None) -> list[DataStatus]:
     """检查本地数据文件。"""
-    if symbol not in SYMBOLS:
+    if symbol is not None and symbol not in SYMBOLS:
         raise HTTPException(status_code=422, detail=f"暂不支持的交易对象: {symbol}")
     selected_year = year or datetime.now(timezone.utc).year
+    symbols = [symbol] if symbol is not None else SYMBOLS
+    rows: list[DataStatus] = []
     try:
-        return [
-            DataStatus.model_validate(item.__dict__)
-            for item in inspect_year_data(DATA_ROOT, symbol, selected_year)
-        ]
+        for item_symbol in symbols:
+            rows.extend(
+                DataStatus.model_validate(item.__dict__)
+                for item in inspect_year_data(DATA_ROOT, item_symbol, selected_year)
+            )
+        return rows
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from None
 

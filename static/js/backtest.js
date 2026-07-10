@@ -310,7 +310,6 @@ function selectedDataYear() {
 async function loadDataStatus(successMessage) {
     const statusText = document.getElementById('data-status-text');
     const refreshBtn = document.getElementById('refresh-data-btn');
-    const symbol = document.getElementById('symbol').value;
     let year;
     try {
         year = selectedDataYear();
@@ -321,10 +320,10 @@ async function loadDataStatus(successMessage) {
     }
 
     refreshBtn.disabled = true;
-    statusText.innerHTML = '<span class="spinner"></span>正在读取 ' + escapeHtml(symbol) + ' ' + year + ' 年数据状态...';
+    statusText.innerHTML = '<span class="spinner"></span>正在读取 ' + year + ' 年全部币种数据状态...';
 
     try {
-        const resp = await fetch('/api/data-status?symbol=' + encodeURIComponent(symbol) + '&year=' + encodeURIComponent(year));
+        const resp = await fetch('/api/data-status?year=' + encodeURIComponent(year));
         const data = await parseApiResponse(resp);
         renderDataStatusTable(data);
         statusText.textContent = successMessage || '数据状态已更新';
@@ -340,7 +339,7 @@ async function loadDataStatus(successMessage) {
 async function fetchSelectedData() {
     const btn = document.getElementById('fetch-data-btn');
     const statusText = document.getElementById('data-status-text');
-    const symbol = document.getElementById('symbol').value;
+    const symbol = document.getElementById('data-symbol').value;
     let year;
     try {
         year = selectedDataYear();
@@ -388,19 +387,44 @@ function renderDataStatusTable(items) {
         return;
     }
 
-    for (const item of items) {
+    for (const group of groupDataStatusBySymbol(items)) {
         const row = document.createElement('tr');
-        const statusClass = item.exists ? 'positive' : 'negative';
-        const statusText = item.exists ? '已存在' : '缺失';
-        const rows = item.rows == null ? '--' : formatNumber(item.rows, 0);
+        const presentCount = group.items.filter(item => item.exists).length;
+        const statusClass = presentCount === group.items.length ? 'positive' : 'negative';
+        const statusText = group.items.map(item => {
+            const text = item.exists ? '已存在' : '缺失';
+            return '<span class="' + (item.exists ? 'positive' : 'negative') + '">' +
+                escapeHtml(item.timeframe || '--') + ' ' + text + '</span>';
+        }).join(' / ');
+        const rows = group.items.map(item => {
+            const count = item.rows == null ? '--' : formatNumber(item.rows, 0);
+            return escapeHtml(item.timeframe || '--') + ': ' + count;
+        }).join(' / ');
 
         row.innerHTML =
-            '<td>' + escapeHtml(item.symbol || '--') + '</td>' +
-            '<td>' + escapeHtml(item.timeframe || '--') + '</td>' +
+            '<td>' + escapeHtml(group.symbol || '--') + '</td>' +
+            '<td>5m / 15m / 1h / 4h</td>' +
             '<td class="' + statusClass + '">' + statusText + '</td>' +
             '<td>' + rows + '</td>';
         tbody.appendChild(row);
     }
+}
+
+
+function groupDataStatusBySymbol(items) {
+    const order = ['5m', '15m', '1h', '4h'];
+    const groups = new Map();
+    for (const item of items) {
+        const symbol = item.symbol || '--';
+        if (!groups.has(symbol)) {
+            groups.set(symbol, { symbol, items: [] });
+        }
+        groups.get(symbol).items.push(item);
+    }
+    return Array.from(groups.values()).map(group => {
+        group.items.sort((a, b) => order.indexOf(a.timeframe) - order.indexOf(b.timeframe));
+        return group;
+    });
 }
 
 

@@ -87,10 +87,11 @@ def test_data_fetch_uses_yearly_single_request_contract() -> None:
     template, script, _ = _sources()
 
     assert 'id="data-year"' in template
+    assert 'id="data-symbol"' in template
     assert 'id="fetch-days"' not in template
     assert '拉取指定年份全部周期' in template
     assert "body: JSON.stringify({ symbol, year })" in script
-    assert "fetch('/api/data-status?symbol='" in script
+    assert "fetch('/api/data-status?year='" in script
     assert "new Set([document.getElementById('timeframe').value, '1h', '4h'])" not in script
     assert 'const data = await parseApiResponse(resp);' in script
     assert 'formatApiError(data)' in script
