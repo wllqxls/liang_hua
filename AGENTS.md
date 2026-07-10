@@ -38,7 +38,8 @@ liang_hua/
 │   ├── __init__.py
 │   ├── data/
 │   │   ├── __init__.py
-│   │   └── fetcher.py     # 从交易所拉 K 线数据
+│   │   ├── fetcher.py     # 从交易所拉 K 线数据
+│   │   └── yearly.py      # 按年份一键拉取多周期数据
 │   ├── backtest/
 │   │   ├── __init__.py
 │   │   ├── engine.py      # 回测引擎封装
@@ -65,7 +66,8 @@ liang_hua/
 │   └── js/
 │       └── backtest.js    # 前端交互逻辑
 ├── data/                  # 历史 K 线 CSV 文件（git 忽略）
-│   └── .gitkeep
+│   ├── .gitkeep
+│   └── {year}/            # 年份数据目录，如 data/2025/
 └── tests/
     ├── __init__.py
     ├── test_fetcher.py
@@ -110,9 +112,13 @@ liang_hua/
 ### 数据
 - K 线数据 CSV 列：`timestamp, open, high, low, close, volume`
 - 时间戳用 ISO 8601 字符串（`2024-01-01T00:00:00`）
-- 数据文件命名：`{SYMBOL}_{TIMEFRAME}.csv`，如 `BTC_USDT_1h.csv`
+- 新数据文件路径：`data/{year}/{SYMBOL}_{TIMEFRAME}.csv`，如 `data/2025/BTC_USDT_1h.csv`
+- 网页数据管理只主动拉取 `5m`、`15m`、`1h`、`4h`
+- 点击拉取指定年份数据时必须一次性拉取上述 4 个周期
+- 同一年同一周期重复拉取时必须合并新旧 CSV，按时间戳去重、排序并覆盖保存
+- 根目录旧文件如 `data/BTC_USDT_1h.csv` 可以保留兼容，但不是新功能主动入口
 - SYMBOL 中 `/` 替换为 `_`
-- 信号模式回测必须同时存在入场周期、`1h`、`4h` 已收盘上下文数据
+- 信号模式回测必须从所选 `data_year` 目录读取入场周期、`1h`、`4h` 已收盘上下文数据
 - `data/` 下行情文件由程序写入，git 忽略，不纳入提交
 
 ### 安全红线
@@ -143,11 +149,8 @@ pytest
 # 运行完整测试
 C:\KUN\liang_hua\.venv\Scripts\python.exe -m pytest -q
 
-# 单独拉数据
-python -m src.data.fetcher
-
-# 拉取 ETH/USDT 4h 上下文
-C:\KUN\liang_hua\.venv\Scripts\python.exe -m src.data.fetcher --symbol ETH/USDT --timeframe 4h --days 365
+# 推荐在网页“本地数据”面板选择年份后点击：
+# 拉取指定年份全部周期
 
 # 生成策略验证矩阵
 C:\KUN\liang_hua\.venv\Scripts\python.exe scripts\validate_strategies.py --symbol ETH/USDT --days 365 --output docs\strategy-validation.md

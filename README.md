@@ -8,7 +8,7 @@
 - Jinja2 页面渲染
 - Chart.js 收益曲线
 - ccxt 拉取交易所 K 线数据
-- CSV 本地数据缓存
+- 按年份组织的 CSV 本地数据缓存
 - backtesting.py 回测引擎封装
 - 三种稳定信号模式：`KEY_LEVEL`、`RSI_REVERSAL`、`KEY_LEVEL_RSI`
 - 入场周期支持 `5m`、`15m`，并强制使用已收盘 `1h` 和 `4h` 上下文
@@ -16,6 +16,7 @@
 - 小资金小数仓位回测，初始资金最低 10 USDT
 - 支持逐仓/全仓、单笔开仓金额、杠杆、maker/taker 手续费、滑点、资金费率和维持保证金率
 - 交易记录包含冻结 ATR、预期止损/止盈 USDT 金额、实际成交价、实际出场价和实际盈亏
+- 本地数据面板支持选择年份后一键拉取 `5m`、`15m`、`1h`、`4h`
 
 当前策略是规则信号，不是 AI 自动交易。参数搜索已经实现，但实时行情、模拟订单、持仓同步和实盘下单尚未实现。
 
@@ -74,17 +75,35 @@ http://127.0.0.1:8000
 
 ## 拉取历史数据
 
-```powershell
-python -m src.data.fetcher --symbol BTC/USDT --timeframe 1h --days 365
+推荐在网页“本地数据”面板中选择交易对象和年份，然后点击：
+
+```text
+拉取指定年份全部周期
 ```
 
-信号模式回测需要同时存在入场周期、`1h`、`4h` 数据。例如验证 ETH/USDT 5m：
+系统会一次性拉取该年份的：
 
-```powershell
-python -m src.data.fetcher --symbol ETH/USDT --timeframe 5m --days 365
-python -m src.data.fetcher --symbol ETH/USDT --timeframe 1h --days 365
-python -m src.data.fetcher --symbol ETH/USDT --timeframe 4h --days 365
+- `5m`
+- `15m`
+- `1h`
+- `4h`
+
+新数据保存路径为：
+
+```text
+data/{year}/{SYMBOL}_{TIMEFRAME}.csv
 ```
+
+例如：
+
+```text
+data/2025/ETH_USDT_5m.csv
+data/2025/ETH_USDT_15m.csv
+data/2025/ETH_USDT_1h.csv
+data/2025/ETH_USDT_4h.csv
+```
+
+如果同一年同一周期的数据已经存在，系统会合并新旧 CSV、按时间戳去重、排序并覆盖保存。旧的根目录 `data/ETH_USDT_5m.csv` 文件可以保留兼容，但不再是网页数据管理和新回测请求的主动入口。
 
 ## API 请求字段
 
@@ -94,6 +113,7 @@ python -m src.data.fetcher --symbol ETH/USDT --timeframe 4h --days 365
 |---|---:|---:|
 | `symbol` | 如 `BTC/USDT`、`ETH/USDT` | `BTC/USDT` |
 | `timeframe` | `5m`、`15m` | `5m` |
+| `data_year` | `2017` 到 `2100` | 当前年份 |
 | `mode` | `KEY_LEVEL`、`RSI_REVERSAL`、`KEY_LEVEL_RSI` | `KEY_LEVEL` |
 | `backtest_days` | `1` 到 `3650` | `30` |
 | `cash` | `>= 10` | `100` |
@@ -105,6 +125,17 @@ python -m src.data.fetcher --symbol ETH/USDT --timeframe 4h --days 365
 | `slippage_rate` | `0` 到 `0.1` | `0.0002` |
 | `funding_rate` | `0` 到 `0.1` | `0.0001` |
 | `maintenance_margin_rate` | `0` 到 `0.1` | `0.005` |
+
+`POST /api/fetch-data` 只接受交易对象和年份：
+
+```json
+{
+  "symbol": "ETH/USDT",
+  "year": 2025
+}
+```
+
+`GET /api/data-status?symbol=ETH/USDT&year=2025` 返回该年份 `5m`、`15m`、`1h`、`4h` 四个 CSV 的存在状态和真实去重行数。
 
 ## 运行测试
 
@@ -125,5 +156,5 @@ python scripts\validate_strategies.py --symbol ETH/USDT --days 365 --output docs
 ## 安全说明
 
 - `.env` 已在 `.gitignore` 中忽略，不要提交真实密钥。
-- `data/*.csv` 已忽略，历史行情数据可以本地重新拉取。
+- `data/**/*.csv` 已忽略，历史行情数据可以本地重新拉取。
 - 当前项目只包含回测功能，没有实盘下单逻辑。
