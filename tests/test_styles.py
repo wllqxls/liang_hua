@@ -161,8 +161,8 @@ def test_non_2xx_errors_use_api_detail_and_cache_key_is_updated() -> None:
     assert "if (!response.ok)" in script
     assert "if (!created.success)" in script
     assert 'resp.json()' not in script
-    assert '/static/css/style.css?v=yearly-data-2' in template
-    assert '/static/js/backtest.js?v=yearly-data-2' in template
+    assert '/static/css/style.css?v=yearly-data-3' in template
+    assert '/static/js/backtest.js?v=yearly-data-3' in template
 
 
 def test_form_controls_and_statuses_are_keyboard_and_screen_reader_accessible() -> None:

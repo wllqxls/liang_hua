@@ -391,11 +391,7 @@ function renderDataStatusTable(items) {
         const row = document.createElement('tr');
         const presentCount = group.items.filter(item => item.exists).length;
         const statusClass = presentCount === group.items.length ? 'positive' : 'negative';
-        const statusText = group.items.map(item => {
-            const text = item.exists ? '已存在' : '缺失';
-            return '<span class="' + (item.exists ? 'positive' : 'negative') + '">' +
-                escapeHtml(item.timeframe || '--') + ' ' + text + '</span>';
-        }).join(' / ');
+        const statusText = presentCount === group.items.length ? '已存在' : '缺失';
         const rows = group.items.map(item => {
             const count = item.rows == null ? '--' : formatNumber(item.rows, 0);
             return escapeHtml(item.timeframe || '--') + ': ' + count;

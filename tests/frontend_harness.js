@@ -291,6 +291,8 @@ async function main() {
     assert.equal(dataRows.includes('BTC/USDT'), true);
     assert.equal(dataRows.includes('ETH/USDT'), true);
     assert.equal(dataRows.includes('5m / 15m / 1h / 4h'), true);
+    assert.equal(dataRows.includes('5m 缺失'), false);
+    assert.equal(dataRows.includes('15m 已存在'), false);
 
     context.fetch = async () => response({ ok: false, status: 422, statusText: 'Invalid', body: '{"detail":"backend detail"}' });
     await api.runBacktest();
