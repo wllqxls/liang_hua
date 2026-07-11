@@ -10,7 +10,14 @@ import pytest
 
 from src.backtest import engine as engine_module
 from src.backtest.engine import BacktestEngine, _filter_recent_days, _merge_context_features
-from src.strategies.signal_models import FilterLabel, MarginMode, Signal, SignalMode, SimulationTrade
+from src.strategies.signal_models import (
+    FilterLabel,
+    MarginMode,
+    Signal,
+    SignalMode,
+    SignalParameters,
+    SimulationTrade,
+)
 
 
 class FakeFetcher:
@@ -229,6 +236,83 @@ def test_run_signal_mode_keeps_warmup_then_filters_requested_window(
     assert captured['kwargs']['mode'] is SignalMode.KEY_LEVEL_RSI
     assert captured['kwargs']['margin_mode'] is MarginMode.CROSS
     assert captured['kwargs']['opening_amount'] == 10
+
+
+def test_run_signal_mode_passes_custom_signal_parameters_to_simulator(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    for timeframe, frequency in {'5m': '5min', '1h': '1h', '4h': '4h'}.items():
+        index = pd.date_range('2026-01-01', periods=2, freq=frequency, tz='UTC')
+        pd.DataFrame(
+            {'Open': 100.0, 'High': 101.0, 'Low': 99.0, 'Close': 100.0, 'Volume': 1.0},
+            index=index,
+        ).to_csv(tmp_path / f'BTC_USDT_{timeframe}.csv')
+
+    signal_time = pd.Timestamp('2026-01-01 00:05', tz='UTC')
+    parameters = SignalParameters(rsi_buy_threshold=35)
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        engine_module,
+        'build_market_snapshots',
+        lambda *args, **kwargs: pd.Series([object()], index=[signal_time]),
+    )
+
+    class FakeSimulator:
+        def __init__(self, *, signal_parameters: SignalParameters) -> None:
+            captured['signal_parameters'] = signal_parameters
+
+        def run(self, snapshots: pd.Series, **kwargs: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                trades=(),
+                equity_curve=pd.Series([100.0], index=[signal_time]),
+            )
+
+    monkeypatch.setattr(engine_module, 'SignalSimulator', FakeSimulator)
+
+    BacktestEngine(tmp_path).run_signal_mode(signal_parameters=parameters)
+
+    assert captured['signal_parameters'] == parameters
+
+
+def test_run_signal_mode_reuses_built_market_snapshots(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    for timeframe, frequency in {'5m': '5min', '1h': '1h', '4h': '4h'}.items():
+        index = pd.date_range('2026-01-01', periods=4, freq=frequency, tz='UTC')
+        pd.DataFrame(
+            {'Open': 100.0, 'High': 101.0, 'Low': 99.0, 'Close': 100.0, 'Volume': 1.0},
+            index=index,
+        ).to_csv(tmp_path / f'BTC_USDT_{timeframe}.csv')
+
+    calls = 0
+    signal_time = pd.Timestamp('2026-01-01 00:05', tz='UTC')
+
+    def fake_build(*args: Any, **kwargs: Any) -> pd.Series:
+        nonlocal calls
+        calls += 1
+        return pd.Series(
+            [object(), object()],
+            index=[signal_time, signal_time + pd.Timedelta(minutes=5)],
+        )
+
+    class FakeSimulator:
+        def run(self, snapshots: pd.Series, **kwargs: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                trades=(),
+                equity_curve=pd.Series([100.0], index=[snapshots.index[-1]]),
+            )
+
+    monkeypatch.setattr(engine_module, 'build_market_snapshots', fake_build)
+    monkeypatch.setattr(engine_module, 'SignalSimulator', FakeSimulator)
+
+    engine = BacktestEngine(tmp_path)
+    engine.run_signal_mode(window_end=signal_time)
+    engine.run_signal_mode(window_end=signal_time + pd.Timedelta(minutes=5))
+
+    assert calls == 1
 
 
 def test_run_signal_mode_maps_enriched_trade_and_costs(tmp_path: Path, monkeypatch: Any) -> None:

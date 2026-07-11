@@ -26,6 +26,7 @@ from src.backtest.engine import BacktestEngine
 from src.backtest.optimizer import (
     STAGE_ONE_BUDGET,
     STAGE_TWO_BUDGET,
+    SIGNAL_PARAMETER_OPTIONS,
     VALIDATION_BUDGET,
     SearchCandidate,
     available_entry_timeframes,
@@ -91,7 +92,7 @@ VALIDATION_POOL_SIZE = 10
 RANDOM_VALIDATION_WINDOWS = 2
 SEARCH_SOFT_LIMIT_SECONDS = 480.0
 SEARCH_HARD_LIMIT_SECONDS = 600.0
-MAX_STAGE_ONE_CANDIDATES = len(SignalMode) * 2
+MAX_STAGE_ONE_CANDIDATES = len(SignalMode) * 2 * len(SIGNAL_PARAMETER_OPTIONS)
 MAX_STAGE_TWO_CANDIDATES = min(STAGE_TWO_BUDGET, MAX_STAGE_ONE_CANDIDATES * 2)
 SEARCH_TOTAL_BUDGET = MAX_STAGE_ONE_CANDIDATES + MAX_STAGE_TWO_CANDIDATES + VALIDATION_BUDGET
 MAX_STORED_OPTIMIZATION_JOBS = 20
@@ -655,6 +656,7 @@ def _evaluate_progressive_candidate(
             slippage_rate=req.slippage_rate,
             funding_rate=req.funding_rate,
             maintenance_margin_rate=req.maintenance_margin_rate,
+            signal_parameters=candidate.signal_parameters,
         )
         if hard_deadline_reached is not None and hard_deadline_reached():
             return None, False, False
@@ -685,6 +687,7 @@ def _evaluate_progressive_candidate(
         'timeframe': candidate.timeframe,
         'margin_mode': candidate.margin_mode,
         'leverage': candidate.leverage,
+        'signal_parameters': candidate.signal_parameters,
         'total_return_pct': total_return_pct,
         'max_drawdown_pct': max_drawdown_pct,
         'win_rate_pct': win_rate_pct,
@@ -715,6 +718,7 @@ def _search_candidate_from_item(item: dict) -> SearchCandidate:
         timeframe=item['timeframe'],
         leverage=item['leverage'],
         margin_mode=item['margin_mode'],
+        signal_parameters=item['signal_parameters'],
     )
 
 
@@ -962,6 +966,7 @@ def _run_candidate_window(
         slippage_rate=req.slippage_rate,
         funding_rate=req.funding_rate,
         maintenance_margin_rate=req.maintenance_margin_rate,
+        signal_parameters=item['signal_parameters'],
     )
 
 
@@ -992,7 +997,7 @@ def _random_validation_windows(
         return [(max(data_start, data_end - window), data_end)]
     seed_text = "|".join(
         str(item[key])
-        for key in ['mode', 'timeframe', 'margin_mode', 'leverage']
+        for key in ['mode', 'timeframe', 'margin_mode', 'leverage', 'signal_parameters']
     )
     seed = int(sha256(seed_text.encode("utf-8")).hexdigest()[:12], 16)
     rng = random.Random(seed)

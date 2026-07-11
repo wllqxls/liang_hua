@@ -62,6 +62,15 @@ def test_evaluate_thresholds_reports_each_failed_gate() -> None:
         '平均窗口收益不为正',
         '最差窗口收益不高于 -40%',
         '全年收益不为正',
+        '最大回撤达到或超过 30%',
+        'Profit Factor 低于 1.05',
+        '年化交易次数少于 50',
+    ]
+    return
+    assert reasons == [
+        '平均窗口收益不为正',
+        '最差窗口收益不高于 -40%',
+        '全年收益不为正',
         '最大回撤不小于 30%',
         'Profit Factor 低于 1.05',
         '年化交易次数少于 50',
@@ -92,7 +101,11 @@ def test_validation_requires_exact_365_day_contract(tmp_path: Path) -> None:
 
 
 def test_default_data_dir_is_project_root_based(monkeypatch: Any, tmp_path: Path) -> None:
-    captured: dict[str, Path] = {}
+    captured: dict[str, Path | tuple[pd.Timestamp, pd.Timestamp]] = {}
+
+    def fake_materialize(data_dir: Path, **_: Any) -> Path:
+        captured['materialize_input'] = data_dir
+        return data_dir
 
     class FakeEngine:
         def __init__(self, data_dir: str | Path) -> None:
@@ -105,6 +118,11 @@ def test_default_data_dir_is_project_root_based(monkeypatch: Any, tmp_path: Path
             return _result()
 
     monkeypatch.setattr(validate_strategies, 'BacktestEngine', FakeEngine)
+    monkeypatch.setattr(
+        validate_strategies,
+        '_materialize_validation_data_dir',
+        fake_materialize,
+    )
 
     validate_strategies.run_validation_matrix(
         symbol='ETH/USDT',
@@ -112,6 +130,7 @@ def test_default_data_dir_is_project_root_based(monkeypatch: Any, tmp_path: Path
         output_path=tmp_path / 'strategy-validation.md',
     )
 
+    assert captured['materialize_input'] == validate_strategies.PROJECT_ROOT / 'data'
     assert captured['data_dir'] == validate_strategies.PROJECT_ROOT / 'data'
 
 
@@ -221,6 +240,53 @@ def test_run_validation_matrix_covers_every_mode_margin_pair_and_writes_markdown
         ordered = sorted(window_calls, key=lambda item: item['window_start'])
         for previous, current in zip(ordered, ordered[1:]):
             assert previous['window_end'] < current['window_start']
+
+
+def test_run_validation_matrix_uses_yearly_data_directories(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    data_dir = tmp_path / 'data'
+    for year in ['2025', '2026']:
+        (data_dir / year).mkdir(parents=True)
+    for timeframe in ['5m', '1h', '4h']:
+        _frame('2025-01-01', '2025-12-31 23:55').to_csv(
+            data_dir / '2025' / f'ETH_USDT_{timeframe}.csv'
+        )
+        _frame('2026-01-01', '2026-07-11 13:55').to_csv(
+            data_dir / '2026' / f'ETH_USDT_{timeframe}.csv'
+        )
+
+    captured: dict[str, Path] = {}
+
+    class FakeEngine:
+        def __init__(self, data_dir: str | Path) -> None:
+            captured['data_dir'] = Path(data_dir)
+
+        def load_data(self, filepath: Path) -> pd.DataFrame:
+            frame = pd.read_csv(filepath, index_col=0, parse_dates=True)
+            captured[filepath.name] = (frame.index.min(), frame.index.max())
+            return frame
+
+        def run_signal_mode(self, **kwargs: Any) -> BacktestResult:
+            return _result()
+
+    monkeypatch.setattr(validate_strategies, 'BacktestEngine', FakeEngine)
+
+    rows = validate_strategies.run_validation_matrix(
+        symbol='ETH/USDT',
+        days=365,
+        output_path=tmp_path / 'strategy-validation.md',
+        data_dir=data_dir,
+    )
+
+    assert len(rows) == 6
+    assert captured['data_dir'] != data_dir
+    for timeframe in ['5m', '1h', '4h']:
+        assert captured[f'ETH_USDT_{timeframe}.csv'] == (
+            pd.Timestamp('2025-01-01 00:00:00+00:00'),
+            pd.Timestamp('2026-07-11 13:55:00+00:00'),
+        )
 
 
 def _result() -> BacktestResult:

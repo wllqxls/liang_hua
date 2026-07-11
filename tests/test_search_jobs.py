@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from main import app
 from src.web import routes
 from src.backtest.optimizer import SearchCandidate
-from src.strategies.signal_models import MarginMode, SignalMode
+from src.strategies.signal_models import MarginMode, SignalMode, SignalParameters
 from src.web.schemas import BacktestRequest, OptimizationResponse
 
 
@@ -194,7 +194,14 @@ def test_candidate_evaluation_uses_signal_engine_and_keeps_request_values_out_of
         slippage_rate=0.003,
         funding_rate=0.004,
     )
-    candidate = SearchCandidate(SignalMode.KEY_LEVEL_RSI, '5m', 10, MarginMode.CROSS)
+    signal_parameters = SignalParameters(rsi_buy_threshold=35)
+    candidate = SearchCandidate(
+        SignalMode.KEY_LEVEL_RSI,
+        '5m',
+        10,
+        MarginMode.CROSS,
+        signal_parameters,
+    )
 
     item, filtered, failed = routes._evaluate_progressive_candidate(
         routes.BacktestEngine(), req, candidate, {},
@@ -223,6 +230,7 @@ def test_candidate_evaluation_uses_signal_engine_and_keeps_request_values_out_of
         'slippage_rate': 0.003,
         'funding_rate': 0.004,
         'maintenance_margin_rate': 0.005,
+        'signal_parameters': signal_parameters,
     }]
 
 
@@ -681,7 +689,7 @@ def test_progress_budget_uses_real_stage_two_bound_and_only_refines_down(monkeyp
 
     assert totals == sorted(totals, reverse=True)
     assert max(totals) <= 1 + 2 + routes.VALIDATION_BUDGET
-    assert routes._new_optimization_job('budget')['total_budget'] <= 54
+    assert routes._new_optimization_job('budget')['total_budget'] == routes.SEARCH_TOTAL_BUDGET
 
 
 def test_background_job_failure_is_generic_and_does_not_leak_secret(

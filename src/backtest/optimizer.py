@@ -7,13 +7,53 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
-from src.strategies.signal_models import MarginMode, SignalMode
+from src.strategies.signal_models import (
+    DEFAULT_SIGNAL_PARAMETERS,
+    MarginMode,
+    SignalMode,
+    SignalParameters,
+)
 
 
 LEVERAGE_OPTIONS = [1, 2, 3, 5, 10, 20, 50, 100, 125, 150]
 STAGE_ONE_BUDGET = 120
 STAGE_TWO_BUDGET = 84
 VALIDATION_BUDGET = 36
+SIGNAL_PARAMETER_OPTIONS = [
+    DEFAULT_SIGNAL_PARAMETERS,
+    SignalParameters(
+        key_stop_atr_multiple=1.0,
+        key_target_atr_multiple=2.0,
+        rsi_buy_threshold=30,
+        rsi_sell_threshold=70,
+        rsi_stop_atr_multiple=0.8,
+        rsi_target_atr_multiple=1.5,
+    ),
+    SignalParameters(
+        key_stop_atr_multiple=1.2,
+        key_target_atr_multiple=3.0,
+        rsi_buy_threshold=35,
+        rsi_sell_threshold=65,
+        rsi_stop_atr_multiple=1.0,
+        rsi_target_atr_multiple=2.0,
+    ),
+    SignalParameters(
+        key_stop_atr_multiple=2.0,
+        key_target_atr_multiple=5.0,
+        rsi_buy_threshold=35,
+        rsi_sell_threshold=65,
+        rsi_stop_atr_multiple=1.0,
+        rsi_target_atr_multiple=1.5,
+    ),
+    SignalParameters(
+        key_stop_atr_multiple=0.6,
+        key_target_atr_multiple=1.2,
+        rsi_buy_threshold=20,
+        rsi_sell_threshold=80,
+        rsi_stop_atr_multiple=0.6,
+        rsi_target_atr_multiple=1.5,
+    ),
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +64,7 @@ class SearchCandidate:
     timeframe: str
     leverage: float
     margin_mode: MarginMode
+    signal_parameters: SignalParameters = DEFAULT_SIGNAL_PARAMETERS
 
 
 def available_entry_timeframes(data_dir: Path, symbol: str) -> list[str]:
@@ -51,9 +92,10 @@ def build_stage_one_candidates(
     """Cover every approved mode/timeframe stratum at the requested leverage."""
     leverage = float(current_leverage)
     candidates = [
-        SearchCandidate(mode, timeframe, leverage, margin_mode)
+        SearchCandidate(mode, timeframe, leverage, margin_mode, signal_parameters)
         for mode in modes
         for timeframe in entry_timeframes
+        for signal_parameters in SIGNAL_PARAMETER_OPTIONS
     ]
     _rng(f'{seed_key}|stage1').shuffle(candidates)
     return candidates[:budget]
@@ -69,7 +111,13 @@ def build_stage_two_candidates(
     seen: set[SearchCandidate] = set(ranked)
     for index, base in enumerate(ranked[:12]):
         pool = [
-            SearchCandidate(base.mode, base.timeframe, float(leverage), base.margin_mode)
+            SearchCandidate(
+                base.mode,
+                base.timeframe,
+                float(leverage),
+                base.margin_mode,
+                base.signal_parameters,
+            )
             for leverage in _bracketed(base.leverage, LEVERAGE_OPTIONS)
         ]
         _rng(f'{seed_key}|stage2|{index}|{base}').shuffle(pool)

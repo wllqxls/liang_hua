@@ -5,7 +5,12 @@ import pandas as pd
 import pytest
 
 from src.strategies.signal_evaluators import evaluate_key_level, evaluate_rsi_reversal
-from src.strategies.signal_models import FilterLabel, MarketSnapshot, SignalMode
+from src.strategies.signal_models import (
+    FilterLabel,
+    MarketSnapshot,
+    SignalMode,
+    SignalParameters,
+)
 
 
 BASE = MarketSnapshot(
@@ -138,6 +143,26 @@ def test_rsi_score_is_recorded_but_does_not_gate_entry() -> None:
     assert signal.score == 3
 
 
+def test_rsi_reversal_accepts_custom_thresholds_and_risk_multiples() -> None:
+    parameters = SignalParameters(
+        rsi_buy_threshold=35,
+        rsi_sell_threshold=65,
+        rsi_stop_atr_multiple=1.1,
+        rsi_target_atr_multiple=2.4,
+    )
+
+    signal = evaluate_rsi_reversal(
+        replace(BASE, rsi=34.9, low=89, close=91),
+        SignalMode.RSI_REVERSAL,
+        parameters=parameters,
+    )
+
+    assert signal is not None
+    assert (signal.stop_atr_multiple, signal.target_atr_multiple) == (1.1, 2.4)
+    assert (signal.stop_distance, signal.target_distance) == (11, 24)
+    assert (signal.estimated_stop_price, signal.estimated_target_price) == (80, 115)
+
+
 def test_key_level_buy_and_sell_use_false_break_directions() -> None:
     buy = evaluate_key_level(
         replace(BASE, low=94, close=96, environment_side='BUY'),
@@ -165,6 +190,24 @@ def test_key_level_buy_and_sell_use_false_break_directions() -> None:
     assert (buy.stop_distance, buy.target_distance) == (8, 15)
     assert (buy.estimated_stop_price, buy.estimated_target_price) == (88, 111)
     assert (sell.estimated_stop_price, sell.estimated_target_price) == (112, 89)
+
+
+def test_key_level_accepts_custom_risk_multiples() -> None:
+    parameters = SignalParameters(
+        key_stop_atr_multiple=1.3,
+        key_target_atr_multiple=2.6,
+    )
+
+    signal = evaluate_key_level(
+        replace(BASE, low=94, close=96, environment_side='BUY'),
+        SignalMode.KEY_LEVEL,
+        parameters=parameters,
+    )
+
+    assert signal is not None
+    assert (signal.stop_atr_multiple, signal.target_atr_multiple) == (1.3, 2.6)
+    assert (signal.stop_distance, signal.target_distance) == (13, 26)
+    assert (signal.estimated_stop_price, signal.estimated_target_price) == (83, 122)
 
 
 @pytest.mark.parametrize(

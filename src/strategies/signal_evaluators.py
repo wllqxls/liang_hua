@@ -3,7 +3,13 @@ from __future__ import annotations
 from math import isfinite
 from typing import Literal
 
-from src.strategies.signal_models import MarketSnapshot, Signal, SignalMode
+from src.strategies.signal_models import (
+    DEFAULT_SIGNAL_PARAMETERS,
+    MarketSnapshot,
+    Signal,
+    SignalMode,
+    SignalParameters,
+)
 
 
 def _has_valid_inputs(snapshot: MarketSnapshot) -> bool:
@@ -64,13 +70,15 @@ def _signal(
 def evaluate_rsi_reversal(
     snapshot: MarketSnapshot,
     mode: SignalMode,
+    *,
+    parameters: SignalParameters = DEFAULT_SIGNAL_PARAMETERS,
 ) -> Signal | None:
     """Evaluate strict RSI/Bollinger reversal rules without using the 4h filter."""
     if not _has_valid_inputs(snapshot):
         return None
     if (
         snapshot.environment_side == 'BUY'
-        and snapshot.rsi < 25
+        and snapshot.rsi < parameters.rsi_buy_threshold
         and snapshot.low <= snapshot.bollinger_lower
         and snapshot.close > snapshot.bollinger_lower
     ):
@@ -79,14 +87,14 @@ def evaluate_rsi_reversal(
             mode,
             strategy='RSI_REVERSAL',
             side='BUY',
-            stop_multiple=0.6,
-            target_multiple=1.2,
+            stop_multiple=parameters.rsi_stop_atr_multiple,
+            target_multiple=parameters.rsi_target_atr_multiple,
             reason='RSI oversold with lower Bollinger Band reclaim',
             score=3,
         )
     if (
         snapshot.environment_side == 'SELL'
-        and snapshot.rsi > 75
+        and snapshot.rsi > parameters.rsi_sell_threshold
         and snapshot.high >= snapshot.bollinger_upper
         and snapshot.close < snapshot.bollinger_upper
     ):
@@ -95,8 +103,8 @@ def evaluate_rsi_reversal(
             mode,
             strategy='RSI_REVERSAL',
             side='SELL',
-            stop_multiple=0.6,
-            target_multiple=1.2,
+            stop_multiple=parameters.rsi_stop_atr_multiple,
+            target_multiple=parameters.rsi_target_atr_multiple,
             reason='RSI overbought with upper Bollinger Band reclaim',
             score=3,
         )
@@ -106,6 +114,8 @@ def evaluate_rsi_reversal(
 def evaluate_key_level(
     snapshot: MarketSnapshot,
     mode: SignalMode,
+    *,
+    parameters: SignalParameters = DEFAULT_SIGNAL_PARAMETERS,
 ) -> Signal | None:
     """Evaluate strict previous-key-level false-break rules."""
     if not _has_valid_inputs(snapshot):
@@ -120,8 +130,8 @@ def evaluate_key_level(
             mode,
             strategy='KEY_LEVEL',
             side='BUY',
-            stop_multiple=0.8,
-            target_multiple=1.5,
+            stop_multiple=parameters.key_stop_atr_multiple,
+            target_multiple=parameters.key_target_atr_multiple,
             reason='False break below the previous 20-candle low',
             score=8,
         )
@@ -135,8 +145,8 @@ def evaluate_key_level(
             mode,
             strategy='KEY_LEVEL',
             side='SELL',
-            stop_multiple=0.8,
-            target_multiple=1.5,
+            stop_multiple=parameters.key_stop_atr_multiple,
+            target_multiple=parameters.key_target_atr_multiple,
             reason='False break above the previous 20-candle high',
             score=8,
         )

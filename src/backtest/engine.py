@@ -21,7 +21,13 @@ from src.data.fetcher import DataFetcher, _COLUMNS
 from src.backtest.signal_simulator import SignalSimulator
 from src.strategies.market_context import build_market_snapshots
 from src.strategies.risk import estimate_liquidation_price
-from src.strategies.signal_models import MarginMode, SignalMode, SimulationTrade
+from src.strategies.signal_models import (
+    DEFAULT_SIGNAL_PARAMETERS,
+    MarginMode,
+    SignalMode,
+    SignalParameters,
+    SimulationTrade,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +63,7 @@ class BacktestEngine:
         self._data_dir = Path(data_dir)
         self._fetcher = fetcher
         self._cache: dict[str, pd.DataFrame] = {}
+        self._signal_snapshot_cache: dict[tuple[str, str], pd.Series] = {}
 
     def load_data(self, filepath: Path | None = None) -> pd.DataFrame:
         """加载回测数据。"""
@@ -120,6 +127,7 @@ class BacktestEngine:
         slippage_rate: float = 0.0002,
         funding_rate: float = 0.0001,
         maintenance_margin_rate: float = 0.005,
+        signal_parameters: SignalParameters = DEFAULT_SIGNAL_PARAMETERS,
         save_result: bool = False,
     ) -> BacktestResult:
         """Run one approved signal mode on entry, 1h, and 4h data."""
@@ -140,14 +148,10 @@ class BacktestEngine:
         if missing:
             raise FileNotFoundError('回测缺少必要数据文件: ' + ', '.join(missing))
 
-        entry = _ensure_utc_index(self.load_data(paths[timeframe]))
-        hour = _ensure_utc_index(self.load_data(paths['1h']))
-        four_hour = _ensure_utc_index(self.load_data(paths['4h']))
-        snapshots = build_market_snapshots(
-            entry,
-            hour,
-            four_hour,
+        snapshots = self._load_signal_snapshots(
+            safe_symbol=safe_symbol,
             timeframe=timeframe,
+            paths=paths,
         )
         snapshots = _filter_signal_window(
             snapshots,
@@ -155,7 +159,12 @@ class BacktestEngine:
             start_time=window_start,
             end_time=window_end,
         )
-        simulation = SignalSimulator().run(
+        simulator = (
+            SignalSimulator()
+            if signal_parameters == DEFAULT_SIGNAL_PARAMETERS
+            else SignalSimulator(signal_parameters=signal_parameters)
+        )
+        simulation = simulator.run(
             snapshots,
             mode=mode,
             cash=cash,
@@ -179,6 +188,30 @@ class BacktestEngine:
                 strategy=mode.value,
             )
         return result
+
+    def _load_signal_snapshots(
+        self,
+        *,
+        safe_symbol: str,
+        timeframe: str,
+        paths: dict[str, Path],
+    ) -> pd.Series:
+        cache_key = (safe_symbol, timeframe)
+        cached = self._signal_snapshot_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        entry = _ensure_utc_index(self.load_data(paths[timeframe]))
+        hour = _ensure_utc_index(self.load_data(paths['1h']))
+        four_hour = _ensure_utc_index(self.load_data(paths['4h']))
+        snapshots = build_market_snapshots(
+            entry,
+            hour,
+            four_hour,
+            timeframe=timeframe,
+        )
+        self._signal_snapshot_cache[cache_key] = snapshots
+        return snapshots
 
     def run(
         self,

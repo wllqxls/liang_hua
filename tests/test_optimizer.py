@@ -2,12 +2,13 @@ from dataclasses import asdict
 
 from src.backtest.optimizer import (
     LEVERAGE_OPTIONS,
+    SIGNAL_PARAMETER_OPTIONS,
     SearchCandidate,
     available_entry_timeframes,
     build_stage_one_candidates,
     build_stage_two_candidates,
 )
-from src.strategies.signal_models import MarginMode, SignalMode
+from src.strategies.signal_models import DEFAULT_SIGNAL_PARAMETERS, MarginMode, SignalMode
 
 
 def test_available_entry_timeframes_require_entry_1h_and_4h_files(tmp_path) -> None:
@@ -33,12 +34,13 @@ def test_stage_one_is_deterministic_and_covers_modes_by_available_timeframe() ->
     second = build_stage_one_candidates(**kwargs)
 
     assert first == second
-    assert len(first) == 6
+    assert len(first) == 6 * len(SIGNAL_PARAMETER_OPTIONS)
     assert {(item.mode, item.timeframe) for item in first} == {
         (mode, timeframe) for mode in SignalMode for timeframe in ['5m', '15m']
     }
     assert {item.leverage for item in first} == {7.0}
     assert {item.margin_mode for item in first} == {MarginMode.CROSS}
+    assert {item.signal_parameters for item in first} == set(SIGNAL_PARAMETER_OPTIONS)
 
 
 def test_candidate_shape_contains_only_approved_search_dimensions() -> None:
@@ -49,7 +51,14 @@ def test_candidate_shape_contains_only_approved_search_dimensions() -> None:
         margin_mode=MarginMode.ISOLATED,
     )
 
-    assert set(asdict(candidate)) == {'mode', 'timeframe', 'leverage', 'margin_mode'}
+    assert set(asdict(candidate)) == {
+        'mode',
+        'timeframe',
+        'leverage',
+        'margin_mode',
+        'signal_parameters',
+    }
+    assert candidate.signal_parameters == DEFAULT_SIGNAL_PARAMETERS
 
 
 def test_stage_two_is_deterministic_and_only_explores_adjacent_leverage() -> None:

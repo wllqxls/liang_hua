@@ -5,7 +5,12 @@ import pandas as pd
 import pytest
 
 from src.strategies.signal_dispatcher import dispatch_signal
-from src.strategies.signal_models import FilterLabel, MarketSnapshot, SignalMode
+from src.strategies.signal_models import (
+    FilterLabel,
+    MarketSnapshot,
+    SignalMode,
+    SignalParameters,
+)
 
 
 BASE = MarketSnapshot(
@@ -122,6 +127,34 @@ def test_combined_mode_returns_none_when_neither_evaluator_signals() -> None:
     assert result is None
     key.assert_called_once_with(snapshot, SignalMode.KEY_LEVEL_RSI)
     rsi.assert_called_once_with(snapshot, SignalMode.KEY_LEVEL_RSI)
+
+
+def test_dispatcher_passes_signal_parameters_to_evaluators() -> None:
+    snapshot = Mock(name='snapshot')
+    signal = Mock(name='signal')
+    parameters = SignalParameters(rsi_buy_threshold=35)
+    key = Mock(name='key', return_value=None)
+    rsi = Mock(name='rsi', return_value=signal)
+
+    result = dispatch_signal(
+        snapshot,
+        SignalMode.KEY_LEVEL_RSI,
+        key_level=key,
+        rsi=rsi,
+        parameters=parameters,
+    )
+
+    assert result is signal
+    key.assert_called_once_with(
+        snapshot,
+        SignalMode.KEY_LEVEL_RSI,
+        parameters=parameters,
+    )
+    rsi.assert_called_once_with(
+        snapshot,
+        SignalMode.KEY_LEVEL_RSI,
+        parameters=parameters,
+    )
 
 
 def test_default_key_level_binding_produces_key_level_buy_signal() -> None:

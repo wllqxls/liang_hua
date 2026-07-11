@@ -8,7 +8,11 @@ from src.strategies.risk import (
     estimate_liquidation_price,
     strong_context_trend_allows_side,
 )
-from src.strategies.signal_models import MarginMode, SignalMode
+from src.strategies.signal_models import (
+    DEFAULT_SIGNAL_PARAMETERS,
+    MarginMode,
+    SignalMode,
+)
 from src.web.routes import MODE_OPTIONS
 from src.web.schemas import BacktestRequest
 
@@ -75,6 +79,21 @@ def test_optimizer_candidates_cover_only_stable_signal_modes() -> None:
         'RSI_REVERSAL',
         'KEY_LEVEL_RSI',
     }
+
+
+def test_optimizer_candidates_include_non_default_signal_parameters() -> None:
+    candidates = build_stage_one_candidates(
+        entry_timeframes=['5m'],
+        modes=list(SignalMode),
+        margin_mode=MarginMode.ISOLATED,
+        current_leverage=5,
+        seed_key='signal-parameters',
+    )
+
+    assert any(
+        candidate.signal_parameters != DEFAULT_SIGNAL_PARAMETERS
+        for candidate in candidates
+    )
 
 
 def test_fractional_order_size_uses_margin_and_leverage() -> None:

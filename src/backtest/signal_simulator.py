@@ -8,10 +8,12 @@ import pandas as pd
 
 from src.strategies.signal_dispatcher import dispatch_signal
 from src.strategies.signal_models import (
+    DEFAULT_SIGNAL_PARAMETERS,
     MarginMode,
     MarketSnapshot,
     Signal,
     SignalMode,
+    SignalParameters,
     SimulationResult,
     SimulationTrade,
     TradePlan,
@@ -125,8 +127,14 @@ def build_trade_plan(
 
 
 class SignalSimulator:
-    def __init__(self, dispatcher: SignalDispatcher = dispatch_signal) -> None:
+    def __init__(
+        self,
+        dispatcher: SignalDispatcher = dispatch_signal,
+        *,
+        signal_parameters: SignalParameters = DEFAULT_SIGNAL_PARAMETERS,
+    ) -> None:
         self._dispatcher = dispatcher
+        self._signal_parameters = signal_parameters
 
     def run(
         self,
@@ -371,7 +379,7 @@ class SignalSimulator:
                 break
 
             if position is None and pending is None:
-                pending = self._dispatcher(snapshot, mode)
+                pending = self._dispatch(snapshot, mode)
 
         if position is not None:
             final_snapshot = cast(MarketSnapshot, snapshots.iloc[-1])
@@ -400,6 +408,15 @@ class SignalSimulator:
             name='equity',
         )
         return SimulationResult(tuple(trades), equity_curve, maximum_concurrent_positions)
+
+    def _dispatch(self, snapshot: MarketSnapshot, mode: SignalMode) -> Signal | None:
+        if self._signal_parameters == DEFAULT_SIGNAL_PARAMETERS:
+            return self._dispatcher(snapshot, mode)
+        return self._dispatcher(
+            snapshot,
+            mode,
+            parameters=self._signal_parameters,
+        )
 
 
 def _exit_for_snapshot(

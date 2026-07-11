@@ -25,6 +25,19 @@ class FilterLabel(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class SignalParameters:
+    key_stop_atr_multiple: float = 0.8
+    key_target_atr_multiple: float = 1.5
+    rsi_buy_threshold: float = 25.0
+    rsi_sell_threshold: float = 75.0
+    rsi_stop_atr_multiple: float = 0.6
+    rsi_target_atr_multiple: float = 1.2
+
+
+DEFAULT_SIGNAL_PARAMETERS = SignalParameters()
+
+
+@dataclass(frozen=True, slots=True)
 class MarketSnapshot:
     opened_at: pd.Timestamp
     closed_at: pd.Timestamp

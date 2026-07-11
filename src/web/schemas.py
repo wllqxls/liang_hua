@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.strategies.signal_models import MarginMode, SignalMode
+from src.strategies.signal_models import MarginMode, SignalMode, SignalParameters
 
 
 class BacktestRequest(BaseModel):
@@ -129,6 +129,7 @@ class OptimizationCandidate(BaseModel):
     timeframe: Literal['5m', '15m']
     margin_mode: MarginMode
     leverage: float
+    signal_parameters: SignalParameters = Field(default_factory=SignalParameters)
     total_return_pct: float
     max_drawdown_pct: float
     win_rate_pct: float
