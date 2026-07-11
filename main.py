@@ -4,6 +4,7 @@
 启动方式：
     python main.py
 然后浏览器打开 http://127.0.0.1:8000
+同一 WiFi 下手机可通过电脑局域网 IP 访问。
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ app.include_router(router)
 
 
 if __name__ == "__main__":
-    host = os.getenv("HOST", "127.0.0.1")
+    host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8000"))
     print(f"\nQuant Backtest System: http://{host}:{port}\n")
     uvicorn.run("main:app", host=host, port=port, reload=True)
