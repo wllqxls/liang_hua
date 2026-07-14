@@ -21,6 +21,8 @@ from scripts import validate_strategies
 from src.backtest.engine import BacktestEngine
 from src.research.event_factors import (
     FIXED_ROUND_TRIP_COST,
+    RANGE_ATR_THRESHOLD,
+    VOLUME_SHOCK_THRESHOLD,
     VolumeAbsorptionEventStudy,
     build_key_level_event_dataset,
     build_volume_absorption_event_study,
@@ -147,9 +149,9 @@ def write_absorption_report(
         '',
         '- Scope: read-only event research; no strategy or trade is created.',
         f'- Fixed single-symbol round-trip cost: `{FIXED_ROUND_TRIP_COST:.4f}`.',
-        '- Event A: volume ratio >= 3.0, true range / ATR <= 0.8, three-bar displacement >= 1.0 ATR.',
+        f'- Event A: volume ratio >= {VOLUME_SHOCK_THRESHOLD:.1f}, true range / ATR <= {RANGE_ATR_THRESHOLD:.1f}, three-bar displacement >= 1.0 ATR.',
         '- Event B: within three bars, price moves at least 0.5 event ATR in the contrarian direction.',
-        '- 15m gate: all four BTC/ETH 2024/2025 5m slices must have positive net one-hour average return.',
+        '- Timeframes: 5m and 15m are executed as a predeclared parallel comparison.',
         f'- 15m executed: `{"yes" if ran_15m else "no"}`.',
         '- Design: `docs/research/volume-absorption-design.md`.',
         f'- Code revision: `{_git_revision()}`.',
@@ -470,10 +472,9 @@ def main() -> None:
     if args.hypothesis == 'volume_absorption':
         output = args.output or PROJECT_ROOT / 'docs' / 'research' / 'volume-absorption-report.md'
         five_minute_slices = run_absorption_event_research(timeframe='5m')
-        ran_15m = _should_run_absorption_15m(five_minute_slices)
-        all_slices = list(five_minute_slices)
-        if ran_15m:
-            all_slices.extend(run_absorption_event_research(timeframe='15m'))
+        fifteen_minute_slices = run_absorption_event_research(timeframe='15m')
+        ran_15m = True
+        all_slices = [*five_minute_slices, *fifteen_minute_slices]
         write_absorption_report(all_slices, output, ran_15m=ran_15m)
         logger.info(
             'hypothesis=volume_absorption slices=%s ran_15m=%s output=%s',
