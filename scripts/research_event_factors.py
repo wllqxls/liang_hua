@@ -446,7 +446,32 @@ def write_hourly_extreme_reversion_report(
             f'{trigger}={count}' for trigger, count in sorted(item.trigger_counts.items())
         ) or 'none'
         lines.append(f'- {item.symbol} {item.year}: {trigger_text}')
-    lines.append('')
+    result_rows = [
+        (item, row)
+        for item in slices
+        for row in item.summary.itertuples(index=False)
+    ]
+    if result_rows:
+        sample_counts = [int(row.samples) for _, row in result_rows]
+        all_net_negative = all(row.average_net_return < 0 for _, row in result_rows)
+        all_pf_below_one = all(row.profit_factor < 1 for _, row in result_rows)
+        positive_gross = [
+            f'{item.symbol} {item.year} {row.horizon} `{row.average_gross_return * 100:+.4f}%`'
+            for item, row in result_rows
+            if row.average_gross_return > 0
+        ]
+        lines.extend(
+            [
+                '',
+                '## Conclusion',
+                '',
+                f'- All net averages negative: `{"yes" if all_net_negative else "no"}`; all net Profit Factors below `1.0`: `{"yes" if all_pf_below_one else "no"}`.',
+                f'- Samples per result: `{min(sample_counts)}–{max(sample_counts)}`; this is not a small-sample rejection.',
+                f'- Positive gross exceptions: {", ".join(positive_gross) if positive_gross else "none"}.',
+                '- Per the predeclared decision, if every net result is negative, the project stops tuning single-symbol short-horizon extreme-momentum mean-reversion rules. This rejects the tested basic family; it is not a mathematical claim that every possible mean-reversion model is impossible.',
+                '',
+            ]
+        )
     output_path.write_text('\n'.join(lines), encoding='utf-8')
 
 
