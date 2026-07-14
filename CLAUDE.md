@@ -68,7 +68,8 @@ liang_hua/
 │       └── backtest.js    # 前端交互逻辑
 ├── data/                  # 历史 K 线 CSV 文件（git 忽略）
 │   ├── .gitkeep
-│   └── {year}/            # 年份数据目录，如 data/2025/
+│   ├── {year}/            # 年份数据目录，如 data/2025/
+│   └── order_flow/        # 订单流公开原始归档与标准化样本（程序生成，git 忽略）
 └── tests/
     ├── __init__.py
     ├── test_fetcher.py
@@ -164,6 +165,9 @@ liang_hua/
 - 信号模式回测必须从所选 `data_year` 目录读取入场周期、`1h`、`4h` 已收盘上下文数据
 - 策略验证脚本可合并 `data/{year}/` 年份目录生成 `tmp/validation_data/` 临时验证数据，用于覆盖 `365 天 + warmup`
 - `data/` 下行情文件由程序写入，git 忽略，不纳入提交
+- Binance USDⓈ-M 订单流数据固定写入 `data/order_flow/binance_um/{raw,normalized}/{dataset}/{symbol}/{year}/`。原始 ZIP 必须先校验官方 `.CHECKSUM`，标准化文件按 UTC 5m 桶输出；下载器不得读取或修改 `.env`，不得把原始大文件加入 Git。
+- 第一阶段订单流数据只允许增强 `5m klines`、`aggTrades` 校验样本、`metrics`、`fundingRate` 和只读 `bookDepth` 样本审计。正式 5m 主动买卖量优先使用官方增强 K 线中的 taker buy 字段，避免无必要地下载两年约 28 GB 压缩逐笔数据；`aggTrades.isBuyerMaker=true` 必须解释为主动卖出，`false` 为主动买入。官方未提供的历史爆仓数据不得用 K 线推测或伪造，只能标记缺失或从未来开始实时采集。
+- 订单流正式因子研究前，BTC/ETH 2024/2025 必须通过覆盖率、重复时间戳、5m 连续性、字段类型、买卖量守恒和 OI 时间对齐审计。首次样本只下载 1 个 UTC 日；未经体积估算不得直接下载整月逐笔数据。增强 K 线的 `taker_sell_volume` 必须由 `total_volume - taker_buy_volume` 计算并验证非负。
 
 ### 安全红线
 - `.env` 在 `.gitignore` 中，绝对不能提交
