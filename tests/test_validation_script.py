@@ -203,11 +203,13 @@ def test_run_validation_matrix_covers_every_mode_margin_pair_and_writes_markdown
 
     monkeypatch.setattr(validate_strategies, 'BacktestEngine', FakeEngine)
     output = tmp_path / 'strategy-validation.md'
+    diagnostics_output = tmp_path / 'strategy-diagnostics.md'
 
     rows = validate_strategies.run_validation_matrix(
         symbol='ETH/USDT',
         days=365,
         output_path=output,
+        diagnostics_output_path=diagnostics_output,
     )
 
     assert len(rows) == 6
@@ -216,6 +218,13 @@ def test_run_validation_matrix_covers_every_mode_margin_pair_and_writes_markdown
     assert '| Mode | Margin | Status |' in content
     assert content.count('| KEY_LEVEL |') == 2
     assert '通过' in content
+    diagnostics_content = diagnostics_output.read_text(encoding='utf-8')
+    assert '# Strategy Failure Diagnostics' in diagnostics_content
+    assert '| Mode | Margin | Trades | Win Rate % |' in diagnostics_content
+    assert 'Pre-fee PnL (slippage included)' in diagnostics_content
+    assert 'KEY_LEVEL_RSI 相比 KEY_LEVEL' in diagnostics_content
+    assert '组合模式没有形成实质性的交易筛选' in diagnostics_content
+    assert '### Exit Reason' in diagnostics_content
     assert all(row.status == '通过' for row in rows)
     assert len(calls) == 6 * 13
 
@@ -237,6 +246,18 @@ def test_run_validation_matrix_covers_every_mode_margin_pair_and_writes_markdown
         assert all(call['cash'] == 100 for call in group_calls)
         assert all(call['opening_amount'] == 10 for call in group_calls)
         assert all(call['leverage'] == 5 for call in group_calls)
+        assert all(
+            call['taker_fee'] == validate_strategies.VALIDATION_TAKER_FEE
+            for call in group_calls
+        )
+        assert all(
+            call['slippage_rate'] == validate_strategies.VALIDATION_SLIPPAGE_RATE
+            for call in group_calls
+        )
+        assert all(
+            call['funding_rate'] == validate_strategies.VALIDATION_FUNDING_RATE
+            for call in group_calls
+        )
         ordered = sorted(window_calls, key=lambda item: item['window_start'])
         for previous, current in zip(ordered, ordered[1:]):
             assert previous['window_end'] < current['window_start']

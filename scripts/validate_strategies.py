@@ -14,6 +14,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.backtest.engine import BacktestEngine, BacktestResult
+from src.backtest.diagnostics import (
+    DiagnosticSlice,
+    StrategyDiagnostics,
+    analyze_trades,
+)
 from src.strategies.signal_models import MarginMode, SignalMode
 
 
@@ -24,6 +29,9 @@ DEFAULT_DATA_DIR = PROJECT_ROOT / 'data'
 WINDOW_COUNT = 12
 WINDOW_DAYS = 30
 ANNUAL_DAYS = 365
+VALIDATION_TAKER_FEE = 0.0005
+VALIDATION_SLIPPAGE_RATE = 0.0002
+VALIDATION_FUNDING_RATE = 0.0001
 ENTRY_WARMUP_BARS = 21
 HOUR_WARMUP_BARS = 20
 FOUR_HOUR_WARMUP_BARS = 30
@@ -49,6 +57,13 @@ class ValidationRow:
     annual_trades: int
 
 
+@dataclass(frozen=True, slots=True)
+class DiagnosticRow:
+    mode: SignalMode
+    margin_mode: MarginMode
+    diagnostics: StrategyDiagnostics
+
+
 def evaluate_thresholds(metrics: Mapping[str, float]) -> tuple[bool, list[str]]:
     """Return whether one mode passes all automated execution gates."""
     reasons: list[str] = []
@@ -59,25 +74,12 @@ def evaluate_thresholds(metrics: Mapping[str, float]) -> tuple[bool, list[str]]:
     if metrics['annual_return_pct'] <= 0:
         reasons.append('全年收益不为正')
     if abs(metrics['max_drawdown_pct']) >= 30:
-        reasons.append('最大回撤不小于 30%')
+        reasons.append('最大回撤达到或超过 30%')
     if metrics['profit_factor'] < 1.05:
         reasons.append('Profit Factor 低于 1.05')
     if metrics['annual_trades'] < 50:
         reasons.append('年化交易次数少于 50')
-    clean_reasons: list[str] = []
-    if metrics['avg_window_return_pct'] <= 0:
-        clean_reasons.append('平均窗口收益不为正')
-    if metrics['worst_window_return_pct'] <= -40:
-        clean_reasons.append('最差窗口收益不高于 -40%')
-    if metrics['annual_return_pct'] <= 0:
-        clean_reasons.append('全年收益不为正')
-    if abs(metrics['max_drawdown_pct']) >= 30:
-        clean_reasons.append('最大回撤达到或超过 30%')
-    if metrics['profit_factor'] < 1.05:
-        clean_reasons.append('Profit Factor 低于 1.05')
-    if metrics['annual_trades'] < 50:
-        clean_reasons.append('年化交易次数少于 50')
-    return len(clean_reasons) == 0, clean_reasons
+    return len(reasons) == 0, reasons
 
 
 def run_validation_matrix(
@@ -87,6 +89,7 @@ def run_validation_matrix(
     output_path: Path,
     timeframe: str = DEFAULT_TIMEFRAME,
     data_dir: Path | str | None = None,
+    diagnostics_output_path: Path | None = None,
 ) -> list[ValidationRow]:
     """Run all stable signal modes across isolated and cross margin."""
     _validate_days(days)
@@ -113,6 +116,7 @@ def run_validation_matrix(
     annual_start = end_time - pd.Timedelta(days=days) + _timeframe_delta(timeframe)
 
     rows: list[ValidationRow] = []
+    diagnostic_rows: list[DiagnosticRow] = []
     for mode in MODES:
         for margin_mode in MARGIN_MODES:
             window_results = [
@@ -127,6 +131,9 @@ def run_validation_matrix(
                     opening_amount=10,
                     margin_mode=margin_mode,
                     leverage=5,
+                    taker_fee=VALIDATION_TAKER_FEE,
+                    slippage_rate=VALIDATION_SLIPPAGE_RATE,
+                    funding_rate=VALIDATION_FUNDING_RATE,
                     save_result=False,
                 )
                 for start, end in windows
@@ -142,10 +149,20 @@ def run_validation_matrix(
                 opening_amount=10,
                 margin_mode=margin_mode,
                 leverage=5,
+                taker_fee=VALIDATION_TAKER_FEE,
+                slippage_rate=VALIDATION_SLIPPAGE_RATE,
+                funding_rate=VALIDATION_FUNDING_RATE,
                 save_result=False,
             )
             metrics = _metrics(window_results, annual_result)
             passed, reasons = evaluate_thresholds(metrics)
+            diagnostic_rows.append(
+                DiagnosticRow(
+                    mode=mode,
+                    margin_mode=margin_mode,
+                    diagnostics=analyze_trades(annual_result.trade_list),
+                )
+            )
             rows.append(
                 ValidationRow(
                     mode=mode,
@@ -164,6 +181,17 @@ def run_validation_matrix(
     rows = [_clean_validation_row(row) for row in rows]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(_render_markdown(symbol, days, timeframe, rows), encoding='utf-8')
+    if diagnostics_output_path is not None:
+        diagnostics_output_path.parent.mkdir(parents=True, exist_ok=True)
+        diagnostics_output_path.write_text(
+            _render_diagnostics_markdown(
+                symbol,
+                days,
+                timeframe,
+                diagnostic_rows,
+            ),
+            encoding='utf-8',
+        )
     return rows
 
 
@@ -389,39 +417,217 @@ def _render_markdown(
     clean_lines.append('')
     return '\n'.join(clean_lines)
 
+
+def _render_diagnostics_markdown(
+    symbol: str,
+    days: int,
+    timeframe: str,
+    rows: Sequence[DiagnosticRow],
+) -> str:
     lines = [
-        '# Strategy Validation',
+        '# Strategy Failure Diagnostics',
         '',
         f'- Symbol: `{symbol}`',
         f'- Timeframe: `{timeframe}`',
         f'- Annual window: `{days}` days',
-        f'- Rolling windows: `{WINDOW_COUNT}` non-overlapping `{WINDOW_DAYS}`-day windows',
+        '- Initial cash: `100 USDT`',
+        '- Opening margin: `10 USDT`',
+        '- Leverage: `5x`',
+        f'- Taker fee: `{VALIDATION_TAKER_FEE:.4%}` per fill',
+        f'- Slippage: `{VALIDATION_SLIPPAGE_RATE:.4%}` per fill',
+        f'- Funding rate: `{VALIDATION_FUNDING_RATE:.4%}` per 8 hours',
         '',
         (
-            '未通过验证的模式保持不可用于未来自动化 testnet 执行；'
-            '只有状态为 `通过` 的模式可进入后续自动化模拟盘流程。'
+            '本报告复用验证矩阵的同一次年度回测。手续费/资金费前收益由逐笔净收益加回手续费、'
+            '扣除资金费净现金流得到，其中已经包含滑点影响；资金费为正表示账户收到，负数表示账户支付。'
         ),
         '',
-        '| Mode | Margin | Status | Avg 30d Return % | Worst 30d Return % | Annual Return % | Max Drawdown % | Profit Factor | Annual Trades | Reasons |',
-        '|---|---|---:|---:|---:|---:|---:|---:|---:|---|',
+        '## Summary',
+        '',
+        '| Mode | Margin | Trades | Win Rate % | Pre-fee PnL (slippage included) | Commission | Funding Cash Flow | Net Fee/Funding Cost | Net PnL | Pre-fee PF | Net PF | Avg Net/Trade | Fee/Funding Cost to Pre-fee Gross Profit % |',
+        '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
     ]
     for row in rows:
-        reasons = '；'.join(row.reasons) if row.reasons else '全部阈值通过'
+        item = row.diagnostics
         lines.append(
             '| '
             f'{row.mode.value} | '
             f'{row.margin_mode.value} | '
-            f'{row.status} | '
-            f'{row.avg_window_return_pct:.2f} | '
-            f'{row.worst_window_return_pct:.2f} | '
-            f'{row.annual_return_pct:.2f} | '
-            f'{row.max_drawdown_pct:.2f} | '
-            f'{row.profit_factor:.2f} | '
-            f'{row.annual_trades} | '
-            f'{reasons} |'
+            f'{item.trades} | '
+            f'{item.win_rate_pct:.2f} | '
+            f'{item.gross_pnl:.4f} | '
+            f'{item.commission:.4f} | '
+            f'{item.funding_cash_flow:.4f} | '
+            f'{item.net_cost:.4f} | '
+            f'{item.net_pnl:.4f} | '
+            f'{item.gross_profit_factor:.2f} | '
+            f'{item.net_profit_factor:.2f} | '
+            f'{item.average_net_pnl:.4f} | '
+            f'{_optional_percent(item.cost_to_gross_profit_pct)} |'
+        )
+
+    lines.extend(['', '## Cross-mode Findings', ''])
+    lines.extend(f'- {finding}' for finding in _cross_mode_findings(rows))
+
+    for row in rows:
+        item = row.diagnostics
+        lines.extend(
+            [
+                '',
+                f'## {row.mode.value} / {row.margin_mode.value}',
+                '',
+            ]
+        )
+        lines.extend(f'- {finding}' for finding in _diagnostic_findings(item))
+        lines.extend(
+            _render_breakdown('Exit Reason', item.by_exit_reason)
+            + _render_breakdown('Side', item.by_side)
+            + _render_breakdown('1h Environment', item.by_environment_1h)
+            + _render_breakdown('4h Filter', item.by_filter_4h)
         )
     lines.append('')
     return '\n'.join(lines)
+
+
+def _render_breakdown(
+    title: str,
+    slices: Sequence[DiagnosticSlice],
+) -> list[str]:
+    lines = [
+        '',
+        f'### {title}',
+        '',
+        '| Bucket | Trades | Win Rate % | Pre-fee PnL (slippage included) | Net Fee/Funding Cost | Net PnL | Net PF | Avg Net/Trade |',
+        '|---|---:|---:|---:|---:|---:|---:|---:|',
+    ]
+    if not slices:
+        lines.append('| No trades | 0 | 0.00 | 0.0000 | 0.0000 | 0.0000 | 0.00 | 0.0000 |')
+        return lines
+    for item in slices:
+        lines.append(
+            '| '
+            f'{item.label} | '
+            f'{item.trades} | '
+            f'{item.win_rate_pct:.2f} | '
+            f'{item.gross_pnl:.4f} | '
+            f'{item.net_cost:.4f} | '
+            f'{item.net_pnl:.4f} | '
+            f'{item.profit_factor:.2f} | '
+            f'{item.average_net_pnl:.4f} |'
+        )
+    return lines
+
+
+def _diagnostic_findings(item: StrategyDiagnostics) -> list[str]:
+    if item.trades == 0:
+        return ['年度窗口没有产生交易，无法评估信号质量。']
+
+    findings: list[str] = []
+    if item.gross_pnl < 0:
+        findings.append(
+            f'在计入滑点、但尚未扣除手续费和资金费时已亏损 {abs(item.gross_pnl):.4f} USDT，'
+            '说明进出场结构在真实成交条件下没有足够优势，失败不只由手续费造成。'
+        )
+    elif item.net_pnl < 0:
+        findings.append(
+            f'成本前盈利 {item.gross_pnl:.4f} USDT，但净成本 {item.net_cost:.4f} USDT '
+            '将结果转为亏损，策略利润垫不足。'
+        )
+    else:
+        findings.append(
+            f'成本前收益 {item.gross_pnl:.4f} USDT，成本后净收益 {item.net_pnl:.4f} USDT。'
+        )
+
+    findings.append(
+        f'{item.trades} 笔交易共产生 {item.commission:.4f} USDT 手续费，'
+        f'平均每笔净收益 {item.average_net_pnl:.4f} USDT。'
+    )
+    if item.trades > ANNUAL_DAYS:
+        findings.append(
+            f'日均交易 {item.trades / ANNUAL_DAYS:.2f} 笔，交易频率较高，'
+            '手续费会被持续放大。'
+        )
+    if item.cost_to_gross_profit_pct is not None:
+        findings.append(
+            '手续费与资金费净成本占手续费前盈利交易总额的 '
+            f'{item.cost_to_gross_profit_pct:.2f}%。'
+        )
+    stop = _slice_by_label(item.by_exit_reason, 'STOP')
+    target = _slice_by_label(item.by_exit_reason, 'TARGET')
+    if stop is not None or target is not None:
+        findings.append(
+            f'止损 {stop.trades if stop else 0} 笔、止盈 {target.trades if target else 0} 笔；'
+            f'止损桶净收益 {stop.net_pnl if stop else 0.0:.4f} USDT，'
+            f'止盈桶净收益 {target.net_pnl if target else 0.0:.4f} USDT。'
+        )
+    worst_filter = _worst_losing_slice(item.by_filter_4h)
+    if worst_filter is not None:
+        findings.append(
+            f'4 小时环境中 `{worst_filter.label}` 亏损最多：'
+            f'{worst_filter.trades} 笔合计 {worst_filter.net_pnl:.4f} USDT。'
+        )
+    worst_side = _worst_losing_slice(item.by_side)
+    if worst_side is not None:
+        findings.append(
+            f'方向上 `{worst_side.label}` 亏损最多：'
+            f'{worst_side.trades} 笔合计 {worst_side.net_pnl:.4f} USDT。'
+        )
+    return findings
+
+
+def _cross_mode_findings(rows: Sequence[DiagnosticRow]) -> list[str]:
+    indexed = {
+        (row.mode, row.margin_mode): row.diagnostics
+        for row in rows
+    }
+    findings: list[str] = []
+    for margin_mode in MARGIN_MODES:
+        key = indexed.get((SignalMode.KEY_LEVEL, margin_mode))
+        combined = indexed.get((SignalMode.KEY_LEVEL_RSI, margin_mode))
+        if key is None or combined is None or key.trades == 0:
+            continue
+        trade_change_pct = (combined.trades - key.trades) / key.trades * 100
+        message = (
+            f'`{margin_mode.value}` 下 KEY_LEVEL_RSI 相比 KEY_LEVEL 的交易数变化 '
+            f'{trade_change_pct:+.2f}%（{key.trades} -> {combined.trades}），'
+            f'净收益变化 {combined.net_pnl - key.net_pnl:+.4f} USDT。'
+        )
+        if abs(trade_change_pct) <= 5:
+            message += '组合模式没有形成实质性的交易筛选。'
+        findings.append(message)
+
+    for mode in MODES:
+        isolated = indexed.get((mode, MarginMode.ISOLATED))
+        cross = indexed.get((mode, MarginMode.CROSS))
+        if isolated is None or cross is None:
+            continue
+        if (
+            isolated.trades == cross.trades
+            and abs(isolated.net_pnl - cross.net_pnl) < 0.0001
+        ):
+            findings.append(
+                f'`{mode.value}` 的 ISOLATED 与 CROSS 结果相同，'
+                '说明当前失败不是由保证金模式差异造成。'
+            )
+    return findings or ['没有足够的跨模式数据可比较。']
+
+
+def _slice_by_label(
+    slices: Sequence[DiagnosticSlice],
+    label: str,
+) -> DiagnosticSlice | None:
+    return next((item for item in slices if item.label == label), None)
+
+
+def _worst_losing_slice(
+    slices: Sequence[DiagnosticSlice],
+) -> DiagnosticSlice | None:
+    losing = [item for item in slices if item.net_pnl < 0]
+    return min(losing, key=lambda item: item.net_pnl) if losing else None
+
+
+def _optional_percent(value: float | None) -> str:
+    return '-' if value is None else f'{value:.2f}'
 
 
 def _parse_args() -> argparse.Namespace:
@@ -429,6 +635,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument('--symbol', default='ETH/USDT')
     parser.add_argument('--days', type=int, default=365)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--diagnostics-output', type=Path)
     parser.add_argument('--timeframe', default=DEFAULT_TIMEFRAME, choices=['5m', '15m'])
     return parser.parse_args()
 
@@ -441,8 +648,12 @@ def main() -> None:
         days=args.days,
         output_path=args.output,
         timeframe=args.timeframe,
+        diagnostics_output_path=(
+            args.diagnostics_output
+            if args.diagnostics_output is not None
+            else args.output.with_name('strategy-diagnostics.md')
+        ),
     )
-    passed = sum(1 for row in rows if row.status == '通过')
     passed = sum(1 for row in rows if not row.reasons)
     logger.info('validation rows=%s passed=%s output=%s', len(rows), passed, args.output)
 

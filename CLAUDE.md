@@ -33,7 +33,8 @@ liang_hua/
 ├── scripts/
 │   └── validate_strategies.py # 稳定信号模式验证矩阵
 ├── docs/
-│   └── strategy-validation.md # 最近一次策略验证报告
+│   ├── strategy-validation.md # 最近一次策略验证报告
+│   └── strategy-diagnostics.md # 最近一次策略失败诊断报告
 ├── src/
 │   ├── __init__.py
 │   ├── data/
@@ -42,6 +43,7 @@ liang_hua/
 │   │   └── yearly.py      # 按年份一键拉取多周期数据
 │   ├── backtest/
 │   │   ├── __init__.py
+│   │   ├── diagnostics.py # 逐笔交易成本、出场和市场环境诊断
 │   │   ├── engine.py      # 回测引擎封装
 │   │   ├── optimizer.py   # 渐进式参数搜索
 │   │   └── signal_simulator.py # 信号模式成交/出场模拟
@@ -135,6 +137,7 @@ liang_hua/
 - 回测相关测试用人工构造的小数据集
 - 每个模块改完就跑相关测试
 - 策略验证报告用真实本地行情数据生成，输出到 `docs/strategy-validation.md`
+- 策略诊断报告必须复用同一次年度回测的逐笔交易，输出到 `docs/strategy-diagnostics.md`，不能为诊断重复运行或修改交易逻辑
 
 ## 运行方式
 
@@ -156,6 +159,7 @@ C:\KUN\liang_hua\.venv\Scripts\python.exe -m pytest -q
 
 # 生成策略验证矩阵
 C:\KUN\liang_hua\.venv\Scripts\python.exe scripts\validate_strategies.py --symbol ETH/USDT --days 365 --output docs\strategy-validation.md
+# 同一次运行自动生成 docs\strategy-diagnostics.md
 ```
 
 ## 策略验证规则
@@ -166,6 +170,7 @@ C:\KUN\liang_hua\.venv\Scripts\python.exe scripts\validate_strategies.py --symbo
 
 - 12 个不重叠的 30 天窗口
 - 1 个 365 天窗口
+- 固定使用 taker 手续费率 `0.0005`、单次成交滑点率 `0.0002`、每 8 小时资金费率 `0.0001`
 
 只有同时满足以下阈值才可标记为 `通过`：
 
@@ -177,6 +182,13 @@ C:\KUN\liang_hua\.venv\Scripts\python.exe scripts\validate_strategies.py --symbo
 - 年化交易次数大于等于 `50`
 
 未通过验证的模式保持不可用于未来自动化 testnet 执行。
+
+每次完整验证还必须生成失败诊断，至少包含：
+
+- 成本前收益、手续费、资金费净现金流、成本后净收益
+- 成本前与成本后 Profit Factor、胜率和平均每笔净收益
+- 按出场原因、交易方向、1 小时环境和 4 小时过滤标签拆分的交易次数与净收益
+- 基于客观统计生成失败原因，不允许用诊断结果放宽上述通过阈值
 
 ## 开发流程
 
