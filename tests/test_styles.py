@@ -161,8 +161,8 @@ def test_non_2xx_errors_use_api_detail_and_cache_key_is_updated() -> None:
     assert "if (!response.ok)" in script
     assert "if (!created.success)" in script
     assert 'resp.json()' not in script
-    assert '/static/css/style.css?v=diagnostics-page-1' in template
-    assert '/static/js/backtest.js?v=diagnostics-page-3' in template
+    assert '/static/css/style.css?v=diagnostics-page-2' in template
+    assert '/static/js/backtest.js?v=diagnostics-page-4' in template
 
 
 def test_form_controls_and_statuses_are_keyboard_and_screen_reader_accessible() -> None:
@@ -200,7 +200,7 @@ def test_diagnostics_is_a_separate_horizontal_page_with_bidirectional_controls()
 
 
 def test_diagnostics_page_has_progress_summary_and_failure_details() -> None:
-    template, script, _ = _sources()
+    template, script, css = _sources()
 
     for element_id in (
         'diagnostic-run-btn',
@@ -217,4 +217,7 @@ def test_diagnostics_page_has_progress_summary_and_failure_details() -> None:
     assert 'escapeHtml(diagnosticModeLabel(item.mode))' in script
     assert 'normalizeDiagnosticSummary(data.summary)' in script
     assert 'diagnosticCrossStrategyFindings(summary, data.cross_mode_findings)' in script
+    assert '.diagnostic-controls .error-msg {' in css
+    assert 'margin: 16px 0 0;' in css
+    assert "progressWrap.classList.add('hidden');" in script
     assert '6 组组合' not in template

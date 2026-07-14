@@ -386,6 +386,10 @@ summary:focus-visible {
     flex-wrap: wrap;
 }
 
+.diagnostic-controls .error-msg {
+    margin: 16px 0 0;
+}
+
 .diagnostic-progress-wrap {
     display: flex;
     align-items: center;

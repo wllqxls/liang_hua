@@ -540,6 +540,7 @@ async function runStrategyDiagnostics() {
         if (token === diagnosticGeneration) {
             showDiagnosticError(err.message);
             status.textContent = '诊断失败';
+            progressWrap.classList.add('hidden');
         }
     } finally {
         if (token === diagnosticGeneration) {
