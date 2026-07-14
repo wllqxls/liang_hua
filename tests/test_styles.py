@@ -161,8 +161,8 @@ def test_non_2xx_errors_use_api_detail_and_cache_key_is_updated() -> None:
     assert "if (!response.ok)" in script
     assert "if (!created.success)" in script
     assert 'resp.json()' not in script
-    assert '/static/css/style.css?v=diagnostics-page-2' in template
-    assert '/static/js/backtest.js?v=diagnostics-page-4' in template
+    assert '/static/css/style.css?v=local-data-pages-1' in template
+    assert '/static/js/backtest.js?v=local-data-pages-1' in template
 
 
 def test_form_controls_and_statuses_are_keyboard_and_screen_reader_accessible() -> None:
@@ -221,3 +221,27 @@ def test_diagnostics_page_has_progress_summary_and_failure_details() -> None:
     assert 'margin: 16px 0 0;' in css
     assert "progressWrap.classList.add('hidden');" in script
     assert '6 组组合' not in template
+
+
+def test_local_data_has_independent_market_and_order_flow_pages() -> None:
+    template, script, css = _sources()
+
+    for element_id in (
+        'local-data-shell',
+        'market-data-page',
+        'order-flow-data-page',
+        'local-data-next-btn',
+        'local-data-prev-btn',
+        'order-flow-fetch-btn',
+        'order-flow-progress',
+        'order-flow-status-table',
+    ):
+        assert f'id="{element_id}"' in template
+    assert template.count('id="data-year"') == 1
+    assert '全年逐笔成交或深度快照' in template
+    assert '.local-data-page-track {' in css
+    assert '.local-data-shell[data-active-data-page="orderflow"] .local-data-page-track' in css
+    assert 'function showLocalDataPage(page)' in script
+    assert "fetch('/api/order-flow/jobs'" in script
+    assert "fetch('/api/order-flow/jobs/' + created.job_id)" in script
+    assert "fetch('/api/order-flow/status?year='" in script

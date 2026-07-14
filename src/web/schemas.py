@@ -59,6 +59,51 @@ class DataFetchRequest(BaseModel):
     )
 
 
+class OrderFlowFetchRequest(BaseModel):
+    """BTC/ETH annual order-flow package request."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    year: int = Field(ge=2024, le=2025, description='订单流研究年份')
+
+
+class OrderFlowYearStatus(BaseModel):
+    """Local annual order-flow package status for one symbol."""
+
+    symbol: str
+    year: int
+    state: str
+    rows: int | None = None
+    expected_rows: int
+    missing_rows: int | None = None
+    funding_rows: int | None = None
+    file_size_kb: float | None = None
+    error: str | None = None
+
+
+class OrderFlowJobCreated(BaseModel):
+    """Background order-flow download creation response."""
+
+    success: bool = True
+    job_id: str | None = None
+    error: str | None = None
+
+
+class OrderFlowJobStatus(BaseModel):
+    """Progress snapshot for one annual order-flow download."""
+
+    success: bool = True
+    job_id: str
+    year: int
+    state: str = 'queued'
+    stage: str = '等待'
+    completed_count: int = 0
+    total_count: int = 0
+    elapsed_seconds: float = 0
+    items: list[OrderFlowYearStatus] = Field(default_factory=list)
+    error: str | None = None
+
+
 class TradeItem(BaseModel):
     """单笔交易记录。"""
 

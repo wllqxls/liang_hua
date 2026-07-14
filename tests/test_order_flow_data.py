@@ -61,6 +61,14 @@ def test_archive_spec_uses_official_futures_path_and_local_structure(tmp_path) -
     assert kline.url.endswith(
         '/daily/klines/BTCUSDT/5m/BTCUSDT-5m-2024-01-01.zip'
     )
+    monthly_kline = FuturesKlineArchiveSpec(
+        'BTCUSDT',
+        '2024-01',
+        cadence_override='monthly',
+    )
+    assert monthly_kline.url.endswith(
+        '/monthly/klines/BTCUSDT/5m/BTCUSDT-5m-2024-01.zip'
+    )
 
 
 def test_checksum_parser_and_file_hash_are_exact(tmp_path) -> None:

@@ -8,6 +8,9 @@ let optimizationCandidates = [];
 let operationGeneration = 0;
 let diagnosticGeneration = 0;
 let diagnosticRunning = false;
+let orderFlowGeneration = 0;
+let orderFlowRunning = false;
+let orderFlowStatusLoaded = false;
 const MIN_NOTIONAL_BY_SYMBOL = {
     'BTC/USDT': 50,
     'ETH/USDT': 20,
@@ -23,6 +26,7 @@ const LEVERAGE_OPTIONS = [1, 2, 3, 5, 10, 20, 50, 100, 125, 150];
 window.addEventListener('DOMContentLoaded', () => {
     initializePageNavigation();
     initializeDataYear();
+    initializeLocalDataNavigation();
     updateModeDescription();
     document.getElementById('mode').addEventListener('change', updateModeDescription);
     bindRealtimeChecks();
@@ -333,6 +337,178 @@ function initializeDataYear() {
 
 function selectedDataYear() {
     return requiredNumber('data-year', '数据年份');
+}
+
+
+function initializeLocalDataNavigation() {
+    showLocalDataPage('market');
+    document.getElementById('data-year').addEventListener('change', () => {
+        orderFlowStatusLoaded = false;
+        const activePage = document.getElementById('local-data-shell').dataset.activeDataPage;
+        if (activePage === 'orderflow') loadOrderFlowStatus();
+        else loadDataStatus();
+    });
+}
+
+
+function showLocalDataPage(page) {
+    const activePage = page === 'orderflow' ? 'orderflow' : 'market';
+    const isOrderFlow = activePage === 'orderflow';
+    const shell = document.getElementById('local-data-shell');
+    shell.dataset.activeDataPage = activePage;
+    document.getElementById('market-data-page').setAttribute('aria-hidden', String(isOrderFlow));
+    document.getElementById('order-flow-data-page').setAttribute('aria-hidden', String(!isOrderFlow));
+    document.getElementById('market-data-tab').classList.toggle('active', !isOrderFlow);
+    document.getElementById('order-flow-data-tab').classList.toggle('active', isOrderFlow);
+    document.getElementById('market-data-tab').setAttribute('aria-selected', String(!isOrderFlow));
+    document.getElementById('order-flow-data-tab').setAttribute('aria-selected', String(isOrderFlow));
+    if (isOrderFlow && !orderFlowStatusLoaded) {
+        loadOrderFlowStatus();
+    }
+}
+
+
+async function loadOrderFlowStatus(successMessage) {
+    const statusText = document.getElementById('order-flow-status-text');
+    const refreshBtn = document.getElementById('order-flow-refresh-btn');
+    let year;
+    try {
+        year = selectedDataYear();
+    } catch (err) {
+        statusText.textContent = err.message;
+        renderOrderFlowStatusTable([]);
+        return;
+    }
+
+    refreshBtn.disabled = true;
+    statusText.innerHTML = '<span class="spinner"></span>正在读取 ' + year + ' 年订单流状态...';
+    try {
+        const response = await fetch('/api/order-flow/status?year=' + encodeURIComponent(year));
+        const items = await parseApiResponse(response);
+        renderOrderFlowStatusTable(items);
+        orderFlowStatusLoaded = true;
+        statusText.textContent = successMessage || (year === 2026 ? '2026 为保留期，当前未开放下载' : '数据状态已更新');
+    } catch (err) {
+        statusText.textContent = '订单流状态读取失败: ' + err.message;
+        renderOrderFlowStatusTable([]);
+    } finally {
+        if (!orderFlowRunning) refreshBtn.disabled = false;
+    }
+}
+
+
+async function fetchOrderFlowYear() {
+    if (orderFlowRunning) return;
+    const fetchBtn = document.getElementById('order-flow-fetch-btn');
+    const refreshBtn = document.getElementById('order-flow-refresh-btn');
+    const statusText = document.getElementById('order-flow-status-text');
+    const progressWrap = document.getElementById('order-flow-progress-wrap');
+    const progress = document.getElementById('order-flow-progress');
+    const progressText = document.getElementById('order-flow-progress-text');
+    let year;
+    try {
+        year = selectedDataYear();
+    } catch (err) {
+        statusText.textContent = err.message;
+        return;
+    }
+    if (![2024, 2025].includes(year)) {
+        statusText.textContent = year === 2026 ? '2026 是未使用保留期，当前禁止拉取' : '订单流基础研究只开放 2024/2025';
+        return;
+    }
+
+    const token = ++orderFlowGeneration;
+    orderFlowRunning = true;
+    fetchBtn.disabled = true;
+    refreshBtn.disabled = true;
+    progress.value = 0;
+    progress.max = 1;
+    progressWrap.classList.remove('hidden');
+    progressText.textContent = '准备年度归档...';
+    statusText.textContent = '后台下载中，可继续使用其他页面';
+
+    try {
+        const response = await fetch('/api/order-flow/jobs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ year }),
+        });
+        const created = await parseApiResponse(response);
+        if (token !== orderFlowGeneration) return;
+        if (!created.success) throw new Error(created.error || '订单流任务启动失败');
+
+        while (token === orderFlowGeneration) {
+            const jobResponse = await fetch('/api/order-flow/jobs/' + created.job_id);
+            const job = await parseApiResponse(jobResponse);
+            const completed = finiteNumber(job.completed_count, 0);
+            const total = Math.max(1, finiteNumber(job.total_count, 1));
+            progress.max = total;
+            progress.value = Math.min(completed, total);
+            progressText.textContent = (job.stage || '下载中') + '：' + completed + ' / ' + total +
+                '，已用 ' + formatDuration(job.elapsed_seconds || 0);
+
+            if (job.state === 'completed') {
+                progress.value = total;
+                renderOrderFlowStatusTable(job.items || []);
+                await loadOrderFlowStatus('BTC + ETH ' + year + ' 年订单流包已完成并通过年度审计');
+                break;
+            }
+            if (job.state === 'failed' || !job.success) {
+                throw new Error(job.error || '订单流年度数据拉取失败');
+            }
+            await delay(1000);
+        }
+    } catch (err) {
+        if (token === orderFlowGeneration) {
+            statusText.textContent = '订单流拉取失败: ' + err.message;
+            progressText.textContent = '任务失败，可直接重试；已校验归档会自动跳过';
+        }
+    } finally {
+        if (token === orderFlowGeneration) {
+            orderFlowRunning = false;
+            fetchBtn.disabled = false;
+            refreshBtn.disabled = false;
+        }
+    }
+}
+
+
+function renderOrderFlowStatusTable(items) {
+    const tbody = document.getElementById('order-flow-status-tbody');
+    tbody.innerHTML = '';
+    if (!items || items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty-cell">暂无订单流年度文件</td></tr>';
+        return;
+    }
+    const stateLabels = {
+        complete: '完整',
+        partial: '不完整',
+        missing: '未下载',
+        invalid: '审计失败',
+    };
+    for (const item of items) {
+        const row = document.createElement('tr');
+        const complete = item.state === 'complete';
+        const rows = item.rows == null ? '--' : formatNumber(item.rows, 0) + ' / ' + formatNumber(item.expected_rows, 0);
+        const missing = item.missing_rows == null ? '--' : formatNumber(item.missing_rows, 0);
+        const funding = item.funding_rows == null ? '--' : formatNumber(item.funding_rows, 0) + ' 条';
+        const size = item.file_size_kb == null ? '--' : formatDataSize(item.file_size_kb);
+        row.innerHTML =
+            '<td>' + escapeHtml(item.symbol || '--') + '</td>' +
+            '<td>' + rows + '</td>' +
+            '<td class="' + (item.missing_rows === 0 ? 'positive' : 'negative') + '">' + missing + '</td>' +
+            '<td>' + funding + '</td>' +
+            '<td>' + size + '</td>' +
+            '<td class="' + (complete ? 'positive' : 'negative') + '">' + escapeHtml(stateLabels[item.state] || item.state || '--') + '</td>';
+        tbody.appendChild(row);
+    }
+}
+
+
+function formatDataSize(kilobytes) {
+    const value = finiteNumber(kilobytes, 0);
+    if (value >= 1024) return formatNumber(value / 1024, 1) + ' MB';
+    return formatNumber(value, 1) + ' KB';
 }
 
 
@@ -1161,17 +1337,21 @@ if (globalThis.__BACKTEST_TEST__ === true) {
     globalThis.__backtestTestApi = Object.freeze({
         applyOptimizationCandidate,
         collectBacktestPayload,
+        fetchOrderFlowYear,
         fetchSelectedData,
+        loadOrderFlowStatus,
         loadLatestDiagnostics,
         optimizeParams,
         parseApiResponse,
         renderDataStatusTable,
+        renderOrderFlowStatusTable,
         renderDiagnostics,
         renderOptimizationTable,
         renderTradesTable,
         runBacktest,
         runStrategyDiagnostics,
         showAppPage,
+        showLocalDataPage,
         validateBacktestPayload,
     });
 }

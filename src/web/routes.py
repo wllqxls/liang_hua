@@ -13,7 +13,7 @@ import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
@@ -35,6 +35,11 @@ from src.backtest.optimizer import (
     build_stage_two_candidates,
 )
 from src.data.yearly import fetch_symbol_year, inspect_year_data
+from src.data.order_flow_yearly import (
+    annual_archive_tasks,
+    fetch_order_flow_year,
+    inspect_order_flow_year,
+)
 from src.strategies.signal_models import ACTIVE_SIGNAL_MODES, SignalMode
 from src.web.schemas import (
     BacktestRequest,
@@ -50,6 +55,10 @@ from src.web.schemas import (
     OptimizationJobCreated,
     OptimizationJobStatus,
     OptimizationResponse,
+    OrderFlowFetchRequest,
+    OrderFlowJobCreated,
+    OrderFlowJobStatus,
+    OrderFlowYearStatus,
     TradeItem,
 )
 
@@ -103,6 +112,7 @@ MAX_STAGE_TWO_CANDIDATES = min(STAGE_TWO_BUDGET, MAX_STAGE_ONE_CANDIDATES * 2)
 SEARCH_TOTAL_BUDGET = MAX_STAGE_ONE_CANDIDATES + MAX_STAGE_TWO_CANDIDATES + VALIDATION_BUDGET
 MAX_STORED_OPTIMIZATION_JOBS = 20
 MAX_STORED_DIAGNOSTIC_JOBS = 10
+MAX_STORED_ORDER_FLOW_JOBS = 10
 DIAGNOSTIC_TOTAL_COUNT = len(ACTIVE_SIGNAL_MODES)
 DIAGNOSTICS_JSON_PATH = PROJECT_ROOT / 'results' / 'strategy-diagnostics.json'
 DIAGNOSTICS_MARKDOWN_PATH = PROJECT_ROOT / 'docs' / 'strategy-diagnostics.md'
@@ -112,6 +122,8 @@ _optimization_jobs: OrderedDict[str, dict] = OrderedDict()
 _optimization_jobs_lock = threading.Lock()
 _diagnostic_jobs: OrderedDict[str, dict] = OrderedDict()
 _diagnostic_jobs_lock = threading.Lock()
+_order_flow_jobs: OrderedDict[str, dict] = OrderedDict()
+_order_flow_jobs_lock = threading.Lock()
 
 
 def _request_data_dir(year: int) -> Path:
@@ -931,6 +943,139 @@ def _long_window_validation(
         if start == data_start:
             break
     return (min(returns) if returns else 0.0), longest, len(returns), True, False
+
+
+@router.get('/api/order-flow/status', response_model=list[OrderFlowYearStatus])
+async def order_flow_status(year: int) -> list[OrderFlowYearStatus]:
+    """Inspect local annual BTC/ETH order-flow research files."""
+    if year < 2017 or year > 2100:
+        raise HTTPException(status_code=422, detail='数据年份必须在 2017 到 2100 之间')
+    statuses = inspect_order_flow_year(
+        root=DATA_ROOT / 'order_flow' / 'binance_um',
+        year=year,
+    )
+    return [OrderFlowYearStatus.model_validate(asdict(item)) for item in statuses]
+
+
+@router.post('/api/order-flow/jobs', response_model=OrderFlowJobCreated)
+async def create_order_flow_job(req: OrderFlowFetchRequest) -> OrderFlowJobCreated:
+    """Start one resumable annual order-flow download in a background thread."""
+    with _order_flow_jobs_lock:
+        if any(job['state'] in {'queued', 'running'} for job in _order_flow_jobs.values()):
+            return OrderFlowJobCreated(success=False, error='已有订单流下载任务正在运行，请等待完成')
+        job_id = uuid.uuid4().hex
+        _order_flow_jobs[job_id] = _new_order_flow_job(job_id, req.year)
+        while len(_order_flow_jobs) > MAX_STORED_ORDER_FLOW_JOBS:
+            _order_flow_jobs.popitem(last=False)
+
+    worker = threading.Thread(
+        target=_run_order_flow_job,
+        args=(job_id, req.year),
+        daemon=True,
+        name=f'order-flow-{job_id[:8]}',
+    )
+    worker.start()
+    return OrderFlowJobCreated(success=True, job_id=job_id)
+
+
+@router.get('/api/order-flow/jobs/{job_id}', response_model=OrderFlowJobStatus)
+async def get_order_flow_job(job_id: str) -> OrderFlowJobStatus:
+    """Return a snapshot of one annual order-flow download."""
+    with _order_flow_jobs_lock:
+        job = _order_flow_jobs.get(job_id)
+        if job is None:
+            return OrderFlowJobStatus(
+                success=False,
+                job_id=job_id,
+                year=2024,
+                state='missing',
+                error='订单流下载任务不存在',
+            )
+        snapshot = dict(job)
+        snapshot['elapsed_seconds'] = round(
+            max(0.0, time.monotonic() - float(job['_started_at'])),
+            1,
+        )
+    return OrderFlowJobStatus(**snapshot)
+
+
+def _new_order_flow_job(job_id: str, year: int) -> dict[str, object]:
+    return {
+        'success': True,
+        'job_id': job_id,
+        'year': year,
+        'state': 'queued',
+        'stage': '等待',
+        'completed_count': 0,
+        'total_count': len(annual_archive_tasks(year)),
+        'elapsed_seconds': 0.0,
+        'items': [],
+        'error': None,
+        '_started_at': time.monotonic(),
+    }
+
+
+def _reset_order_flow_jobs_for_tests() -> None:
+    """Clear process-local annual order-flow jobs between tests."""
+    with _order_flow_jobs_lock:
+        _order_flow_jobs.clear()
+
+
+def _update_order_flow_job(job_id: str, **values: object) -> None:
+    with _order_flow_jobs_lock:
+        job = _order_flow_jobs.get(job_id)
+        if job is None:
+            return
+        job.update(values)
+        job['elapsed_seconds'] = round(
+            max(0.0, time.monotonic() - float(job['_started_at'])),
+            1,
+        )
+
+
+def _run_order_flow_job(job_id: str, year: int) -> None:
+    _update_order_flow_job(job_id, state='running', stage='准备官方归档')
+
+    def progress(**values: object) -> None:
+        _update_order_flow_job(
+            job_id,
+            state='running',
+            stage=str(values.get('stage', '下载官方归档')),
+            completed_count=int(values.get('completed', 0)),
+            total_count=int(values.get('total', 0)),
+        )
+
+    try:
+        statuses = fetch_order_flow_year(
+            year=year,
+            root=DATA_ROOT / 'order_flow' / 'binance_um',
+            progress=progress,
+        )
+        _update_order_flow_job(
+            job_id,
+            state='completed',
+            stage='完成',
+            completed_count=len(annual_archive_tasks(year)),
+            items=[asdict(item) for item in statuses],
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.error('event=order_flow_download_failed exception_type=%s', type(exc).__name__)
+        _update_order_flow_job(
+            job_id,
+            success=False,
+            state='failed',
+            stage='失败',
+            error='订单流年度数据拉取或完整性审计失败，请检查网络后重试',
+        )
+    except Exception as exc:
+        logger.error('event=order_flow_job_failed exception_type=%s', type(exc).__name__)
+        _update_order_flow_job(
+            job_id,
+            success=False,
+            state='failed',
+            stage='失败',
+            error='订单流后台任务异常终止，请稍后重试',
+        )
 
 
 @router.get("/api/data-status")

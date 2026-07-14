@@ -13,6 +13,11 @@ const KNOWN_IDS = new Set([
     'slippage-rate', 'funding-rate', 'maintenance-margin-rate', 'data-symbol', 'data-year',
     'run-btn', 'optimize-btn', 'status', 'results', 'error-msg', 'order-check-msg',
     'fetch-data-btn', 'refresh-data-btn', 'data-status-text', 'data-status-tbody',
+    'local-data-shell', 'market-data-page', 'order-flow-data-page',
+    'market-data-tab', 'order-flow-data-tab', 'local-data-next-btn', 'local-data-prev-btn',
+    'order-flow-fetch-btn', 'order-flow-refresh-btn', 'order-flow-status-text',
+    'order-flow-status-tbody', 'order-flow-progress-wrap', 'order-flow-progress',
+    'order-flow-progress-text',
     'trades-tbody', 'optimization-tbody', 'equity-chart', 'metric-return',
     'metric-winrate', 'metric-drawdown', 'metric-sharpe', 'metric-trades',
     'metric-quality-score', 'metric-quality-label',
@@ -376,6 +381,39 @@ async function main() {
     assert.equal(dataRows.includes('5m / 15m / 1h / 4h'), true);
     assert.equal(dataRows.includes('5m 缺失'), false);
     assert.equal(dataRows.includes('15m 已存在'), false);
+
+    api.showLocalDataPage('orderflow');
+    assert.equal(document.getElementById('local-data-shell').dataset.activeDataPage, 'orderflow');
+    assert.equal(document.getElementById('market-data-page').getAttribute('aria-hidden'), 'true');
+    assert.equal(document.getElementById('order-flow-data-page').getAttribute('aria-hidden'), 'false');
+    context.fetch = async (url, options = {}) => {
+        if (url === '/api/order-flow/jobs') {
+            assert.deepEqual(JSON.parse(options.body), { year: 2025 });
+            return response({ body: '{"success":true,"job_id":"flow-1"}' });
+        }
+        if (url === '/api/order-flow/jobs/flow-1') {
+            return response({ body: JSON.stringify({
+                success: true, state: 'completed', stage: '完成',
+                completed_count: 778, total_count: 778, elapsed_seconds: 10,
+                items: [],
+            }) });
+        }
+        if (url === '/api/order-flow/status?year=2025') {
+            return response({ body: JSON.stringify([
+                { symbol: 'BTCUSDT', year: 2025, state: 'complete', rows: 105120,
+                    expected_rows: 105120, missing_rows: 0, funding_rows: 1095, file_size_kb: 32000 },
+                { symbol: 'ETHUSDT', year: 2025, state: 'complete', rows: 105120,
+                    expected_rows: 105120, missing_rows: 0, funding_rows: 1095, file_size_kb: 30000 },
+            ]) });
+        }
+        throw new Error(`unexpected URL: ${url}`);
+    };
+    await api.fetchOrderFlowYear();
+    assert.equal(document.getElementById('order-flow-fetch-btn').disabled, false);
+    const orderFlowRows = document.getElementById('order-flow-status-tbody').children
+        .map(row => row.innerHTML).join('\n');
+    assert.equal(orderFlowRows.includes('BTCUSDT'), true);
+    assert.equal(orderFlowRows.includes('ETHUSDT'), true);
 
     context.fetch = async () => response({ ok: false, status: 422, statusText: 'Invalid', body: '{"detail":"backend detail"}' });
     await api.runBacktest();

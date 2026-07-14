@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from main import app
 from src.backtest.engine import BacktestResult
 from src.web import routes
+from src.data.order_flow_yearly import OrderFlowYearStatus
 
 
 def test_backtest_api_rejects_legacy_strategy_contract() -> None:
@@ -119,6 +120,63 @@ def test_index_renders_signal_mode_names() -> None:
     assert '>关键位 + RSI 反转</option>' in html
     assert '<option value="ISOLATED" selected>逐仓</option>' in html
     assert '<select id="strategy">' not in html
+
+
+def test_order_flow_status_returns_btc_and_eth(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        routes,
+        'inspect_order_flow_year',
+        lambda *, root, year: [
+            OrderFlowYearStatus('BTCUSDT', year, 'complete', 105120, 105120, 0, 1095, 32000.0),
+            OrderFlowYearStatus('ETHUSDT', year, 'missing', None, 105120, None, None, None),
+        ],
+    )
+
+    response = TestClient(app).get('/api/order-flow/status?year=2025')
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item['symbol'] for item in payload] == ['BTCUSDT', 'ETHUSDT']
+    assert payload[0]['state'] == 'complete'
+    assert payload[1]['state'] == 'missing'
+
+
+def test_order_flow_download_rejects_holdout_year() -> None:
+    response = TestClient(app).post('/api/order-flow/jobs', json={'year': 2026})
+
+    assert response.status_code == 422
+
+
+def test_order_flow_background_job_reports_progress(monkeypatch: Any) -> None:
+    routes._reset_order_flow_jobs_for_tests()
+
+    class ImmediateThread:
+        def __init__(self, *, target: Any, args: tuple[Any, ...], **_: Any) -> None:
+            self.target = target
+            self.args = args
+
+        def start(self) -> None:
+            self.target(*self.args)
+
+    def fake_fetch(*, year: int, root: Path, progress: Any) -> list[OrderFlowYearStatus]:
+        progress(stage='下载官方归档', completed=10, total=778)
+        return [
+            OrderFlowYearStatus(symbol, year, 'complete', 105408, 105408, 0, 1098, 35000.0)
+            for symbol in ('BTCUSDT', 'ETHUSDT')
+        ]
+
+    monkeypatch.setattr(routes.threading, 'Thread', ImmediateThread)
+    monkeypatch.setattr(routes, 'fetch_order_flow_year', fake_fetch)
+    client = TestClient(app)
+
+    created = client.post('/api/order-flow/jobs', json={'year': 2024}).json()
+    status = client.get('/api/order-flow/jobs/' + created['job_id']).json()
+
+    assert created['success'] is True
+    assert status['state'] == 'completed'
+    assert status['completed_count'] == 2 * (366 + 24)
+    assert [item['state'] for item in status['items']] == ['complete', 'complete']
+    routes._reset_order_flow_jobs_for_tests()
 
 
 def test_backtest_api_rejects_unsupported_entry_timeframe() -> None:

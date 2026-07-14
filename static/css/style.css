@@ -684,6 +684,112 @@ td.negative { color: var(--red); }
     margin-bottom: 16px;
 }
 
+.local-data-toolbar {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 18px;
+}
+
+.local-data-tabs {
+    display: inline-flex;
+    padding: 3px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--bg);
+}
+
+.local-data-tab {
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 7px 14px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.local-data-tab.active {
+    background: var(--surface);
+    color: var(--accent);
+}
+
+.local-data-viewport {
+    width: 100%;
+    overflow: hidden;
+}
+
+.local-data-page-track {
+    display: flex;
+    width: 200%;
+    align-items: flex-start;
+    transform: translateX(0);
+    transition: transform 0.32s ease;
+}
+
+.local-data-shell[data-active-data-page="orderflow"] .local-data-page-track {
+    transform: translateX(-50%);
+}
+
+.local-data-page {
+    position: relative;
+    flex: 0 0 50%;
+    width: 50%;
+    min-width: 0;
+    padding: 0 38px;
+}
+
+.local-data-page[aria-hidden="true"] {
+    pointer-events: none;
+}
+
+.local-data-switch {
+    position: absolute;
+    top: 4px;
+    z-index: 2;
+    width: 30px;
+    height: 42px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--accent);
+    font-size: 25px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.local-data-switch:hover {
+    border-color: var(--accent);
+}
+
+.local-data-switch-right { right: 0; }
+.local-data-switch-left { left: 0; }
+
+.order-flow-contract {
+    margin-bottom: 14px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.order-flow-progress-wrap {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: -2px 0 16px;
+}
+
+.order-flow-progress-wrap progress {
+    width: min(420px, 55vw);
+    height: 10px;
+    accent-color: var(--accent);
+}
+
+.order-flow-progress-wrap .status-text {
+    margin-left: 0;
+}
+
 .data-table-container {
     max-height: 300px;
 }
@@ -814,6 +920,33 @@ td.negative { color: var(--red); }
     .diagnostic-section-title {
         align-items: flex-start;
         flex-direction: column;
+    }
+
+    .local-data-toolbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .local-data-toolbar .form-group,
+    .local-data-tabs {
+        width: 100%;
+    }
+
+    .local-data-tab {
+        flex: 1;
+    }
+
+    .local-data-page {
+        padding: 0 34px;
+    }
+
+    .order-flow-progress-wrap {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .order-flow-progress-wrap progress {
+        width: 100%;
     }
 }
 

@@ -93,6 +93,13 @@ class FuturesKlineArchiveSpec:
     symbol: str
     day: str
     interval: str = '5m'
+    cadence_override: Literal['daily', 'monthly'] | str | None = None
+
+    @property
+    def cadence(self) -> str:
+        if self.cadence_override is not None:
+            return self.cadence_override
+        return 'daily'
 
     @property
     def filename(self) -> str:
@@ -101,7 +108,7 @@ class FuturesKlineArchiveSpec:
     @property
     def url(self) -> str:
         return (
-            f'{BINANCE_DATA_BASE_URL}/daily/klines/{self.symbol}/'
+            f'{BINANCE_DATA_BASE_URL}/{self.cadence}/klines/{self.symbol}/'
             f'{self.interval}/{self.filename}'
         )
 
@@ -721,7 +728,17 @@ def _parse_day(value: str) -> date:
 def _validate_kline_spec(spec: FuturesKlineArchiveSpec) -> None:
     if spec.symbol not in SUPPORTED_SYMBOLS:
         raise ValueError(f'unsupported order-flow symbol: {spec.symbol}')
-    _parse_day(spec.day)
+    if spec.cadence not in {'daily', 'monthly'}:
+        raise ValueError(f'unsupported kline archive cadence: {spec.cadence}')
+    if spec.cadence == 'daily':
+        _parse_day(spec.day)
+    else:
+        if len(spec.day) != 7:
+            raise ValueError('monthly kline period must use YYYY-MM')
+        try:
+            pd.Period(spec.day, freq='M')
+        except ValueError:
+            raise ValueError('monthly kline period must use YYYY-MM') from None
     if spec.interval != '5m':
         raise ValueError('order-flow kline interval must be 5m')
 
