@@ -432,3 +432,30 @@ def test_signal_result_zero_trade_constant_equity_metrics() -> None:
     assert result.sharpe_ratio is None
     assert result.num_trades == 0
     assert result.total_funding_fee == 0
+
+
+def test_save_result_uses_project_results_dir_from_any_working_directory(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(engine_module, 'PROJECT_ROOT', tmp_path)
+    result = engine_module.BacktestResult(
+        total_return_pct=1,
+        win_rate_pct=50,
+        max_drawdown_pct=-1,
+        sharpe_ratio=None,
+        num_trades=0,
+        equity_curve=[],
+        trade_list=[],
+    )
+
+    path = BacktestEngine(tmp_path).save_result(
+        result,
+        symbol='ETH/USDT',
+        timeframe='5m',
+        strategy='KEY_LEVEL',
+    )
+
+    saved_path = Path(path)
+    assert saved_path.parent == tmp_path / 'results'
+    assert saved_path.exists()

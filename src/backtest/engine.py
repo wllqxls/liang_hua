@@ -31,6 +31,8 @@ from src.strategies.signal_models import (
 
 logger = logging.getLogger(__name__)
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 @dataclass
 class BacktestResult:
@@ -59,7 +61,7 @@ class BacktestResult:
 class BacktestEngine:
     """回测引擎：加载数据 → 运行策略 → 输出结果。"""
 
-    def __init__(self, data_dir: str | Path = "./data", fetcher: DataFetcher | None = None) -> None:
+    def __init__(self, data_dir: str | Path = PROJECT_ROOT / "data", fetcher: DataFetcher | None = None) -> None:
         self._data_dir = Path(data_dir)
         self._fetcher = fetcher
         self._cache: dict[str, pd.DataFrame] = {}
@@ -353,7 +355,7 @@ class BacktestEngine:
 
     def save_result(self, result: BacktestResult, symbol: str, timeframe: str, strategy: str) -> str:
         """保存回测记录到 results/ 目录。"""
-        results_dir = Path("./results")
+        results_dir = PROJECT_ROOT / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
         safe_symbol = symbol.replace("/", "_")
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")

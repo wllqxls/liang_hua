@@ -113,6 +113,7 @@ liang_hua/
 - K 线数据 CSV 列：`timestamp, open, high, low, close, volume`
 - 时间戳用 ISO 8601 字符串（`2024-01-01T00:00:00`）
 - 新数据文件路径：`data/{year}/{SYMBOL}_{TIMEFRAME}.csv`，如 `data/2025/BTC_USDT_1h.csv`
+- Web 服务和本地 Python 默认数据根目录固定为项目根目录下的 `data/`，不能随启动终端目录变化
 - 网页数据管理只主动拉取 `5m`、`15m`、`1h`、`4h`
 - 点击拉取指定年份数据时必须一次性拉取上述 4 个周期
 - 同一年同一周期重复拉取时必须合并新旧 CSV，按时间戳去重、排序并覆盖保存

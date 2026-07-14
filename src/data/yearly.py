@@ -14,6 +14,8 @@ from src.data.fetcher import DataFetcher
 YEARLY_TIMEFRAMES: tuple[str, ...] = ('5m', '15m', '1h', '4h')
 OHLCV_COLUMNS: tuple[str, ...] = ('Open', 'High', 'Low', 'Close', 'Volume')
 MIN_SUPPORTED_YEAR = 2017
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_DATA_DIR = PROJECT_ROOT / 'data'
 
 
 class OhlcvFetcher(Protocol):
@@ -125,7 +127,7 @@ def fetch_symbol_year(
     symbol: str,
     year: int,
     *,
-    data_dir: str | Path = './data',
+    data_dir: str | Path = DEFAULT_DATA_DIR,
     fetcher: OhlcvFetcher | None = None,
 ) -> list[YearlyDataStatus]:
     """Fetch all active timeframes for one symbol/year and return refreshed statuses."""

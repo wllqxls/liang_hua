@@ -85,7 +85,7 @@ def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
     assert payload["total_funding_fee"] == 0.12
     assert payload["result_path"] == "results/demo.json"
     assert payload["equity_curve"][0]["equity"] == 100_000.0
-    assert seen_data_dirs == [Path('data') / '2025']
+    assert seen_data_dirs == [routes.PROJECT_ROOT / 'data' / '2025']
 
 
 def test_index_renders_signal_mode_names() -> None:
@@ -377,7 +377,7 @@ def test_progressive_optimizer_uses_selected_year_data_dir(monkeypatch: Any) -> 
     response = routes._progressive_optimize(req, lambda **_: None)
 
     assert response.success is False
-    assert seen_paths == [Path('data') / '2025']
+    assert seen_paths == [routes.PROJECT_ROOT / 'data' / '2025']
 
 
 def test_data_status_api_reports_selected_symbol_and_year(monkeypatch: Any) -> None:
@@ -399,7 +399,7 @@ def test_data_status_api_reports_selected_symbol_and_year(monkeypatch: Any) -> N
 
     assert response.status_code == 200
     payload = response.json()
-    assert calls == [(Path('data'), 'ETH/USDT', 2025)]
+    assert calls == [(routes.PROJECT_ROOT / 'data', 'ETH/USDT', 2025)]
     assert [item['timeframe'] for item in payload] == ['5m', '15m', '1h', '4h']
     assert payload[0]['year'] == 2025
     assert payload[0]['rows'] == 2
@@ -451,7 +451,7 @@ def test_fetch_data_api_fetches_selected_year_all_timeframes(monkeypatch: Any) -
     assert payload["symbol"] == "BTC/USDT"
     assert payload["year"] == 2025
     assert [item['timeframe'] for item in payload['items']] == ['5m', '15m', '1h', '4h']
-    assert calls == [('BTC/USDT', 2025, Path('data'))]
+    assert calls == [('BTC/USDT', 2025, routes.PROJECT_ROOT / 'data')]
 
 
 def test_fetch_data_api_rejects_unsupported_symbol() -> None:

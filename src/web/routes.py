@@ -53,7 +53,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_templates_dir = Path(__file__).parent.parent.parent / "templates"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+_templates_dir = PROJECT_ROOT / "templates"
 templates = Jinja2Templates(directory=str(_templates_dir))
 
 MODE_OPTIONS = [
@@ -82,7 +84,7 @@ SYMBOLS = [
     "XRP/USDT", "ADA/USDT", "DOGE/USDT", "AVAX/USDT",
 ]
 
-DATA_ROOT = Path('./data')
+DATA_ROOT = PROJECT_ROOT / 'data'
 
 MIN_QUALITY_TRADES = 5
 MAX_ALLOWED_DRAWDOWN_PCT = -30.0

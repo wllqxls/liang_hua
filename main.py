@@ -19,7 +19,9 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+load_dotenv(PROJECT_ROOT / ".env")
 
 
 def configure_console_encoding() -> None:
@@ -40,7 +42,7 @@ logging.basicConfig(
 app = FastAPI(title="量化回测系统", version="0.1.0")
 
 # 静态文件
-_static_dir = Path(__file__).parent / "static"
+_static_dir = PROJECT_ROOT / "static"
 app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 # 路由

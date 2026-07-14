@@ -18,7 +18,10 @@ import ccxt
 import pandas as pd
 from dotenv import load_dotenv
 
-load_dotenv()  # 加载 .env（回测阶段不需要 API key，但保留入口）
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
+
+load_dotenv(PROJECT_ROOT / ".env")  # 加载 .env（回测阶段不需要 API key，但保留入口）
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +173,7 @@ class DataFetcher:
         timeframe: str = "1h",
         since: datetime | None = None,
         until: datetime | None = None,
-        data_dir: str = "./data",
+        data_dir: str | Path = DEFAULT_DATA_DIR,
     ) -> Path:
         """拉取数据并保存到 CSV。
 
@@ -194,7 +197,7 @@ class DataFetcher:
         self,
         symbol: str = "BTC/USDT",
         timeframe: str = "1h",
-        data_dir: str = "./data",
+        data_dir: str | Path = DEFAULT_DATA_DIR,
     ) -> pd.DataFrame:
         """从本地 CSV 加载已有数据。"""
         safe_symbol = symbol.replace("/", "_")
