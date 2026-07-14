@@ -161,8 +161,8 @@ def test_non_2xx_errors_use_api_detail_and_cache_key_is_updated() -> None:
     assert "if (!response.ok)" in script
     assert "if (!created.success)" in script
     assert 'resp.json()' not in script
-    assert '/static/css/style.css?v=yearly-data-3' in template
-    assert '/static/js/backtest.js?v=yearly-data-3' in template
+    assert '/static/css/style.css?v=diagnostics-page-1' in template
+    assert '/static/js/backtest.js?v=diagnostics-page-1' in template
 
 
 def test_form_controls_and_statuses_are_keyboard_and_screen_reader_accessible() -> None:
@@ -180,3 +180,38 @@ def test_equity_chart_uses_value_aware_tick_labels() -> None:
     assert 'function formatEquityTick(value)' in script
     assert 'callback: formatEquityTick' in script
     assert "(v / 1000).toFixed(0) + 'k'" not in script
+
+
+def test_diagnostics_is_a_separate_horizontal_page_with_bidirectional_controls() -> None:
+    template, script, css = _sources()
+
+    assert 'id="page-track" class="page-track"' in template
+    assert 'id="backtest-page" class="app-page"' in template
+    assert 'id="diagnostics-page" class="app-page diagnostics-page"' in template
+    assert 'onclick="showAppPage(\'diagnostics\')"' in template
+    assert 'onclick="showAppPage(\'backtest\')"' in template
+    assert 'body[data-active-page="diagnostics"] .page-track' in css
+    assert 'transform: translateX(-50%);' in css
+    assert "function showAppPage(page, updateHistory = true)" in script
+    assert "loadLatestDiagnostics();" in script
+    assert "runStrategyDiagnostics();" not in script.split(
+        "window.addEventListener('DOMContentLoaded'", 1
+    )[1].split('});', 1)[0]
+
+
+def test_diagnostics_page_has_progress_summary_and_failure_details() -> None:
+    template, script, _ = _sources()
+
+    for element_id in (
+        'diagnostic-run-btn',
+        'diagnostic-progress',
+        'diagnostic-status',
+        'diagnostic-summary-table',
+        'diagnostic-cross-findings',
+        'diagnostic-detail-list',
+    ):
+        assert f'id="{element_id}"' in template
+    assert "fetch('/api/diagnostics/jobs'" in script
+    assert "fetch('/api/diagnostics/jobs/' + created.job_id)" in script
+    assert "fetch('/api/diagnostics/latest')" in script
+    assert 'escapeHtml(diagnosticModeLabel(item.mode))' in script

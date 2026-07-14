@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 import pandas as pd
 
@@ -90,6 +92,8 @@ def run_validation_matrix(
     timeframe: str = DEFAULT_TIMEFRAME,
     data_dir: Path | str | None = None,
     diagnostics_output_path: Path | None = None,
+    diagnostics_json_path: Path | None = None,
+    progress: Callable[..., None] | None = None,
 ) -> list[ValidationRow]:
     """Run all stable signal modes across isolated and cross margin."""
     _validate_days(days)
@@ -177,6 +181,13 @@ def run_validation_matrix(
                     annual_trades=int(metrics['annual_trades']),
                 )
             )
+            if progress is not None:
+                progress(
+                    completed=len(rows),
+                    total=len(MODES) * len(MARGIN_MODES),
+                    mode=mode.value,
+                    margin_mode=margin_mode.value,
+                )
 
     rows = [_clean_validation_row(row) for row in rows]
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -189,6 +200,22 @@ def run_validation_matrix(
                 days,
                 timeframe,
                 diagnostic_rows,
+            ),
+            encoding='utf-8',
+        )
+    if diagnostics_json_path is not None:
+        diagnostics_json_path.parent.mkdir(parents=True, exist_ok=True)
+        diagnostics_json_path.write_text(
+            json.dumps(
+                _diagnostics_payload(
+                    symbol,
+                    days,
+                    timeframe,
+                    rows,
+                    diagnostic_rows,
+                ),
+                ensure_ascii=False,
+                indent=2,
             ),
             encoding='utf-8',
         )
@@ -489,6 +516,67 @@ def _render_diagnostics_markdown(
     return '\n'.join(lines)
 
 
+def _diagnostics_payload(
+    symbol: str,
+    days: int,
+    timeframe: str,
+    validation_rows: Sequence[ValidationRow],
+    diagnostic_rows: Sequence[DiagnosticRow],
+) -> dict[str, object]:
+    validation_by_key = {
+        (row.mode, row.margin_mode): row
+        for row in validation_rows
+    }
+    summary: list[dict[str, object]] = []
+    for row in diagnostic_rows:
+        validation = validation_by_key[(row.mode, row.margin_mode)]
+        item = row.diagnostics
+        summary.append(
+            {
+                'mode': row.mode.value,
+                'margin_mode': row.margin_mode.value,
+                'status': validation.status,
+                'reasons': validation.reasons,
+                'avg_window_return_pct': validation.avg_window_return_pct,
+                'worst_window_return_pct': validation.worst_window_return_pct,
+                'annual_return_pct': validation.annual_return_pct,
+                'max_drawdown_pct': validation.max_drawdown_pct,
+                'profit_factor': validation.profit_factor,
+                'annual_trades': validation.annual_trades,
+                'win_rate_pct': item.win_rate_pct,
+                'pre_fee_pnl': item.gross_pnl,
+                'commission': item.commission,
+                'funding_cash_flow': item.funding_cash_flow,
+                'net_fee_funding_cost': item.net_cost,
+                'net_pnl': item.net_pnl,
+                'pre_fee_profit_factor': item.gross_profit_factor,
+                'average_net_pnl': item.average_net_pnl,
+                'cost_to_pre_fee_gross_profit_pct': item.cost_to_gross_profit_pct,
+                'findings': _diagnostic_findings(item),
+            }
+        )
+    return {
+        'success': True,
+        'available': True,
+        'generated_at': datetime.now(timezone.utc).isoformat(),
+        'symbol': symbol,
+        'timeframe': timeframe,
+        'days': days,
+        'passed_count': sum(not row.reasons for row in validation_rows),
+        'total_count': len(validation_rows),
+        'settings': {
+            'cash': 100,
+            'opening_amount': 10,
+            'leverage': 5,
+            'taker_fee': VALIDATION_TAKER_FEE,
+            'slippage_rate': VALIDATION_SLIPPAGE_RATE,
+            'funding_rate': VALIDATION_FUNDING_RATE,
+        },
+        'cross_mode_findings': _cross_mode_findings(diagnostic_rows),
+        'summary': summary,
+    }
+
+
 def _render_breakdown(
     title: str,
     slices: Sequence[DiagnosticSlice],
@@ -636,6 +724,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument('--days', type=int, default=365)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--diagnostics-output', type=Path)
+    parser.add_argument('--diagnostics-json', type=Path)
     parser.add_argument('--timeframe', default=DEFAULT_TIMEFRAME, choices=['5m', '15m'])
     return parser.parse_args()
 
@@ -652,6 +741,11 @@ def main() -> None:
             args.diagnostics_output
             if args.diagnostics_output is not None
             else args.output.with_name('strategy-diagnostics.md')
+        ),
+        diagnostics_json_path=(
+            args.diagnostics_json
+            if args.diagnostics_json is not None
+            else PROJECT_ROOT / 'results' / 'strategy-diagnostics.json'
         ),
     )
     passed = sum(1 for row in rows if not row.reasons)

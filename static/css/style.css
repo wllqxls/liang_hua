@@ -26,6 +26,65 @@ body {
     color: var(--text);
     line-height: 1.6;
     min-height: 100vh;
+    overflow-x: hidden;
+}
+
+.app-viewport {
+    width: 100%;
+    overflow: hidden;
+}
+
+.page-track {
+    display: flex;
+    width: 200%;
+    align-items: flex-start;
+    transform: translateX(0);
+    transition: transform 0.38s ease;
+}
+
+body[data-active-page="diagnostics"] .page-track {
+    transform: translateX(-50%);
+}
+
+.app-page {
+    flex: 0 0 50%;
+    width: 50%;
+    min-width: 0;
+}
+
+.app-page[aria-hidden="true"] {
+    pointer-events: none;
+}
+
+.page-switch {
+    position: fixed;
+    top: 24px;
+    z-index: 20;
+    width: 42px;
+    height: 42px;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--accent);
+    font-size: 30px;
+    line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+    transition: border-color 0.2s, color 0.2s, transform 0.2s;
+}
+
+.page-switch:hover {
+    border-color: var(--accent);
+    color: #fff;
+    transform: translateY(-1px);
+}
+
+.page-switch-right {
+    right: 16px;
+}
+
+.page-switch-left {
+    left: 16px;
 }
 
 .container {
@@ -313,6 +372,195 @@ summary:focus-visible {
     font-size: 14px;
 }
 
+/* Strategy diagnostics */
+.diagnostic-contract {
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-align: right;
+}
+
+.diagnostic-action-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.diagnostic-progress-wrap {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 18px;
+}
+
+.diagnostic-progress-wrap progress {
+    width: min(420px, 55vw);
+    height: 10px;
+    accent-color: var(--accent);
+}
+
+.diagnostic-progress-wrap .status-text {
+    margin-left: 0;
+}
+
+.diagnostics-empty {
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    padding: 40px 24px;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+.diagnostics-empty h2 {
+    color: var(--text);
+    font-size: 18px;
+    margin-bottom: 6px;
+}
+
+.diagnostics-section {
+    padding: 22px 0;
+    border-top: 1px solid var(--border);
+}
+
+.diagnostics-section:first-child {
+    border-top: none;
+    padding-top: 4px;
+}
+
+.diagnostics-section h2 {
+    font-size: 18px;
+    margin-bottom: 14px;
+}
+
+.diagnostic-section-title {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.diagnostic-section-title h2 {
+    margin-bottom: 2px;
+}
+
+.diagnostic-status-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 3px 10px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.diagnostic-status-badge.positive {
+    border-color: rgba(63, 185, 80, 0.45);
+    color: var(--green);
+}
+
+.diagnostic-status-badge.negative {
+    border-color: rgba(248, 81, 73, 0.45);
+    color: var(--red);
+}
+
+.diagnostic-kpis {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.diagnostic-kpi {
+    min-width: 0;
+    padding: 16px;
+    border-right: 1px solid var(--border);
+}
+
+.diagnostic-kpi:last-child {
+    border-right: none;
+}
+
+.diagnostic-kpi strong {
+    display: block;
+    margin-top: 4px;
+    font-size: 22px;
+    overflow-wrap: anywhere;
+}
+
+.diagnostic-kpi strong.positive {
+    color: var(--green);
+}
+
+.diagnostic-kpi strong.negative {
+    color: var(--red);
+}
+
+.diagnostic-findings {
+    display: grid;
+    gap: 8px;
+    padding-left: 20px;
+    color: var(--text-secondary);
+}
+
+.diagnostic-findings li::marker {
+    color: var(--accent);
+}
+
+.diagnostic-table-container {
+    max-height: 460px;
+}
+
+.diagnostic-table-container table {
+    min-width: 980px;
+}
+
+.diagnostic-detail-list {
+    display: grid;
+    gap: 10px;
+}
+
+.diagnostic-detail {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+}
+
+.diagnostic-detail summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 13px 16px;
+    cursor: pointer;
+    list-style: none;
+}
+
+.diagnostic-detail summary::-webkit-details-marker {
+    display: none;
+}
+
+.diagnostic-detail-reasons {
+    display: grid;
+    gap: 7px;
+    padding: 0 16px 16px 34px;
+    color: var(--text-secondary);
+}
+
+.diagnostic-detail-title {
+    font-weight: 700;
+}
+
+.diagnostic-detail-status {
+    color: var(--red);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
 /* Metrics */
 .metrics-grid {
     display: grid;
@@ -487,6 +735,83 @@ td.negative { color: var(--red); }
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 800px) {
+    .diagnostic-kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .diagnostic-kpi:nth-child(2) {
+        border-right: none;
+    }
+
+    .diagnostic-kpi:nth-child(-n + 2) {
+        border-bottom: 1px solid var(--border);
+    }
+}
+
+@media (max-width: 520px) {
+    .page-switch {
+        top: 16px;
+        width: 36px;
+        height: 36px;
+        font-size: 26px;
+    }
+
+    .page-switch-right {
+        right: 8px;
+    }
+
+    .page-switch-left {
+        left: 8px;
+    }
+
+    .diagnostic-contract {
+        text-align: left;
+    }
+
+    .diagnostic-controls .panel-title-row {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .diagnostic-controls .panel-title-row h2 {
+        white-space: nowrap;
+    }
+
+    .diagnostic-action-row .form-group,
+    .diagnostic-action-row button {
+        width: 100%;
+    }
+
+    .diagnostic-progress-wrap {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .diagnostic-progress-wrap progress {
+        width: 100%;
+    }
+
+    .diagnostic-kpis {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .diagnostic-kpi,
+    .diagnostic-kpi:nth-child(2) {
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .diagnostic-kpi:last-child {
+        border-bottom: none;
+    }
+
+    .diagnostic-section-title {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}
 
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {

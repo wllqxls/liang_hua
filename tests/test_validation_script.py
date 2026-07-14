@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -204,12 +205,16 @@ def test_run_validation_matrix_covers_every_mode_margin_pair_and_writes_markdown
     monkeypatch.setattr(validate_strategies, 'BacktestEngine', FakeEngine)
     output = tmp_path / 'strategy-validation.md'
     diagnostics_output = tmp_path / 'strategy-diagnostics.md'
+    diagnostics_json = tmp_path / 'strategy-diagnostics.json'
+    progress_updates: list[dict[str, object]] = []
 
     rows = validate_strategies.run_validation_matrix(
         symbol='ETH/USDT',
         days=365,
         output_path=output,
         diagnostics_output_path=diagnostics_output,
+        diagnostics_json_path=diagnostics_json,
+        progress=lambda **values: progress_updates.append(values),
     )
 
     assert len(rows) == 6
@@ -225,6 +230,16 @@ def test_run_validation_matrix_covers_every_mode_margin_pair_and_writes_markdown
     assert 'KEY_LEVEL_RSI 相比 KEY_LEVEL' in diagnostics_content
     assert '组合模式没有形成实质性的交易筛选' in diagnostics_content
     assert '### Exit Reason' in diagnostics_content
+    payload = json.loads(diagnostics_json.read_text(encoding='utf-8'))
+    assert payload['success'] is True
+    assert payload['symbol'] == 'ETH/USDT'
+    assert payload['passed_count'] == 6
+    assert payload['total_count'] == 6
+    assert len(payload['summary']) == 6
+    assert payload['summary'][0]['mode'] == 'KEY_LEVEL'
+    assert payload['summary'][0]['findings']
+    assert [item['completed'] for item in progress_updates] == [1, 2, 3, 4, 5, 6]
+    assert all(item['total'] == 6 for item in progress_updates)
     assert all(row.status == '通过' for row in rows)
     assert len(calls) == 6 * 13
 

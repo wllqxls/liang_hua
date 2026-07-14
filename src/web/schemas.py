@@ -191,6 +191,36 @@ class OptimizationJobStatus(BaseModel):
     error: str | None = None
 
 
+class DiagnosticRequest(BaseModel):
+    """365-day strategy diagnostic request."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    symbol: str = Field(default='ETH/USDT', description='交易对象')
+    timeframe: Literal['5m', '15m'] = Field(default='5m', description='入场 K 线周期')
+
+
+class DiagnosticJobCreated(BaseModel):
+    """Background strategy diagnostic job creation response."""
+
+    success: bool = True
+    job_id: str | None = None
+    error: str | None = None
+
+
+class DiagnosticJobStatus(BaseModel):
+    """Progress snapshot for one strategy diagnostic job."""
+
+    success: bool = True
+    job_id: str
+    state: str = 'queued'
+    stage: str = '等待'
+    completed_count: int = 0
+    total_count: int = 6
+    elapsed_seconds: float = 0
+    error: str | None = None
+
+
 class DataStatus(BaseModel):
     """本地数据文件状态。"""
 

@@ -6,6 +6,8 @@ let equityChart = null;
 let chartData = null;
 let optimizationCandidates = [];
 let operationGeneration = 0;
+let diagnosticGeneration = 0;
+let diagnosticRunning = false;
 const MIN_NOTIONAL_BY_SYMBOL = {
     'BTC/USDT': 50,
     'ETH/USDT': 20,
@@ -19,13 +21,40 @@ const MIN_NOTIONAL_BY_SYMBOL = {
 const LEVERAGE_OPTIONS = [1, 2, 3, 5, 10, 20, 50, 100, 125, 150];
 
 window.addEventListener('DOMContentLoaded', () => {
+    initializePageNavigation();
     initializeDataYear();
     updateModeDescription();
     document.getElementById('mode').addEventListener('change', updateModeDescription);
     bindRealtimeChecks();
     updateOrderCheck();
     loadDataStatus();
+    loadLatestDiagnostics();
 });
+
+
+function initializePageNavigation() {
+    const hash = window.location && window.location.hash;
+    showAppPage(hash === '#diagnostics' ? 'diagnostics' : 'backtest', false);
+}
+
+
+function showAppPage(page, updateHistory = true) {
+    const activePage = page === 'diagnostics' ? 'diagnostics' : 'backtest';
+    const isDiagnostics = activePage === 'diagnostics';
+    document.body.dataset.activePage = activePage;
+    document.getElementById('backtest-page').setAttribute('aria-hidden', String(isDiagnostics));
+    document.getElementById('diagnostics-page').setAttribute('aria-hidden', String(!isDiagnostics));
+    document.getElementById('page-next-btn').classList.toggle('hidden', isDiagnostics);
+    document.getElementById('page-prev-btn').classList.toggle('hidden', !isDiagnostics);
+
+    if (updateHistory && window.history && window.history.replaceState) {
+        const hash = isDiagnostics ? '#diagnostics' : '#backtest';
+        window.history.replaceState(null, '', hash);
+    }
+    if (window.scrollTo) {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+}
 
 // ============================================================
 // 回测
@@ -421,6 +450,251 @@ function groupDataStatusBySymbol(items) {
         group.items.sort((a, b) => order.indexOf(a.timeframe) - order.indexOf(b.timeframe));
         return group;
     });
+}
+
+
+// ============================================================
+// 策略诊断
+// ============================================================
+
+async function loadLatestDiagnostics() {
+    const refreshBtn = document.getElementById('diagnostic-refresh-btn');
+    refreshBtn.disabled = true;
+    hideDiagnosticError();
+    try {
+        const response = await fetch('/api/diagnostics/latest');
+        const data = await parseApiResponse(response);
+        if (!data.available) {
+            renderDiagnosticsUnavailable();
+            return;
+        }
+        renderDiagnostics(data);
+    } catch (err) {
+        showDiagnosticError('诊断结果读取失败: ' + err.message);
+    } finally {
+        if (!diagnosticRunning) refreshBtn.disabled = false;
+    }
+}
+
+
+async function runStrategyDiagnostics() {
+    if (diagnosticRunning) return;
+    const runBtn = document.getElementById('diagnostic-run-btn');
+    const refreshBtn = document.getElementById('diagnostic-refresh-btn');
+    const progressWrap = document.getElementById('diagnostic-progress-wrap');
+    const progress = document.getElementById('diagnostic-progress');
+    const status = document.getElementById('diagnostic-status');
+    const payload = {
+        symbol: document.getElementById('diagnostic-symbol').value,
+        timeframe: document.getElementById('diagnostic-timeframe').value,
+    };
+    const token = ++diagnosticGeneration;
+    diagnosticRunning = true;
+    runBtn.disabled = true;
+    refreshBtn.disabled = true;
+    progress.value = 0;
+    progress.max = 6;
+    progressWrap.classList.remove('hidden');
+    status.innerHTML = '<span class="spinner"></span>正在准备年度数据...';
+    hideDiagnosticError();
+
+    try {
+        const createResponse = await fetch('/api/diagnostics/jobs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const created = await parseApiResponse(createResponse);
+        if (token !== diagnosticGeneration) return;
+        if (!created.success) {
+            throw new Error(created.error || '策略诊断启动失败');
+        }
+
+        while (token === diagnosticGeneration) {
+            const jobResponse = await fetch('/api/diagnostics/jobs/' + created.job_id);
+            const job = await parseApiResponse(jobResponse);
+            if (token !== diagnosticGeneration) return;
+            if (!job.success) {
+                throw new Error(job.error || '策略诊断失败');
+            }
+            const completed = finiteNumber(job.completed_count, 0);
+            const total = Math.max(1, finiteNumber(job.total_count, 6));
+            progress.max = total;
+            progress.value = Math.min(completed, total);
+            status.innerHTML = '<span class="spinner"></span>' + escapeHtml(job.stage || '运行中') +
+                '：' + completed + ' / ' + total + '，已用 ' +
+                formatDuration(job.elapsed_seconds || 0);
+
+            if (job.state === 'completed') {
+                progress.value = total;
+                await loadLatestDiagnostics();
+                status.textContent = '诊断完成：' + total + ' / ' + total + ' 组';
+                break;
+            }
+            if (job.state === 'failed') {
+                throw new Error(job.error || '策略诊断失败');
+            }
+            await delay(1000);
+        }
+    } catch (err) {
+        if (token === diagnosticGeneration) {
+            showDiagnosticError(err.message);
+            status.textContent = '诊断失败';
+        }
+    } finally {
+        if (token === diagnosticGeneration) {
+            diagnosticRunning = false;
+            runBtn.disabled = false;
+            refreshBtn.disabled = false;
+        }
+    }
+}
+
+
+function renderDiagnosticsUnavailable() {
+    document.getElementById('diagnostics-empty').classList.remove('hidden');
+    document.getElementById('diagnostics-results').classList.add('hidden');
+}
+
+
+function renderDiagnostics(data) {
+    const summary = Array.isArray(data.summary) ? data.summary : [];
+    document.getElementById('diagnostics-empty').classList.add('hidden');
+    document.getElementById('diagnostics-results').classList.remove('hidden');
+    document.getElementById('diagnostic-latest-meta').textContent =
+        diagnosticReportMeta(data);
+
+    const passed = finiteNumber(data.passed_count, 0);
+    const total = finiteNumber(data.total_count, summary.length);
+    const status = document.getElementById('diagnostic-overall-status');
+    status.textContent = passed === total && total > 0 ? '全部通过' : '未通过验证';
+    status.className = 'diagnostic-status-badge ' +
+        (passed === total && total > 0 ? 'positive' : 'negative');
+
+    const returns = summary.map(item => finiteNumber(item.annual_return_pct, Number.NEGATIVE_INFINITY));
+    const netPnls = summary.map(item => finiteNumber(item.net_pnl, Number.NEGATIVE_INFINITY));
+    setDiagnosticKpi('diagnostic-passed', passed + ' / ' + total, passed === total && total > 0);
+    setDiagnosticKpi('diagnostic-best-return', formatBestValue(returns, '%'), Math.max(...returns) > 0);
+    setDiagnosticKpi('diagnostic-best-net-pnl', formatBestValue(netPnls, ' U'), Math.max(...netPnls) > 0);
+    setDiagnosticKpi('diagnostic-total', String(total), null);
+    renderDiagnosticFindings(data.cross_mode_findings);
+    renderDiagnosticSummaryTable(summary);
+    renderDiagnosticDetails(summary);
+}
+
+
+function diagnosticReportMeta(data) {
+    const generated = data.generated_at ? formatTime(data.generated_at) : '--';
+    return (data.symbol || '--') + ' · ' + (data.timeframe || '--') + ' · ' +
+        finiteNumber(data.days, 365) + ' 天 · ' + generated;
+}
+
+
+function formatBestValue(values, suffix) {
+    const best = Math.max(...values);
+    return Number.isFinite(best) ? formatNumber(best, 2) + suffix : '--';
+}
+
+
+function setDiagnosticKpi(id, text, positive) {
+    const element = document.getElementById(id);
+    element.textContent = text;
+    element.className = positive == null ? '' : (positive ? 'positive' : 'negative');
+}
+
+
+function renderDiagnosticFindings(findings) {
+    const list = document.getElementById('diagnostic-cross-findings');
+    list.innerHTML = '';
+    const items = Array.isArray(findings) ? findings : [];
+    if (items.length === 0) {
+        const item = document.createElement('li');
+        item.textContent = '暂无跨策略结论';
+        list.appendChild(item);
+        return;
+    }
+    for (const finding of items) {
+        const item = document.createElement('li');
+        item.textContent = String(finding);
+        list.appendChild(item);
+    }
+}
+
+
+function renderDiagnosticSummaryTable(summary) {
+    const tbody = document.getElementById('diagnostic-summary-tbody');
+    tbody.innerHTML = '';
+    if (summary.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" class="empty-cell">暂无诊断组合</td></tr>';
+        return;
+    }
+    for (const item of summary) {
+        const row = document.createElement('tr');
+        const returnClass = finiteNumber(item.annual_return_pct, 0) > 0 ? 'positive' : 'negative';
+        const netClass = finiteNumber(item.net_pnl, 0) > 0 ? 'positive' : 'negative';
+        const statusClass = item.status === '通过' ? 'recommend' : 'reject';
+        row.innerHTML =
+            '<td>' + escapeHtml(diagnosticModeLabel(item.mode)) + '</td>' +
+            '<td>' + escapeHtml(diagnosticMarginLabel(item.margin_mode)) + '</td>' +
+            '<td><span class="quality-badge ' + statusClass + '">' + escapeHtml(item.status || '--') + '</span></td>' +
+            '<td class="' + returnClass + '">' + formatNumber(item.annual_return_pct, 2) + '</td>' +
+            '<td class="negative">' + formatNumber(item.max_drawdown_pct, 2) + '</td>' +
+            '<td>' + formatNumber(item.annual_trades, 0) + '</td>' +
+            '<td>' + formatNumber(item.pre_fee_pnl, 2) + '</td>' +
+            '<td>' + formatNumber(item.commission, 2) + '</td>' +
+            '<td class="' + netClass + '">' + formatNumber(item.net_pnl, 2) + '</td>' +
+            '<td>' + formatNumber(item.profit_factor, 2) + '</td>';
+        tbody.appendChild(row);
+    }
+}
+
+
+function renderDiagnosticDetails(summary) {
+    const container = document.getElementById('diagnostic-detail-list');
+    container.innerHTML = '';
+    for (const item of summary) {
+        const detail = document.createElement('details');
+        detail.className = 'diagnostic-detail';
+        const findings = Array.isArray(item.findings) ? item.findings : [];
+        const reasons = Array.isArray(item.reasons) ? item.reasons : [];
+        const combined = [...findings, ...reasons.filter(reason => !findings.includes(reason))];
+        detail.innerHTML =
+            '<summary><span class="diagnostic-detail-title">' +
+            escapeHtml(diagnosticModeLabel(item.mode) + ' / ' + diagnosticMarginLabel(item.margin_mode)) +
+            '</span><span class="diagnostic-detail-status">' + escapeHtml(item.status || '--') + '</span></summary>' +
+            '<ul class="diagnostic-detail-reasons">' +
+            combined.map(reason => '<li>' + escapeHtml(reason) + '</li>').join('') +
+            '</ul>';
+        container.appendChild(detail);
+    }
+}
+
+
+function diagnosticModeLabel(mode) {
+    return {
+        KEY_LEVEL: '关键位',
+        RSI_REVERSAL: 'RSI 反转',
+        KEY_LEVEL_RSI: '关键位 + RSI',
+    }[mode] || mode || '--';
+}
+
+
+function diagnosticMarginLabel(marginMode) {
+    return marginMode === 'ISOLATED' ? '逐仓' : marginMode === 'CROSS' ? '全仓' : marginMode || '--';
+}
+
+
+function showDiagnosticError(message) {
+    const error = document.getElementById('diagnostic-error');
+    error.textContent = message;
+    error.classList.remove('hidden');
+}
+
+
+function hideDiagnosticError() {
+    const error = document.getElementById('diagnostic-error');
+    error.textContent = '';
+    error.classList.add('hidden');
 }
 
 
@@ -853,12 +1127,16 @@ if (globalThis.__BACKTEST_TEST__ === true) {
         applyOptimizationCandidate,
         collectBacktestPayload,
         fetchSelectedData,
+        loadLatestDiagnostics,
         optimizeParams,
         parseApiResponse,
         renderDataStatusTable,
+        renderDiagnostics,
         renderOptimizationTable,
         renderTradesTable,
         runBacktest,
+        runStrategyDiagnostics,
+        showAppPage,
         validateBacktestPayload,
     });
 }

@@ -16,6 +16,14 @@ const KNOWN_IDS = new Set([
     'trades-tbody', 'optimization-tbody', 'equity-chart', 'metric-return',
     'metric-winrate', 'metric-drawdown', 'metric-sharpe', 'metric-trades',
     'metric-quality-score', 'metric-quality-label',
+    'page-next-btn', 'page-prev-btn', 'backtest-page', 'diagnostics-page',
+    'diagnostic-symbol', 'diagnostic-timeframe', 'diagnostic-run-btn',
+    'diagnostic-refresh-btn', 'diagnostic-error', 'diagnostic-progress-wrap',
+    'diagnostic-progress', 'diagnostic-status', 'diagnostics-empty',
+    'diagnostics-results', 'diagnostic-latest-meta', 'diagnostic-overall-status',
+    'diagnostic-passed', 'diagnostic-best-return', 'diagnostic-best-net-pnl',
+    'diagnostic-total', 'diagnostic-cross-findings', 'diagnostic-summary-tbody',
+    'diagnostic-detail-list',
 ]);
 
 
@@ -31,13 +39,27 @@ class Element {
         this.options = [{ dataset: { desc: 'mode description' } }];
         this.selectedIndex = 0;
         this.listeners = new Map();
-        this.classList = { add() {}, remove() {} };
+        this.attributes = new Map();
+        this.classes = new Set();
+        this.classList = {
+            add: (...names) => names.forEach(name => this.classes.add(name)),
+            remove: (...names) => names.forEach(name => this.classes.delete(name)),
+            toggle: (name, force) => {
+                if (force === true) this.classes.add(name);
+                else if (force === false) this.classes.delete(name);
+                else if (this.classes.has(name)) this.classes.delete(name);
+                else this.classes.add(name);
+            },
+            contains: name => this.classes.has(name),
+        };
     }
 
     addEventListener(type, callback) { this.listeners.set(type, callback); }
     appendChild(child) { this.children.push(child); }
     scrollIntoView() {}
     getContext() { return {}; }
+    setAttribute(name, value) { this.attributes.set(name, String(value)); }
+    getAttribute(name) { return this.attributes.get(name); }
 }
 
 
@@ -58,6 +80,7 @@ function buildContext(testMode = true) {
     const requestedIds = [];
     const readyCallbacks = [];
     const document = {
+        body: new Element(),
         getElementById(id) {
             requestedIds.push(id);
             if (!KNOWN_IDS.has(id)) throw new Error(`unknown element id: ${id}`);
@@ -67,6 +90,11 @@ function buildContext(testMode = true) {
         querySelector() { return new Element(); },
     };
     const window = {
+        location: { hash: '' },
+        history: {
+            replaceState(_state, _unused, hash) { window.location.hash = hash; },
+        },
+        scrollTo() {},
         addEventListener(type, callback) {
             if (type === 'DOMContentLoaded') readyCallbacks.push(callback);
         },
@@ -94,6 +122,7 @@ function setValues(document) {
         'taker-fee': '0.0005', 'slippage-rate': '0.0002',
         'funding-rate': '0.0001', 'maintenance-margin-rate': '0.005',
         'data-symbol': 'ETH/USDT', 'data-year': '2025',
+        'diagnostic-symbol': 'ETH/USDT', 'diagnostic-timeframe': '5m',
     };
     for (const [id, value] of Object.entries(values)) document.getElementById(id).value = value;
 }
@@ -195,6 +224,59 @@ async function assertOperationController(api, context, document) {
 }
 
 
+async function assertDiagnosticPage(api, context, document) {
+    api.showAppPage('diagnostics');
+    assert.equal(document.body.dataset.activePage, 'diagnostics');
+    assert.equal(document.getElementById('backtest-page').getAttribute('aria-hidden'), 'true');
+    assert.equal(document.getElementById('diagnostics-page').getAttribute('aria-hidden'), 'false');
+    assert.equal(document.getElementById('page-next-btn').classList.contains('hidden'), true);
+    assert.equal(document.getElementById('page-prev-btn').classList.contains('hidden'), false);
+
+    api.renderDiagnostics({
+        available: true,
+        symbol: 'ETH/USDT',
+        timeframe: '5m',
+        days: 365,
+        generated_at: '2026-07-14T00:00:00Z',
+        passed_count: 0,
+        total_count: 1,
+        cross_mode_findings: ['组合模式没有形成实质性的交易筛选。'],
+        summary: [{
+            mode: 'KEY_LEVEL', margin_mode: 'ISOLATED', status: '未通过验证',
+            annual_return_pct: -10, max_drawdown_pct: -20, annual_trades: 100,
+            pre_fee_pnl: -1, commission: 5, net_pnl: -6, profit_factor: 0.5,
+            findings: ['失败原因'], reasons: ['全年收益不为正'],
+        }],
+    });
+    assert.equal(document.getElementById('diagnostic-summary-tbody').children.length, 1);
+    assert.equal(document.getElementById('diagnostic-detail-list').children.length, 1);
+    assert.equal(document.getElementById('diagnostic-cross-findings').children[0].textContent,
+        '组合模式没有形成实质性的交易筛选。');
+
+    context.fetch = async url => {
+        if (url === '/api/diagnostics/jobs') {
+            return response({ body: '{"success":true,"job_id":"diagnostic-1"}' });
+        }
+        if (url === '/api/diagnostics/jobs/diagnostic-1') {
+            return response({ body: JSON.stringify({
+                success: true, state: 'completed', stage: '完成',
+                completed_count: 6, total_count: 6, elapsed_seconds: 20,
+            }) });
+        }
+        if (url === '/api/diagnostics/latest') {
+            return response({ body: JSON.stringify({
+                available: true, symbol: 'ETH/USDT', timeframe: '5m', days: 365,
+                passed_count: 0, total_count: 0, summary: [], cross_mode_findings: [],
+            }) });
+        }
+        throw new Error(`unexpected URL: ${url}`);
+    };
+    await api.runStrategyDiagnostics();
+    assert.equal(document.getElementById('diagnostic-run-btn').disabled, false);
+    assert.match(document.getElementById('diagnostic-status').textContent, /诊断完成/);
+}
+
+
 function assertEscaping(api, document) {
     const attack = '<img src=x onerror=alert(1)>';
     api.renderOptimizationTable([], {
@@ -252,6 +334,7 @@ async function main() {
     }
     assertRequiredNumbers(api, document);
     await assertSafeApiParsing(api);
+    await assertDiagnosticPage(api, context, document);
 
     const feeError = api.validateBacktestPayload({ ...payload, cash: 10, opening_amount: 10, leverage: 5, taker_fee: 0.001 });
     assert.match(feeError, /开仓手续费/);

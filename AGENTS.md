@@ -60,8 +60,7 @@ liang_hua/
 │       ├── routes.py      # FastAPI 路由
 │       └── schemas.py     # Pydantic 数据模型
 ├── templates/
-│   ├── base.html          # 公共布局
-│   └── backtest.html      # 回测主页面
+│   └── backtest.html      # 回测与策略诊断双页面容器
 ├── static/
 │   ├── css/
 │   │   └── style.css
@@ -110,6 +109,8 @@ liang_hua/
 - JS 用原生 DOM API，不引入 jQuery
 - CSS 用 CSS 变量管理颜色主题
 - 所有 API 调用加 loading/error 状态处理
+- `/` 使用同一 DOM 内的左右双页面：左侧为回测，右侧为策略诊断；通过边缘方向按钮平滑切换，切换时不得刷新页面或清空已填写状态
+- 策略诊断必须是独立页面区域，不嵌套在回测面板内；桌面和窄屏都必须能从两侧来回切换
 
 ### 数据
 - K 线数据 CSV 列：`timestamp, open, high, low, close, volume`
@@ -189,6 +190,16 @@ C:\KUN\liang_hua\.venv\Scripts\python.exe scripts\validate_strategies.py --symbo
 - 成本前与成本后 Profit Factor、胜率和平均每笔净收益
 - 按出场原因、交易方向、1 小时环境和 4 小时过滤标签拆分的交易次数与净收益
 - 基于客观统计生成失败原因，不允许用诊断结果放宽上述通过阈值
+
+### Web 策略诊断
+
+- 普通回测、页面启动和页面切换不得自动运行完整策略诊断
+- 用户必须在策略诊断页主动启动 365 天诊断；启动后由后台任务自动完成 6 个模式/保证金组合
+- 前端必须显示任务阶段、已完成组合数、总组合数、耗时和错误状态，并轮询后台任务，不能让单次 HTTP 请求阻塞到验证结束
+- 同一进程同时只允许一个策略诊断任务运行，重复启动必须返回明确提示
+- 最新诊断结果以结构化 JSON 保存到 `results/strategy-diagnostics.json`，页面打开时自动读取最近结果
+- 结构化结果必须来自生成 Markdown 报告的同一次年度回测，不允许为前端重复运行回测或解析 Markdown 表格
+- 策略诊断页至少展示 6 组验证状态、核心收益/成本指标、跨模式结论和每组主要失败原因
 
 ## 开发流程
 

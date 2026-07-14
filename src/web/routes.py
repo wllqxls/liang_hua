@@ -4,6 +4,7 @@ FastAPI 路由：回测 API 和页面渲染。
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import random
@@ -41,6 +42,9 @@ from src.web.schemas import (
     DataFetchRequest,
     DataFetchResponse,
     DataStatus,
+    DiagnosticJobCreated,
+    DiagnosticJobStatus,
+    DiagnosticRequest,
     EquityPoint,
     OptimizationCandidate,
     OptimizationJobCreated,
@@ -98,9 +102,16 @@ MAX_STAGE_ONE_CANDIDATES = len(SignalMode) * 2 * len(SIGNAL_PARAMETER_OPTIONS)
 MAX_STAGE_TWO_CANDIDATES = min(STAGE_TWO_BUDGET, MAX_STAGE_ONE_CANDIDATES * 2)
 SEARCH_TOTAL_BUDGET = MAX_STAGE_ONE_CANDIDATES + MAX_STAGE_TWO_CANDIDATES + VALIDATION_BUDGET
 MAX_STORED_OPTIMIZATION_JOBS = 20
+MAX_STORED_DIAGNOSTIC_JOBS = 10
+DIAGNOSTIC_TOTAL_COUNT = len(SignalMode) * 2
+DIAGNOSTICS_JSON_PATH = PROJECT_ROOT / 'results' / 'strategy-diagnostics.json'
+DIAGNOSTICS_MARKDOWN_PATH = PROJECT_ROOT / 'docs' / 'strategy-diagnostics.md'
+VALIDATION_MARKDOWN_PATH = PROJECT_ROOT / 'docs' / 'strategy-validation.md'
 
 _optimization_jobs: OrderedDict[str, dict] = OrderedDict()
 _optimization_jobs_lock = threading.Lock()
+_diagnostic_jobs: OrderedDict[str, dict] = OrderedDict()
+_diagnostic_jobs_lock = threading.Lock()
 
 
 def _request_data_dir(year: int) -> Path:
@@ -280,6 +291,172 @@ async def optimize_backtest(req: BacktestRequest) -> OptimizationResponse:
     """Run the same deterministic pipeline synchronously."""
     _validate_request_funds(req)
     return _progressive_optimize(req, lambda **_: None)
+
+
+@router.get('/api/diagnostics/latest')
+async def get_latest_diagnostics() -> dict[str, object]:
+    """Return the latest structured strategy diagnostic report."""
+    payload = _read_latest_diagnostics()
+    if payload is None:
+        return {
+            'success': True,
+            'available': False,
+            'summary': [],
+            'cross_mode_findings': [],
+        }
+    return payload
+
+
+@router.post('/api/diagnostics/jobs', response_model=DiagnosticJobCreated)
+async def create_diagnostic_job(req: DiagnosticRequest) -> DiagnosticJobCreated:
+    """Start one 365-day strategy diagnostic job in a background thread."""
+    if req.symbol not in SYMBOLS:
+        raise HTTPException(status_code=422, detail='不支持的交易对象')
+
+    with _diagnostic_jobs_lock:
+        if any(job['state'] in {'queued', 'running'} for job in _diagnostic_jobs.values()):
+            return DiagnosticJobCreated(success=False, error='已有策略诊断正在运行，请等待完成')
+        job_id = uuid.uuid4().hex
+        _diagnostic_jobs[job_id] = _new_diagnostic_job(job_id)
+        while len(_diagnostic_jobs) > MAX_STORED_DIAGNOSTIC_JOBS:
+            _diagnostic_jobs.popitem(last=False)
+
+    worker = threading.Thread(
+        target=_run_diagnostic_job,
+        args=(job_id, req),
+        daemon=True,
+        name=f'diagnostics-{job_id[:8]}',
+    )
+    worker.start()
+    return DiagnosticJobCreated(success=True, job_id=job_id)
+
+
+@router.get('/api/diagnostics/jobs/{job_id}', response_model=DiagnosticJobStatus)
+async def get_diagnostic_job(job_id: str) -> DiagnosticJobStatus:
+    """Return a snapshot of one strategy diagnostic job."""
+    with _diagnostic_jobs_lock:
+        job = _diagnostic_jobs.get(job_id)
+        if job is None:
+            return DiagnosticJobStatus(
+                success=False,
+                job_id=job_id,
+                state='missing',
+                error='策略诊断任务不存在',
+            )
+        snapshot = dict(job)
+        snapshot['elapsed_seconds'] = round(
+            max(0.0, time.monotonic() - float(job['_started_at'])),
+            1,
+        )
+    return DiagnosticJobStatus(**snapshot)
+
+
+def _new_diagnostic_job(job_id: str) -> dict[str, object]:
+    return {
+        'success': True,
+        'job_id': job_id,
+        'state': 'queued',
+        'stage': '等待',
+        'completed_count': 0,
+        'total_count': DIAGNOSTIC_TOTAL_COUNT,
+        'elapsed_seconds': 0.0,
+        'error': None,
+        '_started_at': time.monotonic(),
+    }
+
+
+def _reset_diagnostic_jobs_for_tests() -> None:
+    """Clear process-local strategy diagnostic jobs between tests."""
+    with _diagnostic_jobs_lock:
+        _diagnostic_jobs.clear()
+
+
+def _update_diagnostic_job(job_id: str, **values: object) -> None:
+    with _diagnostic_jobs_lock:
+        job = _diagnostic_jobs.get(job_id)
+        if job is None:
+            return
+        job.update(values)
+        started_at = float(job['_started_at'])
+        job['elapsed_seconds'] = round(
+            max(0.0, time.monotonic() - started_at),
+            1,
+        )
+
+
+def _run_diagnostic_job(job_id: str, req: DiagnosticRequest) -> None:
+    from scripts.validate_strategies import run_validation_matrix
+
+    _update_diagnostic_job(job_id, state='running', stage='准备年度数据')
+
+    def progress(**values: object) -> None:
+        completed = int(values.get('completed', 0))
+        mode = str(values.get('mode', ''))
+        margin_mode = str(values.get('margin_mode', ''))
+        _update_diagnostic_job(
+            job_id,
+            state='running',
+            stage=f'{mode} / {margin_mode}',
+            completed_count=completed,
+            total_count=int(values.get('total', DIAGNOSTIC_TOTAL_COUNT)),
+        )
+
+    try:
+        run_validation_matrix(
+            symbol=req.symbol,
+            days=365,
+            output_path=VALIDATION_MARKDOWN_PATH,
+            timeframe=req.timeframe,
+            data_dir=DATA_ROOT,
+            diagnostics_output_path=DIAGNOSTICS_MARKDOWN_PATH,
+            diagnostics_json_path=DIAGNOSTICS_JSON_PATH,
+            progress=progress,
+        )
+        _update_diagnostic_job(
+            job_id,
+            state='completed',
+            stage='完成',
+            completed_count=DIAGNOSTIC_TOTAL_COUNT,
+        )
+    except FileNotFoundError as exc:
+        _log_safe_diagnostic_error('diagnostics_data_missing', exc)
+        _update_diagnostic_job(
+            job_id,
+            success=False,
+            state='failed',
+            stage='失败',
+            error='缺少诊断所需的入场周期、1h 或 4h 本地数据',
+        )
+    except ValueError as exc:
+        _log_safe_diagnostic_error('diagnostics_invalid_data', exc)
+        _update_diagnostic_job(
+            job_id,
+            success=False,
+            state='failed',
+            stage='失败',
+            error='本地数据不足以覆盖 365 天和指标预热区间',
+        )
+    except Exception as exc:
+        _log_safe_diagnostic_error('diagnostics_job_failed', exc)
+        _update_diagnostic_job(
+            job_id,
+            success=False,
+            state='failed',
+            stage='失败',
+            error='策略诊断执行失败，请稍后重试',
+        )
+
+
+def _read_latest_diagnostics() -> dict[str, object] | None:
+    try:
+        payload = json.loads(DIAGNOSTICS_JSON_PATH.read_text(encoding='utf-8'))
+    except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _log_safe_diagnostic_error(event: str, error: Exception) -> None:
+    logger.error('event=%s exception_type=%s', event, type(error).__name__)
 
 
 def _validate_request_funds(req: BacktestRequest) -> None:

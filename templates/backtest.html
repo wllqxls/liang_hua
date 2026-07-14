@@ -4,11 +4,32 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>量化回测系统</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=yearly-data-3">
+    <link rel="stylesheet" href="/static/css/style.css?v=diagnostics-page-1">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
-<body>
-    <div class="container">
+<body data-active-page="backtest">
+    <button
+        id="page-next-btn"
+        class="page-switch page-switch-right"
+        type="button"
+        aria-label="切换到策略诊断"
+        aria-controls="diagnostics-page"
+        title="策略诊断"
+        onclick="showAppPage('diagnostics')"
+    >&rsaquo;</button>
+    <button
+        id="page-prev-btn"
+        class="page-switch page-switch-left hidden"
+        type="button"
+        aria-label="返回量化回测"
+        aria-controls="backtest-page"
+        title="量化回测"
+        onclick="showAppPage('backtest')"
+    >&lsaquo;</button>
+    <div class="app-viewport">
+        <div id="page-track" class="page-track">
+            <main id="backtest-page" class="app-page" aria-hidden="false">
+                <div class="container">
         <header>
             <h1>📊 量化回测系统</h1>
             <span class="subtitle">策略自动选择多空方向，参数搜索辅助优化</span>
@@ -266,8 +287,119 @@
                 </table>
             </div>
         </section>
+                </div>
+            </main>
+
+            <main id="diagnostics-page" class="app-page diagnostics-page" aria-hidden="true">
+                <div class="container">
+                    <header>
+                        <h1>策略诊断</h1>
+                        <span class="subtitle">365 天严格验证与失败原因</span>
+                    </header>
+
+                    <section class="panel diagnostic-controls">
+                        <div class="panel-title-row">
+                            <h2>诊断设置</h2>
+                            <span class="diagnostic-contract">6 组组合 · 12 个 30 天窗口 · 1 个全年窗口</span>
+                        </div>
+                        <div class="diagnostic-action-row">
+                            <div class="form-group compact">
+                                <label for="diagnostic-symbol">交易对象</label>
+                                <select id="diagnostic-symbol">
+                                    {% for s in symbols %}
+                                    <option value="{{ s }}" {% if s == 'ETH/USDT' %}selected{% endif %}>{{ s }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="form-group compact">
+                                <label for="diagnostic-timeframe">入场周期</label>
+                                <select id="diagnostic-timeframe">
+                                    <option value="5m" selected>5m</option>
+                                    <option value="15m">15m</option>
+                                </select>
+                            </div>
+                            <button id="diagnostic-run-btn" class="btn-primary" type="button" onclick="runStrategyDiagnostics()">运行 365 天诊断</button>
+                            <button id="diagnostic-refresh-btn" class="btn-secondary" type="button" onclick="loadLatestDiagnostics()">刷新结果</button>
+                        </div>
+                        <div id="diagnostic-error" class="error-msg hidden" role="alert" aria-live="assertive"></div>
+                        <div id="diagnostic-progress-wrap" class="diagnostic-progress-wrap hidden">
+                            <progress id="diagnostic-progress" max="6" value="0"></progress>
+                            <span id="diagnostic-status" class="status-text" aria-live="polite"></span>
+                        </div>
+                    </section>
+
+                    <section id="diagnostics-empty" class="diagnostics-empty">
+                        <h2>暂无诊断结果</h2>
+                        <p>最近一次完整诊断完成后，结果会显示在这里。</p>
+                    </section>
+
+                    <div id="diagnostics-results" class="hidden">
+                        <section class="diagnostics-section diagnostic-overview-section">
+                            <div class="diagnostic-section-title">
+                                <div>
+                                    <h2>最近诊断</h2>
+                                    <span id="diagnostic-latest-meta" class="subtitle"></span>
+                                </div>
+                                <span id="diagnostic-overall-status" class="diagnostic-status-badge"></span>
+                            </div>
+                            <div class="diagnostic-kpis">
+                                <div class="diagnostic-kpi">
+                                    <span class="metric-label">通过组合</span>
+                                    <strong id="diagnostic-passed">--</strong>
+                                </div>
+                                <div class="diagnostic-kpi">
+                                    <span class="metric-label">最佳全年收益</span>
+                                    <strong id="diagnostic-best-return">--</strong>
+                                </div>
+                                <div class="diagnostic-kpi">
+                                    <span class="metric-label">最低净亏损</span>
+                                    <strong id="diagnostic-best-net-pnl">--</strong>
+                                </div>
+                                <div class="diagnostic-kpi">
+                                    <span class="metric-label">总组合</span>
+                                    <strong id="diagnostic-total">--</strong>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="diagnostics-section">
+                            <h2>跨策略结论</h2>
+                            <ul id="diagnostic-cross-findings" class="diagnostic-findings"></ul>
+                        </section>
+
+                        <section class="diagnostics-section">
+                            <h2>验证矩阵</h2>
+                            <div class="table-container diagnostic-table-container">
+                                <table id="diagnostic-summary-table">
+                                    <thead>
+                                        <tr>
+                                            <th>信号模式</th>
+                                            <th>保证金</th>
+                                            <th>状态</th>
+                                            <th>全年收益%</th>
+                                            <th>最大回撤%</th>
+                                            <th>交易数</th>
+                                            <th>手续费前盈亏U</th>
+                                            <th>手续费U</th>
+                                            <th>净盈亏U</th>
+                                            <th>PF</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="diagnostic-summary-tbody"></tbody>
+                                </table>
+                            </div>
+                        </section>
+
+                        <section class="diagnostics-section">
+                            <h2>主要失败原因</h2>
+                            <div id="diagnostic-detail-list" class="diagnostic-detail-list"></div>
+                        </section>
+                    </div>
+                </div>
+            </main>
+        </div>
     </div>
 
-    <script src="/static/js/backtest.js?v=yearly-data-3"></script>
+    <script src="/static/js/backtest.js?v=diagnostics-page-1"></script>
 </body>
 </html>
