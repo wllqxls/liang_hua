@@ -24,16 +24,23 @@ from src.research.event_factors import (
     HOURLY_BODY_THRESHOLD,
     HOURLY_REVERSAL_ATR_THRESHOLD,
     HOURLY_TWO_BAR_MOVE_THRESHOLD,
+    LEAD_LAG_BTC_IMPULSE_ATR_THRESHOLD,
+    LEAD_LAG_ETH_RELATIVE_THRESHOLD,
+    MINIMUM_BUCKET_SAMPLES,
     RANGE_ATR_THRESHOLD,
+    ReturnDistributionSummary,
     TREND_CUMULATIVE_RETURN_THRESHOLD,
     VOLUME_SHOCK_THRESHOLD,
     VolumeAbsorptionEventStudy,
     build_hourly_extreme_reversion_dataset,
+    build_btc_eth_lead_lag_dataset,
     build_key_level_event_dataset,
     build_trend_inertia_event_dataset,
     build_volume_absorption_event_study,
     summarize_absorption_reversal_buckets,
     summarize_hourly_extreme_reversion,
+    summarize_btc_eth_lead_lag,
+    summarize_return_distribution,
     summarize_one_hour_factor_buckets,
     summarize_trend_inertia_horizons,
 )
@@ -44,6 +51,78 @@ SYMBOLS = ('BTC/USDT', 'ETH/USDT')
 TIMEFRAMES = ('5m', '15m')
 YEARS = (2025, 2026)
 ABSORPTION_YEARS = (2024, 2025)
+_RESEARCH_MATRIX_SPECS = (
+    (
+        'Key-level breakout/reversal',
+        '1h',
+        'BTC/ETH 5m+15m, 2025',
+        tuple(
+            f'{symbol}_{timeframe}_2025_key_level_events.csv'
+            for symbol in ('BTC_USDT', 'ETH_USDT')
+            for timeframe in ('5m', '15m')
+        ),
+    ),
+    (
+        'Volatility-compression breakout',
+        '1h',
+        'BTC/ETH 5m, 2025',
+        tuple(
+            f'{symbol}_5m_2025_volatility_breakout_b.csv'
+            for symbol in ('BTC_USDT', 'ETH_USDT')
+        ),
+    ),
+    (
+        'Extreme-momentum next-bar reversion',
+        '1h',
+        'BTC/ETH 5m, 2024–2025',
+        tuple(
+            f'{symbol}_5m_{year}_momentum_reversion_a.csv'
+            for symbol in ('BTC_USDT', 'ETH_USDT')
+            for year in ABSORPTION_YEARS
+        ),
+    ),
+    (
+        'Volume-absorption reversal',
+        '1h',
+        'BTC/ETH 5m+15m, 2024–2025',
+        tuple(
+            f'{symbol}_{timeframe}_{year}_volume_absorption_a.csv'
+            for symbol in ('BTC_USDT', 'ETH_USDT')
+            for timeframe in ('5m', '15m')
+            for year in ABSORPTION_YEARS
+        ),
+    ),
+    (
+        'Three-bar trend inertia',
+        '1h',
+        'BTC/ETH 5m+15m, 2024–2025',
+        tuple(
+            f'{symbol}_{timeframe}_{year}_trend_inertia.csv'
+            for symbol in ('BTC_USDT', 'ETH_USDT')
+            for timeframe in ('5m', '15m')
+            for year in ABSORPTION_YEARS
+        ),
+    ),
+    (
+        'Hourly extreme-momentum reversion',
+        '2h',
+        'BTC/ETH 1h, 2024–2025',
+        tuple(
+            f'{symbol}_1h_{year}_hourly_extreme_reversion.csv'
+            for symbol in ('BTC_USDT', 'ETH_USDT')
+            for year in ABSORPTION_YEARS
+        ),
+    ),
+    (
+        'BTC→ETH short-term lead-lag',
+        '15m',
+        'BTC signal / ETH return, 5m 2024–2025',
+        tuple(
+            f'BTC_ETH_5m_{year}_lead_lag.csv'
+            for year in ABSORPTION_YEARS
+        ),
+    ),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +174,27 @@ class HourlyExtremeReversionSlice:
     dataset_path: Path | None
     summary: pd.DataFrame
     error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LeadLagResearchSlice:
+    year: int
+    status: str
+    events: int
+    side_counts: dict[str, int]
+    dataset_path: Path | None
+    summary: pd.DataFrame
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchMatrixRow:
+    hypothesis: str
+    primary_horizon: str
+    data_scope: str
+    source_slices: int
+    metrics: ReturnDistributionSummary
+    status: str
 
 
 def run_event_factor_research(
@@ -475,6 +575,219 @@ def write_hourly_extreme_reversion_report(
     output_path.write_text('\n'.join(lines), encoding='utf-8')
 
 
+def run_btc_eth_lead_lag_research(
+    *,
+    data_root: Path = PROJECT_ROOT / 'data',
+    output_root: Path = PROJECT_ROOT / 'results' / 'research',
+    years: Sequence[int] = ABSORPTION_YEARS,
+) -> list[LeadLagResearchSlice]:
+    """Run the paired 5m study without reading the reserved 2026 data."""
+    try:
+        btc = _load_year_frames(
+            data_root,
+            symbol='BTC/USDT',
+            timeframe='5m',
+            years=years,
+        )
+        eth = _load_year_frames(
+            data_root,
+            symbol='ETH/USDT',
+            timeframe='5m',
+            years=years,
+        )
+        events = build_btc_eth_lead_lag_dataset(btc, eth)
+    except (FileNotFoundError, ValueError) as exc:
+        return [
+            _unavailable_lead_lag_slice(year, str(exc))
+            for year in years
+        ]
+    return [
+        _slice_btc_eth_lead_lag_events(
+            events=events,
+            btc=btc,
+            eth=eth,
+            output_root=output_root,
+            year=year,
+        )
+        for year in years
+    ]
+
+
+def write_btc_eth_lead_lag_report(
+    slices: Sequence[LeadLagResearchSlice],
+    output_path: Path,
+) -> None:
+    """Write paired lead-lag results and the frozen 15m promotion gate."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    passed = _lead_lag_gate_passed(slices)
+    result_rows = [
+        (item, row)
+        for item in slices
+        for row in item.summary.itertuples(index=False)
+    ]
+    all_net_negative = bool(result_rows) and all(
+        row.average_net_return < 0 for _, row in result_rows
+    )
+    primary_gross_negative = bool(slices) and all(
+        len(item.summary.loc[item.summary['horizon'] == '15m']) == 1
+        and float(
+            item.summary.loc[item.summary['horizon'] == '15m'].iloc[0][
+                'average_gross_return'
+            ]
+        ) < 0
+        for item in slices
+    )
+    lines = [
+        '# BTC→ETH Short-Term Lead-Lag Event Factor Report',
+        '',
+        '- Scope: read-only event research; no strategy or trade is created.',
+        '- Data read: synchronized BTC/ETH 5m candles from UTC 2024 and 2025 only; 2026 remains unused.',
+        f'- BTC impulse threshold: `{LEAD_LAG_BTC_IMPULSE_ATR_THRESHOLD:.1f} ATR(14)` over three bars.',
+        f'- ETH lag rule: same direction and normalized displacement <= `{LEAD_LAG_ETH_RELATIVE_THRESHOLD:.1f}` of BTC.',
+        f'- Fixed ETH single-leg complete round-trip cost: `{FIXED_ROUND_TRIP_COST:.4f}`.',
+        '- Primary gate horizon: `15m`; 5m/30m/1h are diagnostic only.',
+        '- Confidence interval: deterministic UTC-calendar-day block bootstrap, 95%.',
+        '- Design: `docs/research/btc-eth-lead-lag-design.md`.',
+        f'- Code revision: `{_git_revision()}`.',
+        '',
+        '| Year | Horizon | Samples | Gross positive % | Avg gross % | Avg net % | Break-even cost % | Net mean 95% CI % | Net PF | Status |',
+        '|---:|---|---:|---:|---:|---:|---:|---:|---:|---|',
+    ]
+    for item in slices:
+        if item.summary.empty:
+            lines.append(
+                f'| {item.year} | N/A | 0 | 0.00 | 0.0000 | 0.0000 | 0.0000 | N/A | N/A | {item.status} |'
+            )
+            continue
+        for row in item.summary.itertuples(index=False):
+            lines.append(
+                f'| {item.year} | {row.horizon} | {row.samples} | '
+                f'{row.positive_rate_pct:.2f} | '
+                f'{row.average_gross_return * 100:.4f} | '
+                f'{row.average_net_return * 100:.4f} | '
+                f'{row.break_even_round_trip_cost * 100:.4f} | '
+                f'[{row.net_mean_ci_lower * 100:.4f}, {row.net_mean_ci_upper * 100:.4f}] | '
+                f'{_format_profit_factor(row.profit_factor)} | {item.status} |'
+            )
+    lines.extend(['', '## Event direction composition', ''])
+    for item in slices:
+        side_text = ', '.join(
+            f'{side}={count}' for side, count in sorted(item.side_counts.items())
+        ) or 'none'
+        lines.append(f'- {item.year}: {side_text}')
+    lines.extend(
+        [
+            '',
+            '## Frozen 15m gate',
+            '',
+            f'- Passed: `{"yes" if passed else "no"}`.',
+            '- Required in both years: samples >= 200, average net return > 0, net PF >= 1.15, and net mean 95% CI lower bound > 0.',
+            f'- Strategy generated: `no`.',
+            '',
+            '## Conclusion',
+            '',
+            f'- All tested horizons have negative net means: `{"yes" if all_net_negative else "no"}`.',
+            f'- The primary 15m gross mean is negative in both years: `{"yes" if primary_gross_negative else "no"}`.',
+            '- If the primary gross mean is already negative, lower execution cost cannot turn this frozen event definition into a stable edge.',
+            '',
+        ]
+    )
+    output_path.write_text('\n'.join(lines), encoding='utf-8')
+
+
+def build_research_matrix(
+    *,
+    results_root: Path = PROJECT_ROOT / 'results' / 'research',
+) -> list[ResearchMatrixRow]:
+    """Pool each frozen study at its primary horizon for comparable metrics."""
+    rows: list[ResearchMatrixRow] = []
+    for hypothesis, horizon, scope, filenames in _RESEARCH_MATRIX_SPECS:
+        gross_parts: list[pd.Series] = []
+        block_parts: list[pd.Series] = []
+        missing_files: list[str] = []
+        for filename in filenames:
+            path = results_root / filename
+            if not path.exists():
+                missing_files.append(filename)
+                continue
+            frame = pd.read_csv(path, index_col=0)
+            gross_column = f'forward_return_{horizon}'
+            if gross_column not in frame:
+                raise ValueError(f'{filename} is missing required column: {gross_column}')
+            timestamps = pd.to_datetime(frame.index, utc=True, errors='coerce')
+            gross = pd.to_numeric(frame[gross_column], errors='coerce').reset_index(drop=True)
+            blocks = pd.Series(
+                [
+                    f'{filename}|{timestamp.floor("D").isoformat()}'
+                    if not pd.isna(timestamp)
+                    else None
+                    for timestamp in timestamps
+                ]
+            )
+            gross_parts.append(gross)
+            block_parts.append(blocks)
+        if not gross_parts:
+            metrics = summarize_return_distribution(pd.Series(dtype=float), block_ids=[])
+        else:
+            metrics = summarize_return_distribution(
+                pd.concat(gross_parts, ignore_index=True),
+                block_ids=pd.concat(block_parts, ignore_index=True),
+            )
+        rows.append(
+            ResearchMatrixRow(
+                hypothesis=hypothesis,
+                primary_horizon=horizon,
+                data_scope=scope,
+                source_slices=len(filenames) - len(missing_files),
+                metrics=metrics,
+                status='COMPLETE' if not missing_files else f'MISSING_{len(missing_files)}_SLICES',
+            )
+        )
+    return rows
+
+
+def write_research_matrix_report(
+    rows: Sequence[ResearchMatrixRow],
+    output_path: Path,
+) -> None:
+    """Write one comparable table across all completed base hypotheses."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        '# Unified Rejected-Event Research Matrix',
+        '',
+        '- Each hypothesis is pooled only at its predeclared representative horizon.',
+        f'- All net returns deduct the same single-symbol complete round-trip cost `{FIXED_ROUND_TRIP_COST:.4f}`.',
+        '- Break-even cost equals the average gross return; a negative value means no non-negative execution cost can rescue the pooled mean.',
+        '- The 95% interval is a deterministic source-slice × UTC-day block bootstrap of the net mean.',
+        '- Pooled results are descriptive and do not replace the stricter cross-year and cross-symbol rejection already recorded in each report.',
+        f'- Code revision: `{_git_revision()}`.',
+        '',
+        '| Hypothesis | Primary horizon | Data scope | Slices | Events | Avg gross % | Avg net % | Break-even cost % | Net mean 95% CI % | Net PF | Status |',
+        '|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|',
+    ]
+    for row in rows:
+        metrics = row.metrics
+        lines.append(
+            f'| {row.hypothesis} | {row.primary_horizon} | {row.data_scope} | '
+            f'{row.source_slices} | {metrics.samples} | '
+            f'{metrics.average_gross_return * 100:.4f} | '
+            f'{metrics.average_net_return * 100:.4f} | '
+            f'{metrics.break_even_round_trip_cost * 100:.4f} | '
+            f'[{metrics.net_mean_ci_lower * 100:.4f}, {metrics.net_mean_ci_upper * 100:.4f}] | '
+            f'{_format_profit_factor(metrics.profit_factor)} | {row.status} |'
+        )
+    lines.extend(
+        [
+            '',
+            '## Reading rule',
+            '',
+            'A useful raw factor would need a positive gross mean large enough to cover cost and a net confidence interval that does not straddle zero. A large event count alone is not evidence of edge.',
+            '',
+        ]
+    )
+    output_path.write_text('\n'.join(lines), encoding='utf-8')
+
+
 def write_factor_report(
     slices: Sequence[FactorResearchSlice],
     output_path: Path,
@@ -693,6 +1006,78 @@ def _slice_hourly_extreme_reversion_events(
     )
 
 
+def _load_year_frames(
+    data_root: Path,
+    *,
+    symbol: str,
+    timeframe: str,
+    years: Sequence[int],
+) -> pd.DataFrame:
+    safe_symbol = symbol.replace('/', '_')
+    frames: list[pd.DataFrame] = []
+    for year in years:
+        year_dir = data_root / str(year)
+        path = year_dir / f'{safe_symbol}_{timeframe}.csv'
+        frames.append(BacktestEngine(data_dir=year_dir).load_data(path))
+    combined = pd.concat(frames).sort_index()
+    return combined.loc[~combined.index.duplicated(keep='last')]
+
+
+def _slice_btc_eth_lead_lag_events(
+    *,
+    events: pd.DataFrame,
+    btc: pd.DataFrame,
+    eth: pd.DataFrame,
+    output_root: Path,
+    year: int,
+) -> LeadLagResearchSlice:
+    year_events = _calendar_year_slice(events, year=year)
+    if year_events.empty:
+        return _unavailable_lead_lag_slice(
+            year,
+            'paired data has no BTC→ETH lead-lag events in the requested calendar year',
+        )
+    output_root.mkdir(parents=True, exist_ok=True)
+    dataset_path = output_root / f'BTC_ETH_5m_{year}_lead_lag.csv'
+    year_events.to_csv(dataset_path)
+    complete = _covers_calendar_year(btc, year=year, timeframe='5m') and _covers_calendar_year(
+        eth,
+        year=year,
+        timeframe='5m',
+    )
+    return LeadLagResearchSlice(
+        year=year,
+        status='COMPLETE_YEAR' if complete else 'PARTIAL_YEAR',
+        events=len(year_events),
+        side_counts={
+            str(side): int(count)
+            for side, count in year_events['side'].value_counts().items()
+        },
+        dataset_path=dataset_path,
+        summary=summarize_btc_eth_lead_lag(year_events),
+    )
+
+
+def _lead_lag_gate_passed(slices: Sequence[LeadLagResearchSlice]) -> bool:
+    if {item.year for item in slices} != set(ABSORPTION_YEARS):
+        return False
+    for item in slices:
+        if item.status != 'COMPLETE_YEAR':
+            return False
+        primary = item.summary.loc[item.summary['horizon'] == '15m']
+        if len(primary) != 1:
+            return False
+        row = primary.iloc[0]
+        if not (
+            int(row['samples']) >= MINIMUM_BUCKET_SAMPLES
+            and float(row['average_net_return']) > 0
+            and float(row['profit_factor']) >= 1.15
+            and float(row['net_mean_ci_lower']) > 0
+        ):
+            return False
+    return True
+
+
 def _calendar_year_slice(
     events: pd.DataFrame,
     *,
@@ -791,6 +1176,21 @@ def _unavailable_hourly_reversion_slice(
     )
 
 
+def _unavailable_lead_lag_slice(
+    year: int,
+    error: str,
+) -> LeadLagResearchSlice:
+    return LeadLagResearchSlice(
+        year=year,
+        status='DATA_UNAVAILABLE',
+        events=0,
+        side_counts={},
+        dataset_path=None,
+        summary=pd.DataFrame(),
+        error=error,
+    )
+
+
 def _format_profit_factor(value: float) -> str:
     return 'N/A' if not math.isfinite(value) else f'{value:.3f}'
 
@@ -818,6 +1218,8 @@ def _parse_args() -> argparse.Namespace:
             'volume_absorption',
             'trend_inertia',
             'hourly_extreme_reversion',
+            'btc_eth_lead_lag',
+            'research_matrix',
         ),
         default='key_level',
     )
@@ -832,6 +1234,26 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
     args = _parse_args()
+    if args.hypothesis == 'research_matrix':
+        output = args.output or PROJECT_ROOT / 'docs' / 'research' / 'unified-research-matrix.md'
+        rows = build_research_matrix()
+        write_research_matrix_report(rows, output)
+        logger.info(
+            'hypothesis=research_matrix rows=%s output=%s',
+            len(rows),
+            output,
+        )
+        return
+    if args.hypothesis == 'btc_eth_lead_lag':
+        output = args.output or PROJECT_ROOT / 'docs' / 'research' / 'btc-eth-lead-lag-report.md'
+        slices = run_btc_eth_lead_lag_research()
+        write_btc_eth_lead_lag_report(slices, output)
+        logger.info(
+            'hypothesis=btc_eth_lead_lag slices=%s output=%s',
+            len(slices),
+            output,
+        )
+        return
     if args.hypothesis == 'hourly_extreme_reversion':
         output = args.output or PROJECT_ROOT / 'docs' / 'research' / 'hourly-extreme-reversion-report.md'
         slices = run_hourly_extreme_reversion_research()

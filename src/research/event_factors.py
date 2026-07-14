@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -72,6 +73,27 @@ _HOURLY_REVERSION_SUMMARY_COLUMNS = (
     'average_net_return',
     'profit_factor',
 )
+LEAD_LAG_BTC_IMPULSE_ATR_THRESHOLD = 1.0
+LEAD_LAG_ETH_RELATIVE_THRESHOLD = 0.5
+LEAD_LAG_BOOTSTRAP_ITERATIONS = 2_000
+LEAD_LAG_BOOTSTRAP_SEED = 20_260_714
+_LEAD_LAG_HORIZONS = {
+    '5m': pd.Timedelta(minutes=5),
+    '15m': pd.Timedelta(minutes=15),
+    '30m': pd.Timedelta(minutes=30),
+    '1h': pd.Timedelta(hours=1),
+}
+_LEAD_LAG_SUMMARY_COLUMNS = (
+    'horizon',
+    'samples',
+    'positive_rate_pct',
+    'average_gross_return',
+    'average_net_return',
+    'break_even_round_trip_cost',
+    'net_mean_ci_lower',
+    'net_mean_ci_upper',
+    'profit_factor',
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +102,60 @@ class VolumeAbsorptionEventStudy:
 
     event_a: pd.DataFrame
     event_b: pd.DataFrame
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnDistributionSummary:
+    """Costed return distribution with a block-bootstrap mean interval."""
+
+    samples: int
+    average_gross_return: float
+    average_net_return: float
+    break_even_round_trip_cost: float
+    net_mean_ci_lower: float
+    net_mean_ci_upper: float
+    profit_factor: float
+
+
+def summarize_return_distribution(
+    gross_returns: pd.Series,
+    *,
+    block_ids: pd.Series | pd.Index | None = None,
+) -> ReturnDistributionSummary:
+    """Summarize gross returns under the fixed cost with block uncertainty."""
+    gross = pd.to_numeric(gross_returns, errors='coerce')
+    valid = gross.notna() & np.isfinite(gross)
+    gross = gross.loc[valid].astype(float)
+    if gross.empty:
+        return ReturnDistributionSummary(
+            samples=0,
+            average_gross_return=math.nan,
+            average_net_return=math.nan,
+            break_even_round_trip_cost=math.nan,
+            net_mean_ci_lower=math.nan,
+            net_mean_ci_upper=math.nan,
+            profit_factor=math.nan,
+        )
+    if block_ids is None:
+        if not isinstance(gross.index, pd.DatetimeIndex):
+            raise ValueError('gross_returns needs a DatetimeIndex when block_ids is omitted')
+        blocks = pd.Series(gross.index.floor('D'), index=gross.index)
+    else:
+        if len(block_ids) != len(gross_returns):
+            raise ValueError('block_ids must have the same length as gross_returns')
+        blocks = pd.Series(list(block_ids), index=gross_returns.index).loc[valid]
+    net = gross - FIXED_ROUND_TRIP_COST
+    ci_lower, ci_upper = _block_bootstrap_mean_ci(net, blocks)
+    average_gross = float(gross.mean())
+    return ReturnDistributionSummary(
+        samples=len(gross),
+        average_gross_return=average_gross,
+        average_net_return=float(net.mean()),
+        break_even_round_trip_cost=average_gross,
+        net_mean_ci_lower=ci_lower,
+        net_mean_ci_upper=ci_upper,
+        profit_factor=_absorption_profit_factor(net),
+    )
 
 
 def build_key_level_event_dataset(
@@ -260,6 +336,51 @@ def summarize_hourly_extreme_reversion(events: pd.DataFrame) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows, columns=_HOURLY_REVERSION_SUMMARY_COLUMNS)
+
+
+def build_btc_eth_lead_lag_dataset(
+    btc_five_minute: pd.DataFrame,
+    eth_five_minute: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build BTC impulse / ETH lag events with exact ETH return labels."""
+    btc = _validated_absorption_entry(btc_five_minute)
+    eth = _validated_absorption_entry(eth_five_minute)
+    features = _btc_eth_lead_lag_features(btc, eth)
+    events = _extract_btc_eth_lead_lag_events(features)
+    return _add_btc_eth_lead_lag_labels(
+        events,
+        eth_close=_closed_price(eth['Close'], pd.Timedelta(minutes=5)),
+    )
+
+
+def summarize_btc_eth_lead_lag(events: pd.DataFrame) -> pd.DataFrame:
+    """Summarize ETH catch-up returns with daily-block bootstrap intervals."""
+    rows: list[dict[str, float | int | str]] = []
+    for horizon in _LEAD_LAG_HORIZONS:
+        gross_column = f'forward_return_{horizon}'
+        net_column = f'forward_return_{horizon}_net'
+        missing = [column for column in (gross_column, net_column) if column not in events]
+        if missing:
+            raise ValueError(f'events is missing required columns: {", ".join(missing)}')
+        usable = events.dropna(subset=[gross_column, net_column])
+        if usable.empty:
+            continue
+        gross_returns = usable[gross_column]
+        distribution = summarize_return_distribution(gross_returns)
+        rows.append(
+            {
+                'horizon': horizon,
+                'samples': len(usable),
+                'positive_rate_pct': float((gross_returns > 0).mean() * 100),
+                'average_gross_return': distribution.average_gross_return,
+                'average_net_return': distribution.average_net_return,
+                'break_even_round_trip_cost': distribution.break_even_round_trip_cost,
+                'net_mean_ci_lower': distribution.net_mean_ci_lower,
+                'net_mean_ci_upper': distribution.net_mean_ci_upper,
+                'profit_factor': distribution.profit_factor,
+            }
+        )
+    return pd.DataFrame(rows, columns=_LEAD_LAG_SUMMARY_COLUMNS)
 
 
 def _validated_close_frame(frame: pd.DataFrame, *, name: str) -> pd.Series:
@@ -503,6 +624,139 @@ def _add_hourly_reversion_labels(
         reached_reversal = reached_reversal | (gross >= reversal_threshold)
         result[f'reversed_{horizon}'] = reached_reversal
     return result
+
+
+def _btc_eth_lead_lag_features(
+    btc: pd.DataFrame,
+    eth: pd.DataFrame,
+) -> pd.DataFrame:
+    btc_atr = atr_wilder(btc['High'], btc['Low'], btc['Close'], 14)
+    eth_atr = atr_wilder(eth['High'], eth['Low'], eth['Close'], 14)
+    btc_displacement = btc['Close'] - btc['Close'].shift(3)
+    eth_displacement = eth['Close'] - eth['Close'].shift(3)
+    btc_displacement_atr = btc_displacement / btc_atr.where(btc_atr > 0)
+    eth_displacement_atr = eth_displacement / eth_atr.where(eth_atr > 0)
+    aligned = pd.concat(
+        [
+            btc['Close'].rename('btc_close'),
+            eth['Close'].rename('eth_close'),
+            btc_displacement_atr.rename('btc_displacement_atr'),
+            eth_displacement_atr.rename('eth_displacement_atr'),
+        ],
+        axis=1,
+        join='inner',
+    ).dropna()
+    btc_move = aligned['btc_displacement_atr']
+    eth_move = aligned['eth_displacement_atr']
+    upward_lag = (
+        (btc_move >= LEAD_LAG_BTC_IMPULSE_ATR_THRESHOLD)
+        & (eth_move >= 0)
+        & (eth_move <= LEAD_LAG_ETH_RELATIVE_THRESHOLD * btc_move)
+    )
+    downward_lag = (
+        (btc_move <= -LEAD_LAG_BTC_IMPULSE_ATR_THRESHOLD)
+        & (eth_move <= 0)
+        & (eth_move >= LEAD_LAG_ETH_RELATIVE_THRESHOLD * btc_move)
+    )
+    candidate_side = np.select(
+        [upward_lag, downward_lag],
+        ['BUY', 'SELL'],
+        default='',
+    )
+    lag_ratio = eth_move.abs() / btc_move.abs().where(btc_move != 0)
+    return pd.DataFrame(
+        {
+            'btc_close': aligned['btc_close'].to_numpy(),
+            'eth_close': aligned['eth_close'].to_numpy(),
+            'btc_displacement_atr': btc_move.to_numpy(),
+            'eth_displacement_atr': eth_move.to_numpy(),
+            'lag_ratio': lag_ratio.to_numpy(),
+            'candidate_side': candidate_side,
+        },
+        index=aligned.index + pd.Timedelta(minutes=5),
+    )
+
+
+def _extract_btc_eth_lead_lag_events(features: pd.DataFrame) -> pd.DataFrame:
+    event_rows: list[dict[str, object]] = []
+    active_side = ''
+    rows = features.to_dict(orient='records')
+    event_times = list(features.index)
+    for position, row in enumerate(rows):
+        candidate_side = str(row['candidate_side'])
+        if not candidate_side:
+            active_side = ''
+            continue
+        if candidate_side == active_side:
+            continue
+        active_side = candidate_side
+        event_rows.append(
+            {
+                'event_time': event_times[position],
+                'side': candidate_side,
+                'btc_close': row['btc_close'],
+                'eth_close': row['eth_close'],
+                'btc_displacement_atr': row['btc_displacement_atr'],
+                'eth_displacement_atr': row['eth_displacement_atr'],
+                'lag_ratio': row['lag_ratio'],
+                'event_direction': 1.0 if candidate_side == 'BUY' else -1.0,
+            }
+        )
+    columns = [
+        'side',
+        'btc_close',
+        'eth_close',
+        'btc_displacement_atr',
+        'eth_displacement_atr',
+        'lag_ratio',
+        'event_direction',
+    ]
+    if not event_rows:
+        return pd.DataFrame(columns=columns, index=pd.DatetimeIndex([], tz='UTC'))
+    return pd.DataFrame(event_rows).set_index('event_time').loc[:, columns]
+
+
+def _add_btc_eth_lead_lag_labels(
+    events: pd.DataFrame,
+    *,
+    eth_close: pd.Series,
+) -> pd.DataFrame:
+    result = events.copy()
+    for horizon, duration in _LEAD_LAG_HORIZONS.items():
+        target_times = result.index + duration
+        future_close = pd.Series(
+            eth_close.reindex(target_times).to_numpy(),
+            index=result.index,
+            dtype=float,
+        )
+        gross = result['event_direction'] * (future_close / result['eth_close'] - 1)
+        result[f'forward_return_{horizon}'] = gross
+        result[f'forward_return_{horizon}_net'] = gross - FIXED_ROUND_TRIP_COST
+    return result
+
+
+def _block_bootstrap_mean_ci(
+    returns: pd.Series,
+    block_ids: pd.Series,
+) -> tuple[float, float]:
+    usable = pd.DataFrame({'return': returns, 'block': block_ids}).dropna()
+    if usable.empty:
+        return math.nan, math.nan
+    grouped = usable.groupby('block')['return'].agg(['sum', 'count'])
+    if len(grouped) == 1:
+        mean = float(usable['return'].mean())
+        return mean, mean
+    rng = np.random.default_rng(LEAD_LAG_BOOTSTRAP_SEED)
+    draws = rng.integers(
+        0,
+        len(grouped),
+        size=(LEAD_LAG_BOOTSTRAP_ITERATIONS, len(grouped)),
+    )
+    sums = grouped['sum'].to_numpy()[draws].sum(axis=1)
+    counts = grouped['count'].to_numpy()[draws].sum(axis=1)
+    bootstrapped_means = sums / counts
+    lower, upper = np.quantile(bootstrapped_means, [0.025, 0.975])
+    return float(lower), float(upper)
 
 
 def _validated_absorption_entry(entry: pd.DataFrame) -> pd.DataFrame:
