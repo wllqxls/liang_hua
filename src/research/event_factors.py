@@ -1,13 +1,15 @@
-"""Build key-level event features and post-event labels without trading."""
+"""Build event features and post-event labels without trading."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
 import pandas as pd
 
 from src.strategies.market_context import build_market_snapshots
+from src.strategies.indicators import atr_wilder
 
 
 FIXED_ROUND_TRIP_COST = 2 * (0.0005 + 0.0002)
@@ -26,6 +28,29 @@ _SUMMARY_COLUMNS = (
     'win_rate_pct',
     'meets_minimum_sample',
 )
+_ABSORPTION_SUMMARY_COLUMNS = (
+    'factor',
+    'bucket',
+    'samples',
+    'average_gross_return',
+    'average_net_return',
+    'win_rate_pct',
+    'profit_factor',
+    'meets_minimum_sample',
+)
+VOLUME_SHOCK_THRESHOLD = 3.0
+RANGE_ATR_THRESHOLD = 0.8
+DISPLACEMENT_ATR_THRESHOLD = 1.0
+REVERSAL_ATR_THRESHOLD = 0.5
+REVERSAL_WAIT_BARS = 3
+
+
+@dataclass(frozen=True, slots=True)
+class VolumeAbsorptionEventStudy:
+    """Volume-absorption A events and their first qualifying B reversals."""
+
+    event_a: pd.DataFrame
+    event_b: pd.DataFrame
 
 
 def build_key_level_event_dataset(
@@ -69,6 +94,239 @@ def build_key_level_event_dataset(
         timeframe=timeframe,
         close=_closed_close(entry, duration),
     )
+
+
+def build_volume_absorption_event_study(
+    entry: pd.DataFrame,
+    *,
+    timeframe: Literal['5m', '15m'] | str,
+) -> VolumeAbsorptionEventStudy:
+    """Build high-volume, low-range A events and post-event B outcomes."""
+    duration = _entry_duration(timeframe)
+    validated = _validated_absorption_entry(entry)
+    features = _absorption_features(validated, duration=duration)
+    event_a, event_b = _extract_absorption_events(features)
+    event_a = _add_label_columns(
+        event_a,
+        timeframe=timeframe,
+        close=_closed_close(validated, duration),
+    )
+    return VolumeAbsorptionEventStudy(event_a=event_a, event_b=event_b)
+
+
+def summarize_absorption_reversal_buckets(events: pd.DataFrame) -> pd.DataFrame:
+    """Summarize one-hour absorption returns using fixed factor buckets."""
+    required = {
+        'side',
+        'volume_ratio',
+        'absorption_strength',
+        'forward_return_1h',
+        'forward_return_1h_net',
+    }
+    missing = sorted(required - set(events.columns))
+    if missing:
+        raise ValueError(f'events is missing required columns: {", ".join(missing)}')
+    usable = events.dropna(subset=['forward_return_1h', 'forward_return_1h_net']).copy()
+    if usable.empty:
+        return pd.DataFrame(columns=_ABSORPTION_SUMMARY_COLUMNS)
+    usable['overall'] = 'ALL'
+    usable['volume_shock_tertile'] = _tertiles(usable['volume_ratio'])
+    usable['absorption_tertile'] = _tertiles(usable['absorption_strength'])
+    summaries = [
+        _summarize_absorption_factor(usable, 'overall', 'overall'),
+        _summarize_absorption_factor(usable, 'direction', 'side'),
+        _summarize_absorption_factor(
+            usable,
+            'volume_shock_tertile',
+            'volume_shock_tertile',
+        ),
+        _summarize_absorption_factor(
+            usable,
+            'absorption_tertile',
+            'absorption_tertile',
+        ),
+    ]
+    return pd.concat(summaries, ignore_index=True)
+
+
+def _validated_absorption_entry(entry: pd.DataFrame) -> pd.DataFrame:
+    required = ('Open', 'High', 'Low', 'Close', 'Volume')
+    missing = [column for column in required if column not in entry.columns]
+    if missing:
+        raise ValueError(f'entry is missing required columns: {", ".join(missing)}')
+    if not isinstance(entry.index, pd.DatetimeIndex):
+        raise ValueError('entry index must be a DatetimeIndex')
+    index = entry.index
+    if index.tz is None:
+        index = index.tz_localize('UTC')
+    else:
+        index = index.tz_convert('UTC')
+    if index.has_duplicates:
+        raise ValueError('entry index must not contain duplicate timestamps')
+    result = entry.loc[:, required].copy()
+    result.index = index
+    result = result.sort_index()
+    for column in required:
+        try:
+            result[column] = result[column].astype(float)
+        except (TypeError, ValueError):
+            raise ValueError(f'entry {column} must contain finite numbers') from None
+    if not np.isfinite(result.to_numpy(dtype=float)).all():
+        raise ValueError('entry values must contain finite numbers')
+    if (result[['High', 'Low', 'Close']] <= 0).any().any():
+        raise ValueError('entry High, Low, and Close must be positive')
+    if (result['Volume'] < 0).any():
+        raise ValueError('entry Volume must contain finite non-negative numbers')
+    if (result['High'] < result['Low']).any():
+        raise ValueError('entry High must be greater than or equal to Low')
+    return result
+
+
+def _absorption_features(
+    entry: pd.DataFrame,
+    *,
+    duration: pd.Timedelta,
+) -> pd.DataFrame:
+    close = entry['Close']
+    previous_close = close.shift(1)
+    true_range = pd.concat(
+        [
+            (entry['High'] - entry['Low']).abs(),
+            (entry['High'] - previous_close).abs(),
+            (entry['Low'] - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr = atr_wilder(entry['High'], entry['Low'], close, 14)
+    volume_baseline = entry['Volume'].rolling(20, min_periods=20).mean().shift(1)
+    volume_ratio = entry['Volume'] / volume_baseline.where(volume_baseline != 0)
+    displacement = close - close.shift(3)
+    range_atr = true_range / atr.where(atr > 0)
+    displacement_atr = displacement.abs() / atr.where(atr > 0)
+    candidate = (
+        (volume_ratio >= VOLUME_SHOCK_THRESHOLD)
+        & (range_atr <= RANGE_ATR_THRESHOLD)
+        & (displacement_atr >= DISPLACEMENT_ATR_THRESHOLD)
+    )
+    side = np.select(
+        [candidate & (displacement < 0), candidate & (displacement > 0)],
+        ['BUY', 'SELL'],
+        default='',
+    )
+    return pd.DataFrame(
+        {
+            'close': close.to_numpy(),
+            'atr': atr.to_numpy(),
+            'true_range': true_range.to_numpy(),
+            'volume_ratio': volume_ratio.to_numpy(),
+            'range_atr': range_atr.to_numpy(),
+            'displacement_atr': displacement_atr.to_numpy(),
+            'absorption_strength': (1 - range_atr).to_numpy(),
+            'candidate_side': side,
+        },
+        index=entry.index + duration,
+    )
+
+
+def _extract_absorption_events(
+    features: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    event_rows: list[dict[str, object]] = []
+    reversal_rows: list[dict[str, object]] = []
+    active_side = ''
+    rows = features.to_dict(orient='records')
+    event_times = list(features.index)
+    for position, row in enumerate(rows):
+        candidate_side = str(row['candidate_side'])
+        if not candidate_side:
+            active_side = ''
+            continue
+        if candidate_side == active_side:
+            continue
+        active_side = candidate_side
+        converted, bars_to_b, b_position = _find_absorption_reversal(
+            rows,
+            position=position,
+            side=candidate_side,
+            event_close=float(row['close']),
+            event_atr=float(row['atr']),
+        )
+        event_time = event_times[position]
+        event_rows.append(
+            {
+                'event_time': event_time,
+                'side': candidate_side,
+                'close': row['close'],
+                'atr': row['atr'],
+                'true_range': row['true_range'],
+                'volume_ratio': row['volume_ratio'],
+                'range_atr': row['range_atr'],
+                'displacement_atr': row['displacement_atr'],
+                'absorption_strength': row['absorption_strength'],
+                'event_direction': 1.0 if candidate_side == 'BUY' else -1.0,
+                'converted_to_b': converted,
+                'bars_to_b': bars_to_b,
+                'b_time': event_times[b_position] if b_position is not None else pd.NaT,
+            }
+        )
+        if b_position is not None:
+            reversal_rows.append(
+                {
+                    'event_time': event_times[b_position],
+                    'source_event_time': event_time,
+                    'side': candidate_side,
+                    'close': rows[b_position]['close'],
+                    'bars_from_a': b_position - position,
+                }
+            )
+    return _absorption_event_a_frame(event_rows), _absorption_event_b_frame(reversal_rows)
+
+
+def _find_absorption_reversal(
+    rows: list[dict[str, object]],
+    *,
+    position: int,
+    side: str,
+    event_close: float,
+    event_atr: float,
+) -> tuple[bool, int | None, int | None]:
+    target = event_close + (REVERSAL_ATR_THRESHOLD * event_atr if side == 'BUY' else -REVERSAL_ATR_THRESHOLD * event_atr)
+    final_position = min(position + REVERSAL_WAIT_BARS, len(rows) - 1)
+    for candidate_position in range(position + 1, final_position + 1):
+        candidate_close = float(rows[candidate_position]['close'])
+        if (side == 'BUY' and candidate_close >= target) or (
+            side == 'SELL' and candidate_close <= target
+        ):
+            bars_to_b = candidate_position - position
+            return True, bars_to_b, candidate_position
+    return False, None, None
+
+
+def _absorption_event_a_frame(rows: list[dict[str, object]]) -> pd.DataFrame:
+    columns = [
+        'side',
+        'close',
+        'atr',
+        'true_range',
+        'volume_ratio',
+        'range_atr',
+        'displacement_atr',
+        'absorption_strength',
+        'event_direction',
+        'converted_to_b',
+        'bars_to_b',
+        'b_time',
+    ]
+    if not rows:
+        return pd.DataFrame(columns=columns, index=pd.DatetimeIndex([], tz='UTC'))
+    return pd.DataFrame(rows).set_index('event_time').loc[:, columns]
+
+
+def _absorption_event_b_frame(rows: list[dict[str, object]]) -> pd.DataFrame:
+    columns = ['source_event_time', 'side', 'close', 'bars_from_a']
+    if not rows:
+        return pd.DataFrame(columns=columns, index=pd.DatetimeIndex([], tz='UTC'))
+    return pd.DataFrame(rows).set_index('event_time').loc[:, columns]
 
 
 def summarize_one_hour_factor_buckets(events: pd.DataFrame) -> pd.DataFrame:
@@ -203,3 +461,34 @@ def _summarize_factor(
             }
         )
     return pd.DataFrame(rows, columns=_SUMMARY_COLUMNS)
+
+
+def _summarize_absorption_factor(
+    events: pd.DataFrame,
+    factor: str,
+    column: str,
+) -> pd.DataFrame:
+    rows: list[dict[str, float | int | str | bool]] = []
+    for bucket, group in events.groupby(column, dropna=False):
+        net_returns = group['forward_return_1h_net']
+        rows.append(
+            {
+                'factor': factor,
+                'bucket': str(bucket),
+                'samples': len(group),
+                'average_gross_return': group['forward_return_1h'].mean(),
+                'average_net_return': net_returns.mean(),
+                'win_rate_pct': (net_returns > 0).mean() * 100,
+                'profit_factor': _absorption_profit_factor(net_returns),
+                'meets_minimum_sample': len(group) >= MINIMUM_BUCKET_SAMPLES,
+            }
+        )
+    return pd.DataFrame(rows, columns=_ABSORPTION_SUMMARY_COLUMNS)
+
+
+def _absorption_profit_factor(net_returns: pd.Series) -> float:
+    profits = net_returns[net_returns > 0].sum()
+    losses = -net_returns[net_returns < 0].sum()
+    if losses == 0:
+        return float('nan')
+    return float(profits / losses)
