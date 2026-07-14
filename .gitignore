@@ -24,6 +24,7 @@ data/**/*.csv
 
 # 回测结果（程序生成）
 results/*.json
+results/research/
 
 # IDE
 .vscode/
