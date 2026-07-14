@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import urllib.error
 
 import pandas as pd
 import pytest
 
+from src.data import order_flow
 from src.data.order_flow import (
     FuturesKlineArchiveSpec,
     PublicArchiveSpec,
@@ -15,6 +17,21 @@ from src.data.order_flow import (
     parse_checksum,
     sha256_file,
 )
+
+
+class _FakeResponse:
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+
+    def __enter__(self) -> '_FakeResponse':
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def read(self, _: int = -1) -> bytes:
+        payload, self.payload = self.payload, b''
+        return payload
 
 
 def _agg_trade_frame() -> pd.DataFrame:
@@ -81,6 +98,38 @@ def test_checksum_parser_and_file_hash_are_exact(tmp_path) -> None:
     assert sha256_file(path) == expected
 
 
+def test_verified_download_retries_transient_network_error(monkeypatch, tmp_path) -> None:
+    payload = b'archive'
+    checksum = hashlib.sha256(payload).hexdigest().encode()
+    responses: list[object] = [
+        urllib.error.URLError('temporary TLS failure'),
+        _FakeResponse(checksum),
+        _FakeResponse(payload),
+    ]
+    sleeps: list[float] = []
+
+    def fake_urlopen(*_: object, **__: object) -> _FakeResponse:
+        response = responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        assert isinstance(response, _FakeResponse)
+        return response
+
+    monkeypatch.setattr(order_flow.urllib.request, 'urlopen', fake_urlopen)
+    monkeypatch.setattr(order_flow.time, 'sleep', lambda seconds: sleeps.append(seconds))
+    destination = tmp_path / 'archive.zip'
+
+    result = order_flow._download_verified_archive(
+        url='https://example.invalid/archive.zip',
+        checksum_url='https://example.invalid/archive.zip.CHECKSUM',
+        destination=destination,
+    )
+
+    assert result == destination
+    assert destination.read_bytes() == payload
+    assert sleeps == [0.5]
+
+
 def test_agg_trades_map_buyer_maker_to_taker_sell_and_fill_day() -> None:
     normalized, audit = normalize_agg_trades(
         _agg_trade_frame(),
@@ -138,6 +187,34 @@ def test_metrics_require_exact_complete_utc_five_minute_grid() -> None:
     assert len(normalized) == 288
     assert audit.missing_five_minute_timestamps == 0
     assert audit.duplicate_timestamps == 0
+    assert audit.status == 'PASS'
+
+
+def test_metrics_floor_exchange_second_drift_into_five_minute_bucket() -> None:
+    timestamps = pd.date_range('2024-01-01', periods=288, freq='5min')
+    timestamps = timestamps.to_series(index=range(288)).astype(str)
+    timestamps.iloc[27] = '2024-01-01 02:15:04'
+    frame = pd.DataFrame(
+        {
+            'create_time': timestamps,
+            'symbol': 'BTCUSDT',
+            'sum_open_interest': 100.0,
+            'sum_open_interest_value': 1_000.0,
+            'count_toptrader_long_short_ratio': 1.1,
+            'sum_toptrader_long_short_ratio': 1.2,
+            'count_long_short_ratio': 1.3,
+            'sum_taker_long_short_vol_ratio': 1.4,
+        }
+    )
+
+    normalized, audit = normalize_metrics(
+        frame,
+        symbol='BTCUSDT',
+        day='2024-01-01',
+    )
+
+    assert normalized.index[27] == pd.Timestamp('2024-01-01 02:15:00+00:00')
+    assert audit.missing_five_minute_timestamps == 0
     assert audit.status == 'PASS'
 
 

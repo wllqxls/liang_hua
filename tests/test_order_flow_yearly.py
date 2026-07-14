@@ -64,6 +64,8 @@ def test_inspect_year_distinguishes_missing_and_complete(tmp_path) -> None:
     funding_index = pd.date_range(
         '2024-01-01', '2025-01-01', freq='8h', inclusive='left', tz='UTC'
     )
+    funding_timestamps = funding_index.astype(str).tolist()
+    funding_timestamps[10] = '2024-01-04 08:00:00.001+00:00'
     for symbol in yearly.SUPPORTED_SYMBOLS:
         data_path = yearly.annual_order_flow_path(tmp_path, symbol=symbol, year=2024)
         funding_path = yearly.annual_funding_path(tmp_path, symbol=symbol, year=2024)
@@ -78,9 +80,10 @@ def test_inspect_year_distinguishes_missing_and_complete(tmp_path) -> None:
             'taker_sell_volume': 0.4,
             'order_flow_imbalance': 0.2,
             'sum_open_interest': 1.0,
+            'metrics_available': True,
         }).to_csv(data_path, index=False)
         pd.DataFrame({
-            'timestamp': funding_index,
+            'timestamp': funding_timestamps,
             'symbol': symbol,
             'last_funding_rate': 0.0,
         }).to_csv(
@@ -90,6 +93,51 @@ def test_inspect_year_distinguishes_missing_and_complete(tmp_path) -> None:
     complete = yearly.inspect_order_flow_year(root=tmp_path, year=2024)
     assert [item.state for item in complete] == ['complete', 'complete']
     assert all(item.rows == 105_408 and item.missing_rows == 0 for item in complete)
+    assert all(item.metrics_missing_rows == 0 for item in complete)
+    assert all(item.metrics_coverage_pct == 100.0 for item in complete)
+
+    btc_path = yearly.annual_order_flow_path(tmp_path, symbol='BTCUSDT', year=2024)
+    btc = pd.read_csv(btc_path)
+    btc.loc[100:101, 'metrics_available'] = False
+    btc.loc[100:101, 'sum_open_interest'] = float('nan')
+    btc.to_csv(btc_path, index=False)
+    audited = yearly.inspect_order_flow_year(root=tmp_path, year=2024)
+    assert audited[0].state == 'usable'
+    assert audited[0].metrics_missing_rows == 2
+    assert audited[0].metrics_coverage_pct > 99.0
+    assert audited[1].state == 'complete'
+
+
+def test_annual_metrics_keep_real_gaps_without_fabricating_values() -> None:
+    index = pd.date_range(
+        '2024-01-01', '2025-01-01', freq='5min', inclusive='left', tz='UTC'
+    )
+    available = index.delete([100, 101])
+    timestamps = available.astype(str).to_series(index=range(len(available)))
+    timestamps.iloc[10] = '2024-01-01 00:50:03+00:00'
+    frame = pd.DataFrame({
+        'create_time': timestamps,
+        'symbol': 'BTCUSDT',
+        'sum_open_interest': 100.0,
+        'sum_open_interest_value': 1_000.0,
+        'count_toptrader_long_short_ratio': 1.1,
+        'sum_toptrader_long_short_ratio': 1.2,
+        'count_long_short_ratio': 1.3,
+        'sum_taker_long_short_vol_ratio': 1.4,
+    })
+
+    normalized, audit = yearly.normalize_annual_metrics(
+        frame,
+        symbol='BTCUSDT',
+        year=2024,
+    )
+
+    assert len(normalized) == 105_408
+    assert audit.missing_rows == 2
+    assert audit.coverage_pct > 99.0
+    assert normalized['metrics_available'].sum() == 105_406
+    assert pd.isna(normalized.iloc[100]['sum_open_interest'])
+    assert normalized.iloc[100]['metrics_available'] == False  # noqa: E712
 
 
 def test_holdout_year_can_be_inspected_but_not_downloaded(tmp_path) -> None:

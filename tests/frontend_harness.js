@@ -401,9 +401,11 @@ async function main() {
         if (url === '/api/order-flow/status?year=2025') {
             return response({ body: JSON.stringify([
                 { symbol: 'BTCUSDT', year: 2025, state: 'complete', rows: 105120,
-                    expected_rows: 105120, missing_rows: 0, funding_rows: 1095, file_size_kb: 32000 },
-                { symbol: 'ETHUSDT', year: 2025, state: 'complete', rows: 105120,
-                    expected_rows: 105120, missing_rows: 0, funding_rows: 1095, file_size_kb: 30000 },
+                    expected_rows: 105120, missing_rows: 0, metrics_missing_rows: 0,
+                    metrics_coverage_pct: 100, funding_rows: 1095, file_size_kb: 32000 },
+                { symbol: 'ETHUSDT', year: 2025, state: 'usable', rows: 105120,
+                    expected_rows: 105120, missing_rows: 0, metrics_missing_rows: 128,
+                    metrics_coverage_pct: 99.88, funding_rows: 1095, file_size_kb: 30000 },
             ]) });
         }
         throw new Error(`unexpected URL: ${url}`);
@@ -414,6 +416,7 @@ async function main() {
         .map(row => row.innerHTML).join('\n');
     assert.equal(orderFlowRows.includes('BTCUSDT'), true);
     assert.equal(orderFlowRows.includes('ETHUSDT'), true);
+    assert.equal(orderFlowRows.includes('99.88%'), true);
 
     context.fetch = async () => response({ ok: false, status: 422, statusText: 'Invalid', body: '{"detail":"backend detail"}' });
     await api.runBacktest();

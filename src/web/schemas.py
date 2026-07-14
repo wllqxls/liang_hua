@@ -76,6 +76,8 @@ class OrderFlowYearStatus(BaseModel):
     rows: int | None = None
     expected_rows: int
     missing_rows: int | None = None
+    metrics_missing_rows: int | None = None
+    metrics_coverage_pct: float | None = None
     funding_rows: int | None = None
     file_size_kb: float | None = None
     error: str | None = None

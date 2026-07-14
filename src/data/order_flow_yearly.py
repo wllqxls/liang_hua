@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from src.data.order_flow import (
@@ -19,7 +20,6 @@ from src.data.order_flow import (
     download_public_archive,
     download_public_kline_archive,
     normalize_futures_klines,
-    normalize_metrics,
     read_archive_csv,
 )
 
@@ -50,6 +50,20 @@ class OrderFlowYearStatus:
     funding_rows: int | None
     file_size_kb: float | None
     error: str | None = None
+    metrics_missing_rows: int | None = None
+    metrics_coverage_pct: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AnnualMetricsAudit:
+    symbol: str
+    year: int
+    raw_rows: int
+    invalid_rows: int
+    out_of_year_rows: int
+    duplicate_buckets: int
+    missing_rows: int
+    coverage_pct: float
 
 
 def annual_order_flow_path(root: Path, *, symbol: str, year: int) -> Path:
@@ -169,23 +183,29 @@ def _build_symbol_year(*, root: Path, symbol: str, year: int) -> None:
         metrics_frame = read_archive_csv(
             root / 'raw' / 'metrics' / symbol / str(year) / metrics_spec.filename
         )
-        normalized, audit = normalize_metrics(metrics_frame, symbol=symbol, day=day_value)
-        if audit.status != 'PASS':
-            raise ValueError(f'{symbol} {day_value} metrics audit failed')
-        metrics_days.append(normalized.drop(columns=['symbol']))
+        metrics_days.append(metrics_frame)
 
     klines = pd.concat(kline_days).sort_index()
-    metrics = pd.concat(metrics_days).sort_index()
+    metrics, metrics_audit = normalize_annual_metrics(
+        pd.concat(metrics_days, ignore_index=True),
+        symbol=symbol,
+        year=year,
+    )
     expected_index = pd.date_range(
         f'{year}-01-01', f'{year + 1}-01-01', freq='5min', inclusive='left', tz='UTC'
     )
     if klines.index.duplicated().any() or not klines.index.equals(expected_index):
         raise ValueError(f'{symbol} annual enhanced kline grid is incomplete')
-    if metrics.index.duplicated().any() or not metrics.index.equals(expected_index):
-        raise ValueError(f'{symbol} annual metrics grid is incomplete')
+    if metrics_audit.coverage_pct < 99.0:
+        raise ValueError(
+            f'{symbol} annual metrics coverage is only '
+            f'{metrics_audit.coverage_pct:.4f}%'
+        )
     annual = klines.join(metrics, how='left', validate='one_to_one')
-    if annual.isna().any().any():
-        raise ValueError(f'{symbol} annual order-flow join contains missing values')
+    if not annual.index.equals(expected_index):
+        raise ValueError(f'{symbol} annual order-flow grid is incomplete')
+    if annual.loc[annual['metrics_available'], 'sum_open_interest'].isna().any():
+        raise ValueError(f'{symbol} available metrics rows contain missing values')
 
     funding = pd.concat(funding_months).sort_index()
     if funding.index.duplicated().any():
@@ -201,6 +221,74 @@ def _build_symbol_year(*, root: Path, symbol: str, year: int) -> None:
         funding,
         annual_funding_path(root, symbol=symbol, year=year),
     )
+
+
+def normalize_annual_metrics(
+    frame: pd.DataFrame,
+    *,
+    symbol: str,
+    year: int,
+) -> tuple[pd.DataFrame, AnnualMetricsAudit]:
+    """Align official metrics to UTC 5m buckets and preserve real annual gaps."""
+    _validate_symbol_year(symbol, year, allow_holdout=True)
+    required = (
+        'create_time',
+        'symbol',
+        'sum_open_interest',
+        'sum_open_interest_value',
+        'count_toptrader_long_short_ratio',
+        'sum_toptrader_long_short_ratio',
+        'count_long_short_ratio',
+        'sum_taker_long_short_vol_ratio',
+    )
+    missing_columns = [column for column in required if column not in frame]
+    if missing_columns:
+        raise ValueError(
+            f'metrics is missing required columns: {", ".join(missing_columns)}'
+        )
+    working = frame.loc[:, list(required)].copy()
+    timestamps = pd.to_datetime(working['create_time'], utc=True, errors='coerce')
+    numeric_columns = list(required[2:])
+    for column in numeric_columns:
+        working[column] = pd.to_numeric(working[column], errors='coerce')
+    finite_numeric = np.isfinite(
+        working.loc[:, numeric_columns].to_numpy(dtype=float)
+    ).all(axis=1)
+    valid = (
+        timestamps.notna()
+        & working['symbol'].eq(symbol)
+        & finite_numeric
+        & working['sum_open_interest'].ge(0)
+        & working['sum_open_interest_value'].ge(0)
+    )
+    invalid_rows = int((~valid).sum())
+    valid_frame = working.loc[valid].copy()
+    valid_frame['timestamp'] = timestamps.loc[valid].dt.floor('5min')
+    start = pd.Timestamp(f'{year}-01-01', tz='UTC')
+    end = pd.Timestamp(f'{year + 1}-01-01', tz='UTC')
+    in_year = valid_frame['timestamp'].ge(start) & valid_frame['timestamp'].lt(end)
+    out_of_year_rows = int((~in_year).sum())
+    annual = valid_frame.loc[in_year].copy().sort_values('timestamp', kind='stable')
+    duplicate_buckets = int(annual['timestamp'].duplicated(keep='last').sum())
+    annual = annual.drop_duplicates('timestamp', keep='last').set_index('timestamp')
+    annual = annual.drop(columns=['create_time', 'symbol'])
+    expected_index = pd.date_range(start, end, freq='5min', inclusive='left')
+    annual = annual.reindex(expected_index)
+    metrics_available = annual[numeric_columns].notna().all(axis=1)
+    annual.insert(0, 'metrics_available', metrics_available)
+    missing_rows = int((~metrics_available).sum())
+    coverage_pct = round(100.0 * (len(annual) - missing_rows) / len(annual), 6)
+    audit = AnnualMetricsAudit(
+        symbol=symbol,
+        year=year,
+        raw_rows=len(frame),
+        invalid_rows=invalid_rows,
+        out_of_year_rows=out_of_year_rows,
+        duplicate_buckets=duplicate_buckets,
+        missing_rows=missing_rows,
+        coverage_pct=coverage_pct,
+    )
+    return annual, audit
 
 
 def _normalize_funding(frame: pd.DataFrame, *, symbol: str, year: int) -> pd.DataFrame:
@@ -235,12 +323,27 @@ def _inspect_symbol(root: Path, symbol: str, year: int, expected: int) -> OrderF
     if not data_path.exists() and not funding_path.exists():
         return OrderFlowYearStatus(symbol, year, 'missing', None, expected, None, None, None)
     try:
-        rows, missing = _inspect_annual_grid(data_path, year)
+        rows, missing, metrics_missing = _inspect_annual_grid(data_path, year)
         funding_rows = _inspect_funding(funding_path, year)
         size = sum(path.stat().st_size for path in (data_path, funding_path) if path.exists()) / 1024
-        state = 'complete' if rows == expected and missing == 0 and funding_rows > 0 else 'partial'
+        metrics_coverage = round(100.0 * (rows - metrics_missing) / rows, 6) if rows else 0.0
+        if rows == expected and missing == 0 and metrics_missing == 0 and funding_rows > 0:
+            state = 'complete'
+        elif rows == expected and missing == 0 and metrics_coverage >= 99.0 and funding_rows > 0:
+            state = 'usable'
+        else:
+            state = 'partial'
         return OrderFlowYearStatus(
-            symbol, year, state, rows, expected, missing, funding_rows, round(size, 1)
+            symbol=symbol,
+            year=year,
+            state=state,
+            rows=rows,
+            expected_rows=expected,
+            missing_rows=missing,
+            funding_rows=funding_rows,
+            file_size_kb=round(size, 1),
+            metrics_missing_rows=metrics_missing,
+            metrics_coverage_pct=metrics_coverage,
         )
     except (OSError, ValueError, KeyError, pd.errors.ParserError) as exc:
         return OrderFlowYearStatus(
@@ -248,7 +351,7 @@ def _inspect_symbol(root: Path, symbol: str, year: int, expected: int) -> OrderF
         )
 
 
-def _inspect_annual_grid(path: Path, year: int) -> tuple[int, int]:
+def _inspect_annual_grid(path: Path, year: int) -> tuple[int, int, int]:
     required = {
         'timestamp',
         'symbol',
@@ -258,20 +361,29 @@ def _inspect_annual_grid(path: Path, year: int) -> tuple[int, int]:
         'taker_sell_volume',
         'order_flow_imbalance',
         'sum_open_interest',
+        'metrics_available',
     }
     columns = set(pd.read_csv(path, nrows=0).columns)
     missing_columns = required.difference(columns)
     if missing_columns:
         raise ValueError(f'annual order-flow columns are missing: {", ".join(sorted(missing_columns))}')
-    frame = pd.read_csv(path, usecols=['timestamp'])
-    timestamps = pd.to_datetime(frame['timestamp'], utc=True, errors='coerce')
+    frame = pd.read_csv(path, usecols=['timestamp', 'metrics_available'])
+    timestamps = pd.to_datetime(
+        frame['timestamp'], utc=True, errors='coerce', format='mixed'
+    )
     if timestamps.isna().any() or timestamps.duplicated().any():
         raise ValueError('5m timestamp is invalid or duplicated')
     expected = pd.date_range(
         f'{year}-01-01', f'{year + 1}-01-01', freq='5min', inclusive='left', tz='UTC'
     )
     actual = pd.DatetimeIndex(timestamps).sort_values()
-    return len(actual), len(expected.difference(actual))
+    availability = frame['metrics_available']
+    if availability.dtype != bool:
+        availability = availability.astype(str).str.lower().map({'true': True, 'false': False})
+    if availability.isna().any():
+        raise ValueError('metrics_available contains invalid values')
+    metrics_missing = int((~availability.astype(bool)).sum())
+    return len(actual), len(expected.difference(actual)), metrics_missing
 
 
 def _inspect_funding(path: Path, year: int) -> int:
@@ -279,7 +391,9 @@ def _inspect_funding(path: Path, year: int) -> int:
     if not {'timestamp', 'symbol', 'last_funding_rate'}.issubset(columns):
         raise ValueError('annual funding columns are missing')
     frame = pd.read_csv(path, usecols=['timestamp'])
-    timestamps = pd.to_datetime(frame['timestamp'], utc=True, errors='coerce')
+    timestamps = pd.to_datetime(
+        frame['timestamp'], utc=True, errors='coerce', format='mixed'
+    )
     if timestamps.isna().any() or timestamps.duplicated().any():
         raise ValueError('funding timestamp is invalid or duplicated')
     if not timestamps.dt.year.eq(year).all():

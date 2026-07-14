@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -263,20 +264,38 @@ def _download_verified_archive(
             return destination
     destination.parent.mkdir(parents=True, exist_ok=True)
     part_path = destination.with_name(f'{destination.name}.part')
-    with urllib.request.urlopen(checksum_url, timeout=30) as response:
-        checksum_content = response.read()
-    checksum_path.write_bytes(checksum_content)
-    expected = parse_checksum(checksum_content.decode('utf-8'))
-    with urllib.request.urlopen(url, timeout=60) as response, part_path.open('wb') as output:
-        while chunk := response.read(1024 * 1024):
-            output.write(chunk)
-    actual = sha256_file(part_path)
-    if actual != expected:
-        raise ValueError(
-            f'checksum mismatch for {destination.name}: expected {expected}, got {actual}'
-        )
-    os.replace(part_path, destination)
-    return destination
+    maximum_attempts = 5
+    for attempt in range(1, maximum_attempts + 1):
+        try:
+            with urllib.request.urlopen(checksum_url, timeout=30) as response:
+                checksum_content = response.read()
+            expected = parse_checksum(checksum_content.decode('utf-8'))
+            with urllib.request.urlopen(url, timeout=60) as response, part_path.open('wb') as output:
+                while chunk := response.read(1024 * 1024):
+                    output.write(chunk)
+            actual = sha256_file(part_path)
+            if actual != expected:
+                raise ValueError(
+                    f'checksum mismatch for {destination.name}: '
+                    f'expected {expected}, got {actual}'
+                )
+            checksum_path.write_bytes(checksum_content)
+            os.replace(part_path, destination)
+            return destination
+        except urllib.error.HTTPError as exc:
+            if 400 <= exc.code < 500:
+                raise FileNotFoundError(f'official archive unavailable: {url}') from exc
+            if attempt == maximum_attempts:
+                raise RuntimeError(
+                    f'download failed after {maximum_attempts} attempts: {destination.name}'
+                ) from exc
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            if attempt == maximum_attempts:
+                raise RuntimeError(
+                    f'download failed after {maximum_attempts} attempts: {destination.name}'
+                ) from exc
+        time.sleep(0.5 * (2 ** (attempt - 1)))
+    raise RuntimeError(f'unreachable download state: {destination.name}')
 
 
 def download_public_kline_archive(
@@ -668,7 +687,7 @@ def normalize_metrics(
     )
     invalid_rows = int((~valid).sum())
     valid_frame = working.loc[valid].copy()
-    valid_frame['timestamp'] = timestamps.loc[valid]
+    valid_frame['timestamp'] = timestamps.loc[valid].dt.floor('5min')
     start = pd.Timestamp(parsed_day, tz='UTC')
     end = start + pd.Timedelta(days=1)
     in_day = valid_frame['timestamp'].ge(start) & valid_frame['timestamp'].lt(end)

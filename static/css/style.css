@@ -645,6 +645,7 @@ td:first-child, th:first-child { text-align: left; }
 
 td.positive { color: var(--green); }
 td.negative { color: var(--red); }
+td.warning { color: var(--orange); }
 
 .quality-badge {
     display: inline-flex;

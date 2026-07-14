@@ -1059,13 +1059,18 @@ def _run_order_flow_job(job_id: str, year: int) -> None:
             items=[asdict(item) for item in statuses],
         )
     except (OSError, RuntimeError, ValueError) as exc:
-        logger.error('event=order_flow_download_failed exception_type=%s', type(exc).__name__)
+        logger.error(
+            'event=order_flow_download_failed exception_type=%s error=%s',
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
         _update_order_flow_job(
             job_id,
             success=False,
             state='failed',
             stage='失败',
-            error='订单流年度数据拉取或完整性审计失败，请检查网络后重试',
+            error=f'订单流年度任务失败：{exc}',
         )
     except Exception as exc:
         logger.error('event=order_flow_job_failed exception_type=%s', type(exc).__name__)

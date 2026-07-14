@@ -450,7 +450,7 @@ async function fetchOrderFlowYear() {
             if (job.state === 'completed') {
                 progress.value = total;
                 renderOrderFlowStatusTable(job.items || []);
-                await loadOrderFlowStatus('BTC + ETH ' + year + ' 年订单流包已完成并通过年度审计');
+                await loadOrderFlowStatus('BTC + ETH ' + year + ' 年订单流包已生成并完成年度审计');
                 break;
             }
             if (job.state === 'failed' || !job.success) {
@@ -477,29 +477,33 @@ function renderOrderFlowStatusTable(items) {
     const tbody = document.getElementById('order-flow-status-tbody');
     tbody.innerHTML = '';
     if (!items || items.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty-cell">暂无订单流年度文件</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">暂无订单流年度文件</td></tr>';
         return;
     }
     const stateLabels = {
         complete: '完整',
+        usable: '可研究（指标有缺口）',
         partial: '不完整',
         missing: '未下载',
         invalid: '审计失败',
     };
     for (const item of items) {
         const row = document.createElement('tr');
-        const complete = item.state === 'complete';
+        const usable = item.state === 'complete' || item.state === 'usable';
         const rows = item.rows == null ? '--' : formatNumber(item.rows, 0) + ' / ' + formatNumber(item.expected_rows, 0);
         const missing = item.missing_rows == null ? '--' : formatNumber(item.missing_rows, 0);
+        const metricsMissing = item.metrics_missing_rows == null ? '--' :
+            formatNumber(item.metrics_missing_rows, 0) + ' (' + formatNumber(item.metrics_coverage_pct, 2) + '%)';
         const funding = item.funding_rows == null ? '--' : formatNumber(item.funding_rows, 0) + ' 条';
         const size = item.file_size_kb == null ? '--' : formatDataSize(item.file_size_kb);
         row.innerHTML =
             '<td>' + escapeHtml(item.symbol || '--') + '</td>' +
             '<td>' + rows + '</td>' +
             '<td class="' + (item.missing_rows === 0 ? 'positive' : 'negative') + '">' + missing + '</td>' +
+            '<td class="' + (item.metrics_missing_rows === 0 ? 'positive' : 'warning') + '">' + metricsMissing + '</td>' +
             '<td>' + funding + '</td>' +
             '<td>' + size + '</td>' +
-            '<td class="' + (complete ? 'positive' : 'negative') + '">' + escapeHtml(stateLabels[item.state] || item.state || '--') + '</td>';
+            '<td class="' + (usable ? 'positive' : 'negative') + '">' + escapeHtml(stateLabels[item.state] || item.state || '--') + '</td>';
         tbody.appendChild(row);
     }
 }
