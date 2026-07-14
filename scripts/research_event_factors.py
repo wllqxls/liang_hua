@@ -22,12 +22,15 @@ from src.backtest.engine import BacktestEngine
 from src.research.event_factors import (
     FIXED_ROUND_TRIP_COST,
     RANGE_ATR_THRESHOLD,
+    TREND_CUMULATIVE_RETURN_THRESHOLD,
     VOLUME_SHOCK_THRESHOLD,
     VolumeAbsorptionEventStudy,
     build_key_level_event_dataset,
+    build_trend_inertia_event_dataset,
     build_volume_absorption_event_study,
     summarize_absorption_reversal_buckets,
     summarize_one_hour_factor_buckets,
+    summarize_trend_inertia_horizons,
 )
 
 
@@ -61,6 +64,18 @@ class AbsorptionResearchSlice:
     conversion_rate: float
     event_a_dataset_path: Path | None
     event_b_dataset_path: Path | None
+    summary: pd.DataFrame
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TrendInertiaResearchSlice:
+    symbol: str
+    timeframe: str
+    year: int
+    status: str
+    events: int
+    dataset_path: Path | None
     summary: pd.DataFrame
     error: str | None = None
 
@@ -223,6 +238,115 @@ def _should_run_absorption_15m(
     return True
 
 
+def run_trend_inertia_research(
+    *,
+    data_root: Path = PROJECT_ROOT / 'data',
+    output_root: Path = PROJECT_ROOT / 'results' / 'research',
+    symbols: Sequence[str] = SYMBOLS,
+    timeframes: Sequence[str] = TIMEFRAMES,
+    years: Sequence[int] = ABSORPTION_YEARS,
+) -> list[TrendInertiaResearchSlice]:
+    """Run trend events on each entry timeframe with exact 5m labels."""
+    slices: list[TrendInertiaResearchSlice] = []
+    for symbol in symbols:
+        safe_symbol = symbol.replace('/', '_')
+        try:
+            label_dir = validate_strategies._materialize_validation_data_dir(
+                data_root,
+                symbol=symbol,
+                timeframe='5m',
+            )
+            five_minute = BacktestEngine(data_dir=label_dir).load_data(
+                label_dir / f'{safe_symbol}_5m.csv'
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            slices.extend(
+                _unavailable_trend_slice(symbol, timeframe, year, str(exc))
+                for timeframe in timeframes
+                for year in years
+            )
+            continue
+        for timeframe in timeframes:
+            try:
+                entry_dir = validate_strategies._materialize_validation_data_dir(
+                    data_root,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                )
+                entry = BacktestEngine(data_dir=entry_dir).load_data(
+                    entry_dir / f'{safe_symbol}_{timeframe}.csv'
+                )
+                events = build_trend_inertia_event_dataset(
+                    entry,
+                    five_minute,
+                    timeframe=timeframe,
+                )
+            except (FileNotFoundError, ValueError) as exc:
+                slices.extend(
+                    _unavailable_trend_slice(symbol, timeframe, year, str(exc))
+                    for year in years
+                )
+                continue
+            for year in years:
+                slices.append(
+                    _slice_trend_inertia_events(
+                        events=events,
+                        entry=entry,
+                        output_root=output_root,
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        year=year,
+                    )
+                )
+    return slices
+
+
+def write_trend_inertia_report(
+    slices: Sequence[TrendInertiaResearchSlice],
+    output_path: Path,
+) -> None:
+    """Write separate 5m and 15m event result tables."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        '# Short-Term Trend Inertia Event Factor Report',
+        '',
+        '- Scope: read-only event research; no strategy or trade is created.',
+        f'- Event threshold: three same-sign close returns and cumulative absolute return >= `{TREND_CUMULATIVE_RETURN_THRESHOLD:.4f}`.',
+        f'- Fixed round-trip cost: `{FIXED_ROUND_TRIP_COST:.4f}`.',
+        '- Conversion: gross directional return > 0 at the exact 5m, 15m, or 1h horizon.',
+        '- 15m event 5m labels come from synchronized raw 5m closes.',
+        '- Design: `docs/research/trend-inertia-design.md`.',
+        f'- Code revision: `{_git_revision()}`.',
+        '',
+    ]
+    for timeframe in TIMEFRAMES:
+        lines.extend(
+            [
+                f'## {timeframe} event results',
+                '',
+                '| Slice | Horizon | Samples | Gross continuation % | Avg gross return % | Avg net return % | Net Profit Factor | Status |',
+                '|---|---|---:|---:|---:|---:|---:|---|',
+            ]
+        )
+        timeframe_slices = [item for item in slices if item.timeframe == timeframe]
+        for item in timeframe_slices:
+            if item.summary.empty:
+                lines.append(
+                    f'| {item.symbol} {item.year} | N/A | 0 | 0.00 | 0.0000 | 0.0000 | N/A | {item.status} |'
+                )
+                continue
+            for row in item.summary.itertuples(index=False):
+                lines.append(
+                    f'| {item.symbol} {item.year} | {row.horizon} | {row.samples} | '
+                    f'{row.conversion_rate_pct:.2f} | '
+                    f'{row.average_gross_return * 100:.4f} | '
+                    f'{row.average_net_return * 100:.4f} | '
+                    f'{_format_profit_factor(row.profit_factor)} | {item.status} |'
+                )
+        lines.append('')
+    output_path.write_text('\n'.join(lines), encoding='utf-8')
+
+
 def write_factor_report(
     slices: Sequence[FactorResearchSlice],
     output_path: Path,
@@ -376,6 +500,38 @@ def _absorption_b_for_source_year(
     return event_b.loc[(source_time >= start) & (source_time < end)].copy()
 
 
+def _slice_trend_inertia_events(
+    *,
+    events: pd.DataFrame,
+    entry: pd.DataFrame,
+    output_root: Path,
+    symbol: str,
+    timeframe: str,
+    year: int,
+) -> TrendInertiaResearchSlice:
+    year_events = _calendar_year_slice(events, year=year)
+    if year_events.empty:
+        return _unavailable_trend_slice(
+            symbol,
+            timeframe,
+            year,
+            'merged data has no trend-inertia events in the requested calendar year',
+        )
+    safe_symbol = symbol.replace('/', '_')
+    output_root.mkdir(parents=True, exist_ok=True)
+    dataset_path = output_root / f'{safe_symbol}_{timeframe}_{year}_trend_inertia.csv'
+    year_events.to_csv(dataset_path)
+    return TrendInertiaResearchSlice(
+        symbol=symbol,
+        timeframe=timeframe,
+        year=year,
+        status='COMPLETE_YEAR' if _covers_calendar_year(entry, year=year) else 'PARTIAL_YEAR',
+        events=len(year_events),
+        dataset_path=dataset_path,
+        summary=summarize_trend_inertia_horizons(year_events),
+    )
+
+
 def _calendar_year_slice(
     events: pd.DataFrame,
     *,
@@ -433,6 +589,24 @@ def _unavailable_absorption_slice(
     )
 
 
+def _unavailable_trend_slice(
+    symbol: str,
+    timeframe: str,
+    year: int,
+    error: str,
+) -> TrendInertiaResearchSlice:
+    return TrendInertiaResearchSlice(
+        symbol=symbol,
+        timeframe=timeframe,
+        year=year,
+        status='DATA_UNAVAILABLE',
+        events=0,
+        dataset_path=None,
+        summary=pd.DataFrame(),
+        error=error,
+    )
+
+
 def _format_profit_factor(value: float) -> str:
     return 'N/A' if not math.isfinite(value) else f'{value:.3f}'
 
@@ -455,7 +629,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Generate read-only event factor research.')
     parser.add_argument(
         '--hypothesis',
-        choices=('key_level', 'volume_absorption'),
+        choices=('key_level', 'volume_absorption', 'trend_inertia'),
         default='key_level',
     )
     parser.add_argument(
@@ -469,6 +643,16 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
     args = _parse_args()
+    if args.hypothesis == 'trend_inertia':
+        output = args.output or PROJECT_ROOT / 'docs' / 'research' / 'trend-inertia-report.md'
+        slices = run_trend_inertia_research()
+        write_trend_inertia_report(slices, output)
+        logger.info(
+            'hypothesis=trend_inertia slices=%s output=%s',
+            len(slices),
+            output,
+        )
+        return
     if args.hypothesis == 'volume_absorption':
         output = args.output or PROJECT_ROOT / 'docs' / 'research' / 'volume-absorption-report.md'
         five_minute_slices = run_absorption_event_research(timeframe='5m')

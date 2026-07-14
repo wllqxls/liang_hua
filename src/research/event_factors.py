@@ -43,6 +43,20 @@ RANGE_ATR_THRESHOLD = 1.0
 DISPLACEMENT_ATR_THRESHOLD = 1.0
 REVERSAL_ATR_THRESHOLD = 0.5
 REVERSAL_WAIT_BARS = 3
+TREND_CUMULATIVE_RETURN_THRESHOLD = 0.003
+_TREND_HORIZONS = {
+    '5m': pd.Timedelta(minutes=5),
+    '15m': pd.Timedelta(minutes=15),
+    '1h': pd.Timedelta(hours=1),
+}
+_TREND_SUMMARY_COLUMNS = (
+    'horizon',
+    'samples',
+    'conversion_rate_pct',
+    'average_gross_return',
+    'average_net_return',
+    'profit_factor',
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +161,173 @@ def summarize_absorption_reversal_buckets(events: pd.DataFrame) -> pd.DataFrame:
         ),
     ]
     return pd.concat(summaries, ignore_index=True)
+
+
+def build_trend_inertia_event_dataset(
+    entry: pd.DataFrame,
+    five_minute: pd.DataFrame,
+    *,
+    timeframe: Literal['5m', '15m'] | str,
+) -> pd.DataFrame:
+    """Build first-in-streak momentum events with exact 5m-based labels."""
+    duration = _entry_duration(timeframe)
+    entry_close = _validated_close_frame(entry, name='entry')
+    label_close = _validated_close_frame(five_minute, name='five_minute')
+    features = _trend_inertia_features(entry_close, duration=duration)
+    events = _extract_trend_inertia_events(features)
+    return _add_trend_inertia_labels(
+        events,
+        five_minute_close=_closed_price(label_close, pd.Timedelta(minutes=5)),
+    )
+
+
+def summarize_trend_inertia_horizons(events: pd.DataFrame) -> pd.DataFrame:
+    """Summarize gross continuation and costed returns at fixed horizons."""
+    rows: list[dict[str, float | int | str]] = []
+    for horizon in _TREND_HORIZONS:
+        gross_column = f'forward_return_{horizon}'
+        net_column = f'forward_return_{horizon}_net'
+        missing = [column for column in (gross_column, net_column) if column not in events]
+        if missing:
+            raise ValueError(f'events is missing required columns: {", ".join(missing)}')
+        usable = events.dropna(subset=[gross_column, net_column])
+        if usable.empty:
+            continue
+        gross_returns = usable[gross_column]
+        net_returns = usable[net_column]
+        rows.append(
+            {
+                'horizon': horizon,
+                'samples': len(usable),
+                'conversion_rate_pct': float((gross_returns > 0).mean() * 100),
+                'average_gross_return': float(gross_returns.mean()),
+                'average_net_return': float(net_returns.mean()),
+                'profit_factor': _absorption_profit_factor(net_returns),
+            }
+        )
+    return pd.DataFrame(rows, columns=_TREND_SUMMARY_COLUMNS)
+
+
+def _validated_close_frame(frame: pd.DataFrame, *, name: str) -> pd.Series:
+    if 'Close' not in frame.columns:
+        raise ValueError(f'{name} is missing required column: Close')
+    if not isinstance(frame.index, pd.DatetimeIndex):
+        raise ValueError(f'{name} index must be a DatetimeIndex')
+    index = frame.index
+    if index.tz is None:
+        index = index.tz_localize('UTC')
+    else:
+        index = index.tz_convert('UTC')
+    if index.has_duplicates:
+        raise ValueError(f'{name} index must not contain duplicate timestamps')
+    try:
+        close = frame['Close'].astype(float).copy()
+    except (TypeError, ValueError):
+        raise ValueError(f'{name} Close must contain finite positive numbers') from None
+    close.index = index
+    close = close.sort_index()
+    if not np.isfinite(close.to_numpy()).all() or (close <= 0).any():
+        raise ValueError(f'{name} Close must contain finite positive numbers')
+    return close
+
+
+def _trend_inertia_features(
+    close: pd.Series,
+    *,
+    duration: pd.Timedelta,
+) -> pd.DataFrame:
+    one_bar_return = close.pct_change(fill_method=None)
+    cumulative_return = close / close.shift(3) - 1
+    three_up = (
+        (one_bar_return > 0)
+        & (one_bar_return.shift(1) > 0)
+        & (one_bar_return.shift(2) > 0)
+    )
+    three_down = (
+        (one_bar_return < 0)
+        & (one_bar_return.shift(1) < 0)
+        & (one_bar_return.shift(2) < 0)
+    )
+    candidate_side = np.select(
+        [
+            three_up & (cumulative_return >= TREND_CUMULATIVE_RETURN_THRESHOLD),
+            three_down & (cumulative_return <= -TREND_CUMULATIVE_RETURN_THRESHOLD),
+        ],
+        ['BUY', 'SELL'],
+        default='',
+    )
+    return pd.DataFrame(
+        {
+            'close': close.to_numpy(),
+            'one_bar_return': one_bar_return.to_numpy(),
+            'cumulative_return_3': cumulative_return.to_numpy(),
+            'candidate_side': candidate_side,
+        },
+        index=close.index + duration,
+    )
+
+
+def _extract_trend_inertia_events(features: pd.DataFrame) -> pd.DataFrame:
+    event_rows: list[dict[str, object]] = []
+    active_return_side = ''
+    event_recorded = False
+    rows = features.to_dict(orient='records')
+    event_times = list(features.index)
+    for position, row in enumerate(rows):
+        one_bar_return = float(row['one_bar_return'])
+        return_side = 'BUY' if one_bar_return > 0 else 'SELL' if one_bar_return < 0 else ''
+        if return_side != active_return_side:
+            active_return_side = return_side
+            event_recorded = False
+        candidate_side = str(row['candidate_side'])
+        if not candidate_side or event_recorded:
+            continue
+        event_recorded = True
+        event_rows.append(
+            {
+                'event_time': event_times[position],
+                'side': candidate_side,
+                'close': row['close'],
+                'streak_bars': 3,
+                'cumulative_return_3': row['cumulative_return_3'],
+                'event_direction': 1.0 if candidate_side == 'BUY' else -1.0,
+            }
+        )
+    columns = [
+        'side',
+        'close',
+        'streak_bars',
+        'cumulative_return_3',
+        'event_direction',
+    ]
+    if not event_rows:
+        return pd.DataFrame(columns=columns, index=pd.DatetimeIndex([], tz='UTC'))
+    return pd.DataFrame(event_rows).set_index('event_time').loc[:, columns]
+
+
+def _closed_price(close: pd.Series, duration: pd.Timedelta) -> pd.Series:
+    result = close.copy()
+    result.index = result.index + duration
+    return result
+
+
+def _add_trend_inertia_labels(
+    events: pd.DataFrame,
+    *,
+    five_minute_close: pd.Series,
+) -> pd.DataFrame:
+    result = events.copy()
+    for horizon, duration in _TREND_HORIZONS.items():
+        target_times = result.index + duration
+        future_close = pd.Series(
+            five_minute_close.reindex(target_times).to_numpy(),
+            index=result.index,
+            dtype=float,
+        )
+        gross = result['event_direction'] * (future_close / result['close'] - 1)
+        result[f'forward_return_{horizon}'] = gross
+        result[f'forward_return_{horizon}_net'] = gross - FIXED_ROUND_TRIP_COST
+    return result
 
 
 def _validated_absorption_entry(entry: pd.DataFrame) -> pd.DataFrame:
