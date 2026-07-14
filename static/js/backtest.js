@@ -493,7 +493,7 @@ async function runStrategyDiagnostics() {
     runBtn.disabled = true;
     refreshBtn.disabled = true;
     progress.value = 0;
-    progress.max = 6;
+    progress.max = 3;
     progressWrap.classList.remove('hidden');
     status.innerHTML = '<span class="spinner"></span>正在准备年度数据...';
     hideDiagnosticError();
@@ -518,7 +518,7 @@ async function runStrategyDiagnostics() {
                 throw new Error(job.error || '策略诊断失败');
             }
             const completed = finiteNumber(job.completed_count, 0);
-            const total = Math.max(1, finiteNumber(job.total_count, 6));
+            const total = Math.max(1, finiteNumber(job.total_count, 3));
             progress.max = total;
             progress.value = Math.min(completed, total);
             status.innerHTML = '<span class="spinner"></span>' + escapeHtml(job.stage || '运行中') +
@@ -558,14 +558,14 @@ function renderDiagnosticsUnavailable() {
 
 
 function renderDiagnostics(data) {
-    const summary = Array.isArray(data.summary) ? data.summary : [];
+    const summary = normalizeDiagnosticSummary(data.summary);
     document.getElementById('diagnostics-empty').classList.add('hidden');
     document.getElementById('diagnostics-results').classList.remove('hidden');
     document.getElementById('diagnostic-latest-meta').textContent =
         diagnosticReportMeta(data);
 
-    const passed = finiteNumber(data.passed_count, 0);
-    const total = finiteNumber(data.total_count, summary.length);
+    const passed = summary.filter(item => item.status === '通过').length;
+    const total = summary.length;
     const status = document.getElementById('diagnostic-overall-status');
     status.textContent = passed === total && total > 0 ? '全部通过' : '未通过验证';
     status.className = 'diagnostic-status-badge ' +
@@ -577,9 +577,49 @@ function renderDiagnostics(data) {
     setDiagnosticKpi('diagnostic-best-return', formatBestValue(returns, '%'), Math.max(...returns) > 0);
     setDiagnosticKpi('diagnostic-best-net-pnl', formatBestValue(netPnls, ' U'), Math.max(...netPnls) > 0);
     setDiagnosticKpi('diagnostic-total', String(total), null);
-    renderDiagnosticFindings(data.cross_mode_findings);
+    renderDiagnosticFindings(diagnosticCrossStrategyFindings(summary, data.cross_mode_findings));
     renderDiagnosticSummaryTable(summary);
     renderDiagnosticDetails(summary);
+}
+
+
+function normalizeDiagnosticSummary(rawSummary) {
+    const rows = Array.isArray(rawSummary) ? rawSummary : [];
+    const byMode = new Map();
+    for (const row of rows) {
+        if (!row || !row.mode) continue;
+        const current = byMode.get(row.mode);
+        if (!current || row.margin_mode === 'ISOLATED') {
+            byMode.set(row.mode, row);
+        }
+    }
+    return Array.from(byMode.values());
+}
+
+
+function diagnosticCrossStrategyFindings(summary, fallbackFindings) {
+    const keyLevel = summary.find(item => item.mode === 'KEY_LEVEL');
+    const combined = summary.find(item => item.mode === 'KEY_LEVEL_RSI');
+    const keyTrades = finiteNumber(keyLevel && keyLevel.annual_trades, 0);
+    if (!combined || keyTrades <= 0) {
+        return Array.isArray(fallbackFindings) ? fallbackFindings : [];
+    }
+    const combinedTrades = finiteNumber(combined.annual_trades, 0);
+    const tradeChangePct = (combinedTrades - keyTrades) / keyTrades * 100;
+    const netChange = finiteNumber(combined.net_pnl, 0) - finiteNumber(keyLevel.net_pnl, 0);
+    let finding = '关键位 + RSI 相比关键位的交易数变化 ' +
+        signedNumber(tradeChangePct, 2) + '%（' + keyTrades + ' -> ' + combinedTrades + '），' +
+        '净收益变化 ' + signedNumber(netChange, 4) + ' USDT。';
+    if (Math.abs(tradeChangePct) <= 5) {
+        finding += '组合模式没有形成实质性的交易筛选。';
+    }
+    return [finding];
+}
+
+
+function signedNumber(value, digits) {
+    const number = finiteNumber(value, 0);
+    return (number >= 0 ? '+' : '') + number.toFixed(digits);
 }
 
 
@@ -625,7 +665,7 @@ function renderDiagnosticSummaryTable(summary) {
     const tbody = document.getElementById('diagnostic-summary-tbody');
     tbody.innerHTML = '';
     if (summary.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" class="empty-cell">暂无诊断组合</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="empty-cell">暂无诊断策略</td></tr>';
         return;
     }
     for (const item of summary) {
@@ -635,7 +675,6 @@ function renderDiagnosticSummaryTable(summary) {
         const statusClass = item.status === '通过' ? 'recommend' : 'reject';
         row.innerHTML =
             '<td>' + escapeHtml(diagnosticModeLabel(item.mode)) + '</td>' +
-            '<td>' + escapeHtml(diagnosticMarginLabel(item.margin_mode)) + '</td>' +
             '<td><span class="quality-badge ' + statusClass + '">' + escapeHtml(item.status || '--') + '</span></td>' +
             '<td class="' + returnClass + '">' + formatNumber(item.annual_return_pct, 2) + '</td>' +
             '<td class="negative">' + formatNumber(item.max_drawdown_pct, 2) + '</td>' +
@@ -660,7 +699,7 @@ function renderDiagnosticDetails(summary) {
         const combined = [...findings, ...reasons.filter(reason => !findings.includes(reason))];
         detail.innerHTML =
             '<summary><span class="diagnostic-detail-title">' +
-            escapeHtml(diagnosticModeLabel(item.mode) + ' / ' + diagnosticMarginLabel(item.margin_mode)) +
+            escapeHtml(diagnosticModeLabel(item.mode)) +
             '</span><span class="diagnostic-detail-status">' + escapeHtml(item.status || '--') + '</span></summary>' +
             '<ul class="diagnostic-detail-reasons">' +
             combined.map(reason => '<li>' + escapeHtml(reason) + '</li>').join('') +
@@ -676,11 +715,6 @@ function diagnosticModeLabel(mode) {
         RSI_REVERSAL: 'RSI 反转',
         KEY_LEVEL_RSI: '关键位 + RSI',
     }[mode] || mode || '--';
-}
-
-
-function diagnosticMarginLabel(marginMode) {
-    return marginMode === 'ISOLATED' ? '逐仓' : marginMode === 'CROSS' ? '全仓' : marginMode || '--';
 }
 
 

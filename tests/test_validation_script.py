@@ -172,7 +172,7 @@ def test_preflight_rejects_data_starting_at_annual_start_without_warmup(tmp_path
     assert '2024-12-27T00:05:00+00:00' in message
 
 
-def test_run_validation_matrix_covers_every_mode_margin_pair_and_writes_markdown(
+def test_run_validation_matrix_covers_each_mode_once_and_writes_markdown(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
@@ -217,15 +217,16 @@ def test_run_validation_matrix_covers_every_mode_margin_pair_and_writes_markdown
         progress=lambda **values: progress_updates.append(values),
     )
 
-    assert len(rows) == 6
+    assert len(rows) == 3
     assert output.exists()
     content = output.read_text(encoding='utf-8')
-    assert '| Mode | Margin | Status |' in content
-    assert content.count('| KEY_LEVEL |') == 2
+    assert '| Mode | Status |' in content
+    assert content.count('| KEY_LEVEL |') == 1
+    assert '- Margin baseline: `ISOLATED`' in content
     assert '通过' in content
     diagnostics_content = diagnostics_output.read_text(encoding='utf-8')
     assert '# Strategy Failure Diagnostics' in diagnostics_content
-    assert '| Mode | Margin | Trades | Win Rate % |' in diagnostics_content
+    assert '| Mode | Trades | Win Rate % |' in diagnostics_content
     assert 'Pre-fee PnL (slippage included)' in diagnostics_content
     assert 'KEY_LEVEL_RSI 相比 KEY_LEVEL' in diagnostics_content
     assert '组合模式没有形成实质性的交易筛选' in diagnostics_content
@@ -233,24 +234,23 @@ def test_run_validation_matrix_covers_every_mode_margin_pair_and_writes_markdown
     payload = json.loads(diagnostics_json.read_text(encoding='utf-8'))
     assert payload['success'] is True
     assert payload['symbol'] == 'ETH/USDT'
-    assert payload['passed_count'] == 6
-    assert payload['total_count'] == 6
-    assert len(payload['summary']) == 6
+    assert payload['passed_count'] == 3
+    assert payload['total_count'] == 3
+    assert len(payload['summary']) == 3
     assert payload['summary'][0]['mode'] == 'KEY_LEVEL'
     assert payload['summary'][0]['findings']
-    assert [item['completed'] for item in progress_updates] == [1, 2, 3, 4, 5, 6]
-    assert all(item['total'] == 6 for item in progress_updates)
+    assert [item['completed'] for item in progress_updates] == [1, 2, 3]
+    assert all(item['total'] == 3 for item in progress_updates)
     assert all(row.status == '通过' for row in rows)
-    assert len(calls) == 6 * 13
+    assert len(calls) == 3 * 13
 
     grouped: dict[tuple[SignalMode, MarginMode], list[dict[str, Any]]] = {}
     for call in calls:
         grouped.setdefault((call['mode'], call['margin_mode']), []).append(call)
 
     assert set(grouped) == {
-        (mode, margin_mode)
+        (mode, MarginMode.ISOLATED)
         for mode in SignalMode
-        for margin_mode in (MarginMode.ISOLATED, MarginMode.CROSS)
     }
     for group_calls in grouped.values():
         window_calls = [call for call in group_calls if call['backtest_days'] == 30]
@@ -316,7 +316,7 @@ def test_run_validation_matrix_uses_yearly_data_directories(
         data_dir=data_dir,
     )
 
-    assert len(rows) == 6
+    assert len(rows) == 3
     assert captured['data_dir'] != data_dir
     for timeframe in ['5m', '1h', '4h']:
         assert captured[f'ETH_USDT_{timeframe}.csv'] == (

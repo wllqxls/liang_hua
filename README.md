@@ -159,9 +159,9 @@ python scripts\validate_strategies.py --symbol ETH/USDT --days 365 --output docs
 
 验证脚本会对三种稳定信号模式和两种保证金模式生成 6 行结果，每行必须明确为 `通过` 或 `未通过验证`，失败原因写入 Markdown。
 
-同一次运行还会复用 6 组年度回测的逐笔交易生成 `docs/strategy-diagnostics.md`，统计手续费/资金费前收益（已含滑点）、手续费、资金费、净收益、出场原因、交易方向、1 小时环境和 4 小时过滤标签。可用 `--diagnostics-output` 指定其他诊断报告路径。
+同一次运行还会复用 3 个策略模式的年度回测逐笔交易生成 `docs/strategy-diagnostics.md`，固定使用更保守的逐仓基准，统计手续费/资金费前收益（已含滑点）、手续费、资金费、净收益、出场原因、交易方向、1 小时环境和 4 小时过滤标签。可用 `--diagnostics-output` 指定其他诊断报告路径。
 
-网页右侧的“策略诊断”页会自动读取最近一次结果，但不会自动运行完整诊断。点击“运行 365 天诊断”后，后台完成 6 组验证并显示进度；结构化结果保存到 `results/strategy-diagnostics.json`，Markdown 与网页数据来自同一次回测。
+网页右侧的“策略诊断”页会自动读取最近一次结果，但不会自动运行完整诊断。点击“运行 365 天诊断”后，后台完成 3 个策略模式并显示进度；结构化结果保存到 `results/strategy-diagnostics.json`，Markdown 与网页数据来自同一次回测。逐仓与全仓的强平差异由独立风险测试覆盖，不重复运行年度策略验证。
 
 验证脚本会优先合并 `data/{year}/` 下同一币种的年份数据，生成临时验证数据到 `tmp/validation_data/`，用于覆盖 `365 天 + warmup` 的验证窗口；原始 `data/` 行情文件不会被修改。
 

@@ -103,7 +103,7 @@ MAX_STAGE_TWO_CANDIDATES = min(STAGE_TWO_BUDGET, MAX_STAGE_ONE_CANDIDATES * 2)
 SEARCH_TOTAL_BUDGET = MAX_STAGE_ONE_CANDIDATES + MAX_STAGE_TWO_CANDIDATES + VALIDATION_BUDGET
 MAX_STORED_OPTIMIZATION_JOBS = 20
 MAX_STORED_DIAGNOSTIC_JOBS = 10
-DIAGNOSTIC_TOTAL_COUNT = len(SignalMode) * 2
+DIAGNOSTIC_TOTAL_COUNT = len(SignalMode)
 DIAGNOSTICS_JSON_PATH = PROJECT_ROOT / 'results' / 'strategy-diagnostics.json'
 DIAGNOSTICS_MARKDOWN_PATH = PROJECT_ROOT / 'docs' / 'strategy-diagnostics.md'
 VALIDATION_MARKDOWN_PATH = PROJECT_ROOT / 'docs' / 'strategy-validation.md'
@@ -392,11 +392,10 @@ def _run_diagnostic_job(job_id: str, req: DiagnosticRequest) -> None:
     def progress(**values: object) -> None:
         completed = int(values.get('completed', 0))
         mode = str(values.get('mode', ''))
-        margin_mode = str(values.get('margin_mode', ''))
         _update_diagnostic_job(
             job_id,
             state='running',
-            stage=f'{mode} / {margin_mode}',
+            stage=mode,
             completed_count=completed,
             total_count=int(values.get('total', DIAGNOSTIC_TOTAL_COUNT)),
         )

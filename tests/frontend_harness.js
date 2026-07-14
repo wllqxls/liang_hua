@@ -260,7 +260,7 @@ async function assertDiagnosticPage(api, context, document) {
         if (url === '/api/diagnostics/jobs/diagnostic-1') {
             return response({ body: JSON.stringify({
                 success: true, state: 'completed', stage: '完成',
-                completed_count: 6, total_count: 6, elapsed_seconds: 20,
+                completed_count: 3, total_count: 3, elapsed_seconds: 20,
             }) });
         }
         if (url === '/api/diagnostics/latest') {

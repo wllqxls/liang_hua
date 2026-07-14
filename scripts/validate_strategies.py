@@ -38,7 +38,7 @@ ENTRY_WARMUP_BARS = 21
 HOUR_WARMUP_BARS = 20
 FOUR_HOUR_WARMUP_BARS = 30
 MODES = (SignalMode.KEY_LEVEL, SignalMode.RSI_REVERSAL, SignalMode.KEY_LEVEL_RSI)
-MARGIN_MODES = (MarginMode.ISOLATED, MarginMode.CROSS)
+VALIDATION_MARGIN_MODE = MarginMode.ISOLATED
 TIMEFRAME_DELTAS = {
     '5m': pd.Timedelta(minutes=5),
     '15m': pd.Timedelta(minutes=15),
@@ -95,7 +95,7 @@ def run_validation_matrix(
     diagnostics_json_path: Path | None = None,
     progress: Callable[..., None] | None = None,
 ) -> list[ValidationRow]:
-    """Run all stable signal modes across isolated and cross margin."""
+    """Run every stable signal mode once with the conservative margin baseline."""
     _validate_days(days)
     resolved_data_dir = Path(data_dir) if data_dir is not None else DEFAULT_DATA_DIR
     resolved_data_dir = _materialize_validation_data_dir(
@@ -122,72 +122,71 @@ def run_validation_matrix(
     rows: list[ValidationRow] = []
     diagnostic_rows: list[DiagnosticRow] = []
     for mode in MODES:
-        for margin_mode in MARGIN_MODES:
-            window_results = [
-                engine.run_signal_mode(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    mode=mode,
-                    backtest_days=WINDOW_DAYS,
-                    window_start=start,
-                    window_end=end,
-                    cash=100,
-                    opening_amount=10,
-                    margin_mode=margin_mode,
-                    leverage=5,
-                    taker_fee=VALIDATION_TAKER_FEE,
-                    slippage_rate=VALIDATION_SLIPPAGE_RATE,
-                    funding_rate=VALIDATION_FUNDING_RATE,
-                    save_result=False,
-                )
-                for start, end in windows
-            ]
-            annual_result = engine.run_signal_mode(
+        window_results = [
+            engine.run_signal_mode(
                 symbol=symbol,
                 timeframe=timeframe,
                 mode=mode,
-                backtest_days=days,
-                window_start=annual_start,
-                window_end=end_time,
+                backtest_days=WINDOW_DAYS,
+                window_start=start,
+                window_end=end,
                 cash=100,
                 opening_amount=10,
-                margin_mode=margin_mode,
+                margin_mode=VALIDATION_MARGIN_MODE,
                 leverage=5,
                 taker_fee=VALIDATION_TAKER_FEE,
                 slippage_rate=VALIDATION_SLIPPAGE_RATE,
                 funding_rate=VALIDATION_FUNDING_RATE,
                 save_result=False,
             )
-            metrics = _metrics(window_results, annual_result)
-            passed, reasons = evaluate_thresholds(metrics)
-            diagnostic_rows.append(
-                DiagnosticRow(
-                    mode=mode,
-                    margin_mode=margin_mode,
-                    diagnostics=analyze_trades(annual_result.trade_list),
-                )
+            for start, end in windows
+        ]
+        annual_result = engine.run_signal_mode(
+            symbol=symbol,
+            timeframe=timeframe,
+            mode=mode,
+            backtest_days=days,
+            window_start=annual_start,
+            window_end=end_time,
+            cash=100,
+            opening_amount=10,
+            margin_mode=VALIDATION_MARGIN_MODE,
+            leverage=5,
+            taker_fee=VALIDATION_TAKER_FEE,
+            slippage_rate=VALIDATION_SLIPPAGE_RATE,
+            funding_rate=VALIDATION_FUNDING_RATE,
+            save_result=False,
+        )
+        metrics = _metrics(window_results, annual_result)
+        passed, reasons = evaluate_thresholds(metrics)
+        diagnostic_rows.append(
+            DiagnosticRow(
+                mode=mode,
+                margin_mode=VALIDATION_MARGIN_MODE,
+                diagnostics=analyze_trades(annual_result.trade_list),
             )
-            rows.append(
-                ValidationRow(
-                    mode=mode,
-                    margin_mode=margin_mode,
-                    status='通过' if passed else '未通过验证',
-                    reasons=reasons,
-                    avg_window_return_pct=metrics['avg_window_return_pct'],
-                    worst_window_return_pct=metrics['worst_window_return_pct'],
-                    annual_return_pct=metrics['annual_return_pct'],
-                    max_drawdown_pct=metrics['max_drawdown_pct'],
-                    profit_factor=metrics['profit_factor'],
-                    annual_trades=int(metrics['annual_trades']),
-                )
+        )
+        rows.append(
+            ValidationRow(
+                mode=mode,
+                margin_mode=VALIDATION_MARGIN_MODE,
+                status='通过' if passed else '未通过验证',
+                reasons=reasons,
+                avg_window_return_pct=metrics['avg_window_return_pct'],
+                worst_window_return_pct=metrics['worst_window_return_pct'],
+                annual_return_pct=metrics['annual_return_pct'],
+                max_drawdown_pct=metrics['max_drawdown_pct'],
+                profit_factor=metrics['profit_factor'],
+                annual_trades=int(metrics['annual_trades']),
             )
-            if progress is not None:
-                progress(
-                    completed=len(rows),
-                    total=len(MODES) * len(MARGIN_MODES),
-                    mode=mode.value,
-                    margin_mode=margin_mode.value,
-                )
+        )
+        if progress is not None:
+            progress(
+                completed=len(rows),
+                total=len(MODES),
+                mode=mode.value,
+                margin_mode=VALIDATION_MARGIN_MODE.value,
+            )
 
     rows = [_clean_validation_row(row) for row in rows]
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -417,21 +416,21 @@ def _render_markdown(
         f'- Timeframe: `{timeframe}`',
         f'- Annual window: `{days}` days',
         f'- Rolling windows: `{WINDOW_COUNT}` non-overlapping `{WINDOW_DAYS}`-day windows',
+        f'- Margin baseline: `{VALIDATION_MARGIN_MODE.value}`',
         '',
         (
             '未通过验证的模式保持不可用于未来自动化 testnet 执行；'
             '只有状态为 `通过` 的模式可进入后续自动化模拟盘流程。'
         ),
         '',
-        '| Mode | Margin | Status | Avg 30d Return % | Worst 30d Return % | Annual Return % | Max Drawdown % | Profit Factor | Annual Trades | Reasons |',
-        '|---|---|---:|---:|---:|---:|---:|---:|---:|---|',
+        '| Mode | Status | Avg 30d Return % | Worst 30d Return % | Annual Return % | Max Drawdown % | Profit Factor | Annual Trades | Reasons |',
+        '|---|---:|---:|---:|---:|---:|---:|---:|---|',
     ]
     for row in rows:
         reasons = '；'.join(row.reasons) if row.reasons else '全部阈值通过'
         clean_lines.append(
             '| '
             f'{row.mode.value} | '
-            f'{row.margin_mode.value} | '
             f'{row.status} | '
             f'{row.avg_window_return_pct:.2f} | '
             f'{row.worst_window_return_pct:.2f} | '
@@ -460,6 +459,7 @@ def _render_diagnostics_markdown(
         '- Initial cash: `100 USDT`',
         '- Opening margin: `10 USDT`',
         '- Leverage: `5x`',
+        f'- Margin baseline: `{VALIDATION_MARGIN_MODE.value}`',
         f'- Taker fee: `{VALIDATION_TAKER_FEE:.4%}` per fill',
         f'- Slippage: `{VALIDATION_SLIPPAGE_RATE:.4%}` per fill',
         f'- Funding rate: `{VALIDATION_FUNDING_RATE:.4%}` per 8 hours',
@@ -471,15 +471,14 @@ def _render_diagnostics_markdown(
         '',
         '## Summary',
         '',
-        '| Mode | Margin | Trades | Win Rate % | Pre-fee PnL (slippage included) | Commission | Funding Cash Flow | Net Fee/Funding Cost | Net PnL | Pre-fee PF | Net PF | Avg Net/Trade | Fee/Funding Cost to Pre-fee Gross Profit % |',
-        '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
+        '| Mode | Trades | Win Rate % | Pre-fee PnL (slippage included) | Commission | Funding Cash Flow | Net Fee/Funding Cost | Net PnL | Pre-fee PF | Net PF | Avg Net/Trade | Fee/Funding Cost to Pre-fee Gross Profit % |',
+        '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
     ]
     for row in rows:
         item = row.diagnostics
         lines.append(
             '| '
             f'{row.mode.value} | '
-            f'{row.margin_mode.value} | '
             f'{item.trades} | '
             f'{item.win_rate_pct:.2f} | '
             f'{item.gross_pnl:.4f} | '
@@ -501,7 +500,7 @@ def _render_diagnostics_markdown(
         lines.extend(
             [
                 '',
-                f'## {row.mode.value} / {row.margin_mode.value}',
+                f'## {row.mode.value}',
                 '',
             ]
         )
@@ -664,39 +663,20 @@ def _diagnostic_findings(item: StrategyDiagnostics) -> list[str]:
 
 
 def _cross_mode_findings(rows: Sequence[DiagnosticRow]) -> list[str]:
-    indexed = {
-        (row.mode, row.margin_mode): row.diagnostics
-        for row in rows
-    }
+    indexed = {row.mode: row.diagnostics for row in rows}
     findings: list[str] = []
-    for margin_mode in MARGIN_MODES:
-        key = indexed.get((SignalMode.KEY_LEVEL, margin_mode))
-        combined = indexed.get((SignalMode.KEY_LEVEL_RSI, margin_mode))
-        if key is None or combined is None or key.trades == 0:
-            continue
+    key = indexed.get(SignalMode.KEY_LEVEL)
+    combined = indexed.get(SignalMode.KEY_LEVEL_RSI)
+    if key is not None and combined is not None and key.trades > 0:
         trade_change_pct = (combined.trades - key.trades) / key.trades * 100
         message = (
-            f'`{margin_mode.value}` 下 KEY_LEVEL_RSI 相比 KEY_LEVEL 的交易数变化 '
+            'KEY_LEVEL_RSI 相比 KEY_LEVEL 的交易数变化 '
             f'{trade_change_pct:+.2f}%（{key.trades} -> {combined.trades}），'
             f'净收益变化 {combined.net_pnl - key.net_pnl:+.4f} USDT。'
         )
         if abs(trade_change_pct) <= 5:
             message += '组合模式没有形成实质性的交易筛选。'
         findings.append(message)
-
-    for mode in MODES:
-        isolated = indexed.get((mode, MarginMode.ISOLATED))
-        cross = indexed.get((mode, MarginMode.CROSS))
-        if isolated is None or cross is None:
-            continue
-        if (
-            isolated.trades == cross.trades
-            and abs(isolated.net_pnl - cross.net_pnl) < 0.0001
-        ):
-            findings.append(
-                f'`{mode.value}` 的 ISOLATED 与 CROSS 结果相同，'
-                '说明当前失败不是由保证金模式差异造成。'
-            )
     return findings or ['没有足够的跨模式数据可比较。']
 
 

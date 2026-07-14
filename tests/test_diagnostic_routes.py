@@ -105,8 +105,8 @@ def test_diagnostic_job_reports_progress_and_completion(
 
     def fake_validation(**kwargs: Any) -> list[Any]:
         kwargs['progress'](
-            completed=3,
-            total=6,
+            completed=2,
+            total=3,
             mode='RSI_REVERSAL',
             margin_mode='ISOLATED',
         )
@@ -126,7 +126,7 @@ def test_diagnostic_job_reports_progress_and_completion(
     job = routes._diagnostic_jobs[job_id]
     assert job['success'] is True
     assert job['state'] == 'completed'
-    assert job['completed_count'] == 6
+    assert job['completed_count'] == 3
     assert job['stage'] == '完成'
 
 

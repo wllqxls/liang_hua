@@ -300,7 +300,7 @@
                     <section class="panel diagnostic-controls">
                         <div class="panel-title-row">
                             <h2>诊断设置</h2>
-                            <span class="diagnostic-contract">6 组组合 · 12 个 30 天窗口 · 1 个全年窗口</span>
+                            <span class="diagnostic-contract">3 个策略 · 逐仓基准 · 12 个 30 天窗口 · 1 个全年窗口</span>
                         </div>
                         <div class="diagnostic-action-row">
                             <div class="form-group compact">
@@ -323,7 +323,7 @@
                         </div>
                         <div id="diagnostic-error" class="error-msg hidden" role="alert" aria-live="assertive"></div>
                         <div id="diagnostic-progress-wrap" class="diagnostic-progress-wrap hidden">
-                            <progress id="diagnostic-progress" max="6" value="0"></progress>
+                            <progress id="diagnostic-progress" max="3" value="0"></progress>
                             <span id="diagnostic-status" class="status-text" aria-live="polite"></span>
                         </div>
                     </section>
@@ -344,7 +344,7 @@
                             </div>
                             <div class="diagnostic-kpis">
                                 <div class="diagnostic-kpi">
-                                    <span class="metric-label">通过组合</span>
+                                    <span class="metric-label">通过策略</span>
                                     <strong id="diagnostic-passed">--</strong>
                                 </div>
                                 <div class="diagnostic-kpi">
@@ -356,7 +356,7 @@
                                     <strong id="diagnostic-best-net-pnl">--</strong>
                                 </div>
                                 <div class="diagnostic-kpi">
-                                    <span class="metric-label">总组合</span>
+                                    <span class="metric-label">策略总数</span>
                                     <strong id="diagnostic-total">--</strong>
                                 </div>
                             </div>
@@ -374,7 +374,6 @@
                                     <thead>
                                         <tr>
                                             <th>信号模式</th>
-                                            <th>保证金</th>
                                             <th>状态</th>
                                             <th>全年收益%</th>
                                             <th>最大回撤%</th>
@@ -400,6 +399,6 @@
         </div>
     </div>
 
-    <script src="/static/js/backtest.js?v=diagnostics-page-1"></script>
+    <script src="/static/js/backtest.js?v=diagnostics-page-3"></script>
 </body>
 </html>
