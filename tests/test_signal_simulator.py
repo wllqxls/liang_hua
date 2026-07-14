@@ -751,6 +751,41 @@ def test_pending_and_position_block_duplicate_dispatch_and_positions() -> None:
     assert result.maximum_concurrent_positions == 1
 
 
+def test_pullback_candidate_uses_its_state_machine_and_emits_one_trade() -> None:
+    event = _snapshot(
+        '2026-01-01 00:05',
+        open_price=97,
+        high=98,
+        low=94,
+        close=96,
+    )
+    confirmation = _snapshot(
+        '2026-01-01 00:10',
+        open_price=95,
+        high=98,
+        low=95,
+        close=97,
+    )
+    final = _snapshot('2026-01-01 00:15')
+
+    result = SignalSimulator().run(
+        _series(event, confirmation, final),
+        mode=SignalMode.PULLBACK_CONFIRMATION,
+        cash=100,
+        opening_amount=10,
+        leverage=5,
+        margin_mode=MarginMode.ISOLATED,
+        taker_fee=0,
+        slippage_rate=0,
+        funding_rate=0,
+        maintenance_margin_rate=0.005,
+    )
+
+    assert len(result.trades) == 1
+    assert result.trades[0].strategy == 'PULLBACK_CONFIRMATION'
+    assert result.trades[0].signal_time == confirmation.closed_at
+
+
 def test_empty_input_returns_empty_result() -> None:
     result = _run(
         pd.Series(dtype=object, index=pd.DatetimeIndex([], tz='UTC')),

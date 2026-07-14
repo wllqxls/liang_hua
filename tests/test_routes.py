@@ -20,6 +20,17 @@ def test_backtest_api_rejects_legacy_strategy_contract() -> None:
     assert response.status_code == 422
 
 
+def test_backtest_api_rejects_research_only_mode() -> None:
+    client = TestClient(app)
+
+    response = client.post(
+        '/api/backtest',
+        json={'mode': 'PULLBACK_CONFIRMATION'},
+    )
+
+    assert response.status_code == 422
+
+
 def test_backtest_api_returns_engine_result(monkeypatch: Any) -> None:
     seen_data_dirs: list[Path] = []
 

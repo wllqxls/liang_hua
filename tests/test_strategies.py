@@ -9,6 +9,7 @@ from src.strategies.risk import (
     strong_context_trend_allows_side,
 )
 from src.strategies.signal_models import (
+    ACTIVE_SIGNAL_MODES,
     DEFAULT_SIGNAL_PARAMETERS,
     MarginMode,
     SignalMode,
@@ -68,7 +69,7 @@ def test_api_schema_exposes_only_stable_signal_modes() -> None:
 def test_optimizer_candidates_cover_only_stable_signal_modes() -> None:
     candidates = build_stage_one_candidates(
         entry_timeframes=['5m'],
-        modes=list(SignalMode),
+        modes=list(ACTIVE_SIGNAL_MODES),
         margin_mode=MarginMode.ISOLATED,
         current_leverage=5,
         seed_key='stable-modes',
@@ -84,7 +85,7 @@ def test_optimizer_candidates_cover_only_stable_signal_modes() -> None:
 def test_optimizer_candidates_include_non_default_signal_parameters() -> None:
     candidates = build_stage_one_candidates(
         entry_timeframes=['5m'],
-        modes=list(SignalMode),
+        modes=list(ACTIVE_SIGNAL_MODES),
         margin_mode=MarginMode.ISOLATED,
         current_leverage=5,
         seed_key='signal-parameters',

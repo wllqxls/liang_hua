@@ -7,6 +7,7 @@ from typing import Literal, cast
 import pandas as pd
 
 from src.strategies.signal_dispatcher import dispatch_signal
+from src.strategies.pullback_confirmation import PullbackConfirmationMachine
 from src.strategies.signal_models import (
     DEFAULT_SIGNAL_PARAMETERS,
     MarginMode,
@@ -164,6 +165,11 @@ class SignalSimulator:
         if snapshots.empty:
             return SimulationResult((), pd.Series(dtype=float, name='equity'), 0)
 
+        pullback_machine = (
+            PullbackConfirmationMachine(parameters=self._signal_parameters)
+            if mode is SignalMode.PULLBACK_CONFIRMATION
+            else None
+        )
         account_cash = float(cash)
         pending: Signal | None = None
         position: TradePlan | None = None
@@ -379,7 +385,11 @@ class SignalSimulator:
                 break
 
             if position is None and pending is None:
-                pending = self._dispatch(snapshot, mode)
+                pending = self._dispatch(
+                    snapshot,
+                    mode,
+                    pullback_machine=pullback_machine,
+                )
 
         if position is not None:
             final_snapshot = cast(MarketSnapshot, snapshots.iloc[-1])
@@ -409,7 +419,15 @@ class SignalSimulator:
         )
         return SimulationResult(tuple(trades), equity_curve, maximum_concurrent_positions)
 
-    def _dispatch(self, snapshot: MarketSnapshot, mode: SignalMode) -> Signal | None:
+    def _dispatch(
+        self,
+        snapshot: MarketSnapshot,
+        mode: SignalMode,
+        *,
+        pullback_machine: PullbackConfirmationMachine | None = None,
+    ) -> Signal | None:
+        if pullback_machine is not None:
+            return pullback_machine.evaluate(snapshot)
         if self._signal_parameters == DEFAULT_SIGNAL_PARAMETERS:
             return self._dispatcher(snapshot, mode)
         return self._dispatcher(

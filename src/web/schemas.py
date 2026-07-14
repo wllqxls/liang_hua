@@ -9,7 +9,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.strategies.signal_models import MarginMode, SignalMode, SignalParameters
+from src.strategies.signal_models import (
+    ActiveSignalMode,
+    MarginMode,
+    SignalMode,
+    SignalParameters,
+)
 
 
 class BacktestRequest(BaseModel):
@@ -25,7 +30,10 @@ class BacktestRequest(BaseModel):
         le=2100,
         description="本地数据年份",
     )
-    mode: SignalMode = Field(default=SignalMode.KEY_LEVEL, description="信号模式")
+    mode: ActiveSignalMode = Field(
+        default=ActiveSignalMode.KEY_LEVEL,
+        description="信号模式",
+    )
     backtest_days: int = Field(default=30, ge=1, le=3650, description="回测天数")
     cash: float = Field(default=100, ge=10, description="初始资金")
     opening_amount: float = Field(default=10, ge=0.1, description="开仓金额")
@@ -36,7 +44,6 @@ class BacktestRequest(BaseModel):
     slippage_rate: float = Field(default=0.0002, ge=0, le=0.1, description="滑点率")
     funding_rate: float = Field(default=0.0001, ge=0, le=0.1, description="8 小时资金费率")
     maintenance_margin_rate: float = Field(default=0.005, ge=0, le=0.1, description="维持保证金率")
-
 
 class DataFetchRequest(BaseModel):
     """历史数据拉取请求参数。"""

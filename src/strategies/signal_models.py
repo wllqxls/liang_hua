@@ -11,6 +11,25 @@ class SignalMode(StrEnum):
     KEY_LEVEL = 'KEY_LEVEL'
     RSI_REVERSAL = 'RSI_REVERSAL'
     KEY_LEVEL_RSI = 'KEY_LEVEL_RSI'
+    PULLBACK_CONFIRMATION = 'PULLBACK_CONFIRMATION'
+
+
+class ActiveSignalMode(StrEnum):
+    KEY_LEVEL = 'KEY_LEVEL'
+    RSI_REVERSAL = 'RSI_REVERSAL'
+    KEY_LEVEL_RSI = 'KEY_LEVEL_RSI'
+
+
+ACTIVE_SIGNAL_MODES = (
+    SignalMode.KEY_LEVEL,
+    SignalMode.RSI_REVERSAL,
+    SignalMode.KEY_LEVEL_RSI,
+)
+
+
+class PullbackFilterPreset(StrEnum):
+    OFF = 'OFF'
+    ALIGN = 'ALIGN'
 
 
 class MarginMode(StrEnum):
@@ -32,6 +51,12 @@ class SignalParameters:
     rsi_sell_threshold: float = 75.0
     rsi_stop_atr_multiple: float = 0.6
     rsi_target_atr_multiple: float = 1.2
+    pullback_stop_atr_multiple: float = 0.8
+    pullback_target_atr_multiple: float = 1.5
+    pullback_confirmation_bars: int = 3
+    pullback_invalidation_atr_multiple: float = 0.8
+    pullback_reset_atr_multiple: float = 1.0
+    pullback_filter_preset: PullbackFilterPreset = PullbackFilterPreset.OFF
 
 
 DEFAULT_SIGNAL_PARAMETERS = SignalParameters()

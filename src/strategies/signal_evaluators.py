@@ -33,7 +33,7 @@ def _has_valid_inputs(snapshot: MarketSnapshot) -> bool:
         return False
 
 
-def _signal(
+def build_signal(
     snapshot: MarketSnapshot,
     mode: SignalMode,
     *,
@@ -82,7 +82,7 @@ def evaluate_rsi_reversal(
         and snapshot.low <= snapshot.bollinger_lower
         and snapshot.close > snapshot.bollinger_lower
     ):
-        return _signal(
+        return build_signal(
             snapshot,
             mode,
             strategy='RSI_REVERSAL',
@@ -98,7 +98,7 @@ def evaluate_rsi_reversal(
         and snapshot.high >= snapshot.bollinger_upper
         and snapshot.close < snapshot.bollinger_upper
     ):
-        return _signal(
+        return build_signal(
             snapshot,
             mode,
             strategy='RSI_REVERSAL',
@@ -125,7 +125,7 @@ def evaluate_key_level(
         and snapshot.low < snapshot.previous_low_20
         and snapshot.close > snapshot.previous_low_20
     ):
-        return _signal(
+        return build_signal(
             snapshot,
             mode,
             strategy='KEY_LEVEL',
@@ -140,7 +140,7 @@ def evaluate_key_level(
         and snapshot.high > snapshot.previous_high_20
         and snapshot.close < snapshot.previous_high_20
     ):
-        return _signal(
+        return build_signal(
             snapshot,
             mode,
             strategy='KEY_LEVEL',

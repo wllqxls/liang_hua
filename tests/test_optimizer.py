@@ -8,7 +8,12 @@ from src.backtest.optimizer import (
     build_stage_one_candidates,
     build_stage_two_candidates,
 )
-from src.strategies.signal_models import DEFAULT_SIGNAL_PARAMETERS, MarginMode, SignalMode
+from src.strategies.signal_models import (
+    ACTIVE_SIGNAL_MODES,
+    DEFAULT_SIGNAL_PARAMETERS,
+    MarginMode,
+    SignalMode,
+)
 
 
 def test_available_entry_timeframes_require_entry_1h_and_4h_files(tmp_path) -> None:
@@ -24,7 +29,7 @@ def test_available_entry_timeframes_require_entry_1h_and_4h_files(tmp_path) -> N
 def test_stage_one_is_deterministic_and_covers_modes_by_available_timeframe() -> None:
     kwargs = {
         'entry_timeframes': ['5m', '15m'],
-        'modes': list(SignalMode),
+        'modes': list(ACTIVE_SIGNAL_MODES),
         'margin_mode': MarginMode.CROSS,
         'current_leverage': 7,
         'seed_key': 'BTC/USDT|CROSS|fees',
@@ -36,7 +41,7 @@ def test_stage_one_is_deterministic_and_covers_modes_by_available_timeframe() ->
     assert first == second
     assert len(first) == 6 * len(SIGNAL_PARAMETER_OPTIONS)
     assert {(item.mode, item.timeframe) for item in first} == {
-        (mode, timeframe) for mode in SignalMode for timeframe in ['5m', '15m']
+        (mode, timeframe) for mode in ACTIVE_SIGNAL_MODES for timeframe in ['5m', '15m']
     }
     assert {item.leverage for item in first} == {7.0}
     assert {item.margin_mode for item in first} == {MarginMode.CROSS}

@@ -35,7 +35,7 @@ from src.backtest.optimizer import (
     build_stage_two_candidates,
 )
 from src.data.yearly import fetch_symbol_year, inspect_year_data
-from src.strategies.signal_models import SignalMode
+from src.strategies.signal_models import ACTIVE_SIGNAL_MODES, SignalMode
 from src.web.schemas import (
     BacktestRequest,
     BacktestResponse,
@@ -98,12 +98,12 @@ VALIDATION_POOL_SIZE = 10
 RANDOM_VALIDATION_WINDOWS = 2
 SEARCH_SOFT_LIMIT_SECONDS = 480.0
 SEARCH_HARD_LIMIT_SECONDS = 600.0
-MAX_STAGE_ONE_CANDIDATES = len(SignalMode) * 2 * len(SIGNAL_PARAMETER_OPTIONS)
+MAX_STAGE_ONE_CANDIDATES = len(ACTIVE_SIGNAL_MODES) * 2 * len(SIGNAL_PARAMETER_OPTIONS)
 MAX_STAGE_TWO_CANDIDATES = min(STAGE_TWO_BUDGET, MAX_STAGE_ONE_CANDIDATES * 2)
 SEARCH_TOTAL_BUDGET = MAX_STAGE_ONE_CANDIDATES + MAX_STAGE_TWO_CANDIDATES + VALIDATION_BUDGET
 MAX_STORED_OPTIMIZATION_JOBS = 20
 MAX_STORED_DIAGNOSTIC_JOBS = 10
-DIAGNOSTIC_TOTAL_COUNT = len(SignalMode)
+DIAGNOSTIC_TOTAL_COUNT = len(ACTIVE_SIGNAL_MODES)
 DIAGNOSTICS_JSON_PATH = PROJECT_ROOT / 'results' / 'strategy-diagnostics.json'
 DIAGNOSTICS_MARKDOWN_PATH = PROJECT_ROOT / 'docs' / 'strategy-diagnostics.md'
 VALIDATION_MARKDOWN_PATH = PROJECT_ROOT / 'docs' / 'strategy-validation.md'
@@ -177,7 +177,7 @@ async def run_backtest(req: BacktestRequest) -> BacktestResponse:
         result = engine.run_signal_mode(
             symbol=req.symbol,
             timeframe=req.timeframe,
-            mode=req.mode,
+            mode=SignalMode(req.mode.value),
             backtest_days=req.backtest_days,
             cash=req.cash,
             opening_amount=req.opening_amount,
@@ -561,7 +561,7 @@ def _progressive_optimize(
     ])
     stage_one = build_stage_one_candidates(
         entry_timeframes=entry_timeframes,
-        modes=list(SignalMode),
+        modes=list(ACTIVE_SIGNAL_MODES),
         margin_mode=req.margin_mode,
         current_leverage=req.leverage,
         seed_key=seed_key,

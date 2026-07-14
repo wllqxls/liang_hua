@@ -8,6 +8,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from src.strategies.signal_models import (
+    ACTIVE_SIGNAL_MODES,
     DEFAULT_SIGNAL_PARAMETERS,
     MarginMode,
     SignalMode,
@@ -90,6 +91,8 @@ def build_stage_one_candidates(
     budget: int = STAGE_ONE_BUDGET,
 ) -> list[SearchCandidate]:
     """Cover every approved mode/timeframe stratum at the requested leverage."""
+    if any(mode not in ACTIVE_SIGNAL_MODES for mode in modes):
+        raise ValueError('research-only modes cannot be optimized')
     leverage = float(current_leverage)
     candidates = [
         SearchCandidate(mode, timeframe, leverage, margin_mode, signal_parameters)

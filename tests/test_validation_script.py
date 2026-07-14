@@ -250,7 +250,7 @@ def test_run_validation_matrix_covers_each_mode_once_and_writes_markdown(
 
     assert set(grouped) == {
         (mode, MarginMode.ISOLATED)
-        for mode in SignalMode
+        for mode in validate_strategies.MODES
     }
     for group_calls in grouped.values():
         window_calls = [call for call in group_calls if call['backtest_days'] == 30]
