@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from src.strategies.market_context import build_market_snapshots
-from src.strategies.indicators import atr_wilder
+from src.strategies.indicators import atr_wilder, bollinger_bands
 
 
 FIXED_ROUND_TRIP_COST = 2 * (0.0005 + 0.0002)
@@ -53,6 +53,21 @@ _TREND_SUMMARY_COLUMNS = (
     'horizon',
     'samples',
     'conversion_rate_pct',
+    'average_gross_return',
+    'average_net_return',
+    'profit_factor',
+)
+HOURLY_BODY_THRESHOLD = 0.005
+HOURLY_TWO_BAR_MOVE_THRESHOLD = 0.015
+HOURLY_REVERSAL_ATR_THRESHOLD = 0.5
+_HOURLY_REVERSION_HORIZONS = {
+    '1h': pd.Timedelta(hours=1),
+    '2h': pd.Timedelta(hours=2),
+}
+_HOURLY_REVERSION_SUMMARY_COLUMNS = (
+    'horizon',
+    'samples',
+    'reversal_rate_pct',
     'average_gross_return',
     'average_net_return',
     'profit_factor',
@@ -208,6 +223,45 @@ def summarize_trend_inertia_horizons(events: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=_TREND_SUMMARY_COLUMNS)
 
 
+def build_hourly_extreme_reversion_dataset(hour: pd.DataFrame) -> pd.DataFrame:
+    """Build 1h extreme events and fixed one/two-hour contrarian labels."""
+    validated = _validated_absorption_entry(hour)
+    features = _hourly_extreme_features(validated)
+    events = _extract_hourly_extreme_events(features)
+    return _add_hourly_reversion_labels(
+        events,
+        hourly_close=_closed_price(validated['Close'], pd.Timedelta(hours=1)),
+    )
+
+
+def summarize_hourly_extreme_reversion(events: pd.DataFrame) -> pd.DataFrame:
+    """Summarize significant B reversals and costed contrarian returns."""
+    rows: list[dict[str, float | int | str]] = []
+    for horizon in _HOURLY_REVERSION_HORIZONS:
+        reversal_column = f'reversed_{horizon}'
+        gross_column = f'forward_return_{horizon}'
+        net_column = f'forward_return_{horizon}_net'
+        required = (reversal_column, gross_column, net_column)
+        missing = [column for column in required if column not in events]
+        if missing:
+            raise ValueError(f'events is missing required columns: {", ".join(missing)}')
+        usable = events.dropna(subset=[gross_column, net_column])
+        if usable.empty:
+            continue
+        net_returns = usable[net_column]
+        rows.append(
+            {
+                'horizon': horizon,
+                'samples': len(usable),
+                'reversal_rate_pct': float(usable[reversal_column].mean() * 100),
+                'average_gross_return': float(usable[gross_column].mean()),
+                'average_net_return': float(net_returns.mean()),
+                'profit_factor': _absorption_profit_factor(net_returns),
+            }
+        )
+    return pd.DataFrame(rows, columns=_HOURLY_REVERSION_SUMMARY_COLUMNS)
+
+
 def _validated_close_frame(frame: pd.DataFrame, *, name: str) -> pd.Series:
     if 'Close' not in frame.columns:
         raise ValueError(f'{name} is missing required column: Close')
@@ -327,6 +381,127 @@ def _add_trend_inertia_labels(
         gross = result['event_direction'] * (future_close / result['close'] - 1)
         result[f'forward_return_{horizon}'] = gross
         result[f'forward_return_{horizon}_net'] = gross - FIXED_ROUND_TRIP_COST
+    return result
+
+
+def _hourly_extreme_features(hour: pd.DataFrame) -> pd.DataFrame:
+    body_return = hour['Close'] / hour['Open'] - 1
+    two_bar_move = hour['Close'] / hour['Open'].shift(1) - 1
+    middle, upper, lower = bollinger_bands(hour['Close'], window=20, deviations=2)
+    atr = atr_wilder(hour['High'], hour['Low'], hour['Close'], 14)
+    two_up = (
+        (body_return >= HOURLY_BODY_THRESHOLD)
+        & (body_return.shift(1) >= HOURLY_BODY_THRESHOLD)
+        & (two_bar_move >= HOURLY_TWO_BAR_MOVE_THRESHOLD)
+    )
+    two_down = (
+        (body_return <= -HOURLY_BODY_THRESHOLD)
+        & (body_return.shift(1) <= -HOURLY_BODY_THRESHOLD)
+        & (two_bar_move <= -HOURLY_TWO_BAR_MOVE_THRESHOLD)
+    )
+    band_up = (
+        (body_return >= HOURLY_BODY_THRESHOLD)
+        & (hour['Close'] > upper)
+    )
+    band_down = (
+        (body_return <= -HOURLY_BODY_THRESHOLD)
+        & (hour['Close'] < lower)
+    )
+    candidate_side = np.select(
+        [two_up | band_up, two_down | band_down],
+        ['SELL', 'BUY'],
+        default='',
+    )
+    trigger = np.select(
+        [
+            (two_up & band_up) | (two_down & band_down),
+            two_up | two_down,
+            band_up | band_down,
+        ],
+        ['BOTH', 'TWO_BAR', 'BOLLINGER'],
+        default='',
+    )
+    return pd.DataFrame(
+        {
+            'close': hour['Close'].to_numpy(),
+            'atr': atr.to_numpy(),
+            'body_pct': body_return.abs().to_numpy(),
+            'two_bar_move_pct': two_bar_move.abs().to_numpy(),
+            'bb_middle': middle.to_numpy(),
+            'bb_upper': upper.to_numpy(),
+            'bb_lower': lower.to_numpy(),
+            'candidate_side': candidate_side,
+            'trigger': trigger,
+        },
+        index=hour.index + pd.Timedelta(hours=1),
+    )
+
+
+def _extract_hourly_extreme_events(features: pd.DataFrame) -> pd.DataFrame:
+    event_rows: list[dict[str, object]] = []
+    active_side = ''
+    rows = features.to_dict(orient='records')
+    event_times = list(features.index)
+    for position, row in enumerate(rows):
+        candidate_side = str(row['candidate_side'])
+        if not candidate_side:
+            active_side = ''
+            continue
+        if candidate_side == active_side:
+            continue
+        active_side = candidate_side
+        event_rows.append(
+            {
+                'event_time': event_times[position],
+                'side': candidate_side,
+                'trigger': row['trigger'],
+                'close': row['close'],
+                'atr': row['atr'],
+                'body_pct': row['body_pct'],
+                'two_bar_move_pct': row['two_bar_move_pct'],
+                'bb_middle': row['bb_middle'],
+                'bb_upper': row['bb_upper'],
+                'bb_lower': row['bb_lower'],
+                'event_direction': 1.0 if candidate_side == 'BUY' else -1.0,
+            }
+        )
+    columns = [
+        'side',
+        'trigger',
+        'close',
+        'atr',
+        'body_pct',
+        'two_bar_move_pct',
+        'bb_middle',
+        'bb_upper',
+        'bb_lower',
+        'event_direction',
+    ]
+    if not event_rows:
+        return pd.DataFrame(columns=columns, index=pd.DatetimeIndex([], tz='UTC'))
+    return pd.DataFrame(event_rows).set_index('event_time').loc[:, columns]
+
+
+def _add_hourly_reversion_labels(
+    events: pd.DataFrame,
+    *,
+    hourly_close: pd.Series,
+) -> pd.DataFrame:
+    result = events.copy()
+    reversal_threshold = HOURLY_REVERSAL_ATR_THRESHOLD * result['atr'] / result['close']
+    reached_reversal = pd.Series(False, index=result.index, dtype=bool)
+    for horizon, duration in _HOURLY_REVERSION_HORIZONS.items():
+        target_times = result.index + duration
+        future_close = pd.Series(
+            hourly_close.reindex(target_times).to_numpy(),
+            index=result.index,
+            dtype=float,
+        )
+        gross = result['event_direction'] * (future_close / result['close'] - 1)
+        result[f'forward_return_{horizon}'] = gross
+        result[f'forward_return_{horizon}_net'] = gross - FIXED_ROUND_TRIP_COST
+        reached_reversal = reached_reversal | (gross >= reversal_threshold)
+        result[f'reversed_{horizon}'] = reached_reversal
     return result
 
 
