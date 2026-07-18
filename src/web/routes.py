@@ -24,6 +24,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from src.backtest.engine import BacktestEngine
+from src.backtest.manual_replay import ManualReplay
+from src.backtest.semi_auto_optimizer import build_semi_auto_whitelist, write_semi_auto_whitelist
 from src.backtest.optimizer import (
     STAGE_ONE_BUDGET,
     STAGE_TWO_BUDGET,
@@ -55,6 +57,9 @@ from src.web.schemas import (
     OptimizationJobCreated,
     OptimizationJobStatus,
     OptimizationResponse,
+    ManualDecisionRequest,
+    ManualReplayRequest,
+    SemiAutoWhitelistRequest,
     OrderFlowFetchRequest,
     OrderFlowJobCreated,
     OrderFlowJobStatus,
@@ -124,6 +129,10 @@ _diagnostic_jobs: OrderedDict[str, dict] = OrderedDict()
 _diagnostic_jobs_lock = threading.Lock()
 _order_flow_jobs: OrderedDict[str, dict] = OrderedDict()
 _order_flow_jobs_lock = threading.Lock()
+_manual_replays: OrderedDict[str, ManualReplay] = OrderedDict()
+_manual_replays_lock = threading.Lock()
+MANUAL_REPLAY_RESULTS_ROOT = PROJECT_ROOT / 'results' / 'manual_replays'
+MAX_STORED_MANUAL_REPLAYS = 10
 
 
 def _request_data_dir(year: int) -> Path:
@@ -176,7 +185,82 @@ async def index(request: Request) -> HTMLResponse:
         "timeframes": TIMEFRAMES,
         "modes": MODE_OPTIONS,
     }
-    return templates.TemplateResponse(request, "backtest.html", context)
+    return templates.TemplateResponse(request, 'manual_replay.html', context)
+
+
+@router.post('/api/manual-replays')
+def create_manual_replay(req: ManualReplayRequest) -> dict[str, object]:
+    """Create a server-side replay and reveal only its closed-bar prefix."""
+    if req.symbol not in SYMBOLS:
+        raise HTTPException(status_code=422, detail='不支持的交易对象')
+    if req.opening_amount > req.cash:
+        raise HTTPException(status_code=422, detail='开仓金额不能大于账户资金')
+    session_id = uuid.uuid4().hex
+    try:
+        replay = ManualReplay.create(
+            session_id=session_id,
+            data_dir=_request_data_dir(req.data_year),
+            symbol=req.symbol,
+            timeframe=req.timeframe,
+            year=req.data_year,
+            mode=SignalMode(req.mode.value),
+            cash=req.cash,
+            opening_amount=req.opening_amount,
+            leverage=req.leverage,
+            taker_fee=req.taker_fee,
+            slippage_rate=req.slippage_rate,
+        )
+        replay.advance(max_bars=200)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail='缺少本地 5m/15m、1h 或 4h 数据') from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail='回放参数或本地数据无效') from None
+    with _manual_replays_lock:
+        _manual_replays[session_id] = replay
+        while len(_manual_replays) > MAX_STORED_MANUAL_REPLAYS:
+            _manual_replays.popitem(last=False)
+    return {'success': True, **replay.visible_payload()}
+
+
+@router.post('/api/manual-replays/{session_id}/advance')
+def advance_manual_replay(session_id: str) -> dict[str, object]:
+    """Advance until the next closed-bar candidate signal or finish."""
+    with _manual_replays_lock:
+        replay = _manual_replays.get(session_id)
+        if replay is None:
+            raise HTTPException(status_code=404, detail='回放会话不存在')
+        replay.advance(max_bars=40)
+        replay.persist(MANUAL_REPLAY_RESULTS_ROOT)
+        return {'success': True, **replay.visible_payload()}
+
+
+@router.post('/api/manual-replays/{session_id}/decision')
+def decide_manual_replay(session_id: str, req: ManualDecisionRequest) -> dict[str, object]:
+    """Store one human decision and resolve accepted positions conservatively."""
+    with _manual_replays_lock:
+        replay = _manual_replays.get(session_id)
+        if replay is None:
+            raise HTTPException(status_code=404, detail='回放会话不存在')
+        try:
+            replay.decide(req.decision)
+        except ValueError:
+            raise HTTPException(status_code=409, detail='当前回放不等待人工决策') from None
+        replay.persist(MANUAL_REPLAY_RESULTS_ROOT)
+        return {'success': True, **replay.visible_payload()}
+
+
+@router.post('/api/semi-auto-whitelist')
+def create_semi_auto_whitelist(req: SemiAutoWhitelistRequest) -> dict[str, object]:
+    """Generate the local 2024/2025 human-signal whitelist CSV."""
+    if req.symbol not in SYMBOLS:
+        raise HTTPException(status_code=422, detail='不支持的交易对象')
+    try:
+        items = build_semi_auto_whitelist(DATA_ROOT, symbol=req.symbol)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail='白名单需要该币种 2024/2025 的 5m、15m、1h、4h 本地数据') from None
+    destination = PROJECT_ROOT / 'results' / 'semi_auto_factor_whitelist.csv'
+    write_semi_auto_whitelist(items, destination)
+    return {'success': True, 'items': [asdict(item) for item in items], 'path': str(destination)}
 
 
 @router.post("/api/backtest", response_model=BacktestResponse)

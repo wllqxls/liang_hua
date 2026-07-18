@@ -118,7 +118,8 @@ def test_index_renders_signal_mode_names() -> None:
     assert '>RSI 反转</option>' in html
     assert '<option value="KEY_LEVEL_RSI"' in html
     assert '>关键位 + RSI 反转</option>' in html
-    assert '<option value="ISOLATED" selected>逐仓</option>' in html
+    assert 'id="signal-timeframe"' in html
+    assert '半自动交易回放' in html
     assert '<select id="strategy">' not in html
 
 

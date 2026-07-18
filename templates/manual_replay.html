@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>半自动交易回放</title>
+    <link rel="stylesheet" href="/static/css/manual_replay.css">
+    <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+    <main class="app-shell">
+        <header class="app-header">
+            <div>
+                <h1>半自动交易回放</h1>
+                <p>机器筛选候选信号；是否进场由你决定。仅使用本地历史数据。</p>
+            </div>
+            <span id="replay-state" class="state-badge">未开始</span>
+        </header>
+
+        <section class="panel controls">
+            <label>币种
+                <select id="symbol">{% for s in symbols %}<option value="{{ s }}" {% if s == 'BTC/USDT' %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+            </label>
+            <label>年份 <input id="data-year" type="number" min="2017" max="2100" value="2025"></label>
+            <label>信号周期
+                <select id="signal-timeframe"><option value="5m">5m</option><option value="15m">15m</option></select>
+            </label>
+            <label>图表周期
+                <select id="chart-timeframe"><option value="5m">5m</option><option value="15m">15m</option><option value="1h">1h</option></select>
+            </label>
+            <label>候选逻辑
+                <select id="mode">{% for mode in modes %}<option value="{{ mode.value }}">{{ mode.label }}</option>{% endfor %}</select>
+            </label>
+            <label>初始资金 <input id="cash" type="number" min="10" value="100"></label>
+            <label>单笔保证金 <input id="opening-amount" type="number" min="1" value="10"></label>
+            <label>杠杆 <input id="leverage" type="number" min="1" max="150" value="1"></label>
+            <button id="start-btn" class="primary" type="button">开始回放</button>
+            <button id="whitelist-btn" type="button">生成半自动因子白名单</button>
+        </section>
+
+        <section class="panel chart-panel">
+            <div class="chart-toolbar"><strong id="chart-title">等待本地回放</strong><span id="cursor-time"></span></div>
+            <div class="chart-wrap"><div id="candle-chart" aria-label="本地 K 线回放图"></div><div id="chart-tooltip" class="chart-tooltip hidden"></div></div>
+            <p class="attribution">图表由 <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">TradingView</a> Lightweight Charts 提供。</p>
+        </section>
+
+        <section id="decision-panel" class="panel decision-panel hidden" aria-live="assertive">
+            <div>
+                <span class="eyebrow">回放已暂停</span>
+                <h2 id="signal-summary">候选信号</h2>
+                <p id="signal-reason"></p>
+                <p id="signal-levels" class="levels"></p>
+            </div>
+            <div class="decision-actions">
+                <button class="short" data-decision="SELL" type="button">🔴 开空</button>
+                <button class="long" data-decision="BUY" type="button">🟢 开多</button>
+                <button class="skip" data-decision="SKIP" type="button">⏹️ 放弃</button>
+            </div>
+        </section>
+
+        <section class="panel result-panel">
+            <h2>人工筛选后的权益曲线</h2>
+            <div id="equity-chart"></div>
+            <table>
+                <thead><tr><th>方向</th><th>进场</th><th>出场</th><th>原因</th><th>盈亏</th><th>权益</th></tr></thead>
+                <tbody id="trade-table"><tr><td colspan="6">尚未接受任何交易</td></tr></tbody>
+            </table>
+        </section>
+        <section class="panel">
+            <h2>半自动因子白名单</h2>
+            <p id="whitelist-status" class="levels">使用 2024 排序、2025 验证；只输出符合毛收益与样本规则的候选。</p>
+            <table><thead><tr><th>排名</th><th>逻辑</th><th>周期</th><th>2024 事件</th><th>2025 事件</th><th>2024 毛收益</th><th>2025 毛收益</th><th>辨识度</th></tr></thead><tbody id="whitelist-table"><tr><td colspan="8">尚未生成</td></tr></tbody></table>
+        </section>
+        <p id="error" class="error hidden"></p>
+    </main>
+    <script src="/static/js/manual_replay.js"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+:root { color-scheme: dark; --bg: #101621; --panel: #172131; --border: #2d4059; --text: #e9f0f8; --muted: #93a4b8; --green: #21c58b; --red: #f05d6f; --blue: #4b9cff; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: "Microsoft YaHei", system-ui, sans-serif; }
+.app-shell { max-width: 1500px; margin: 0 auto; padding: 24px; }
+.app-header, .chart-toolbar, .decision-panel { display: flex; justify-content: space-between; gap: 20px; align-items: center; }
+h1, h2, p { margin-top: 0; } .app-header p, .attribution, #cursor-time, .levels { color: var(--muted); }
+.panel { margin-top: 18px; padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+input, select, button { border-radius: 7px; border: 1px solid var(--border); padding: 9px 11px; font: inherit; color: var(--text); background: #0f1825; }
+button { cursor: pointer; font-weight: 700; } button:disabled { opacity: .55; cursor: wait; }
+.primary, .long { background: var(--green); color: #042216; border-color: var(--green); } .short { background: var(--red); border-color: var(--red); color: #31040b; } .skip { background: #42536b; }
+.state-badge { border-radius: 999px; padding: 7px 12px; background: #263b54; } .state-awaiting { background: #735c18; }
+.chart-wrap { position: relative; } #candle-chart { height: 540px; } #equity-chart { height: 220px; margin-bottom: 16px; }
+.chart-tooltip { position: absolute; z-index: 2; max-width: 270px; padding: 9px; border: 1px solid #b58f24; border-radius: 7px; background: #111b28; color: var(--text); font-size: 12px; pointer-events: none; }
+.hidden { display: none; } .decision-panel { border-color: #b58f24; background: #292517; }
+.decision-actions { display: flex; gap: 10px; flex-wrap: wrap; } .eyebrow { color: #f2c94c; font-size: 12px; font-weight: 700; }
+table { width: 100%; border-collapse: collapse; } th, td { text-align: left; padding: 9px; border-top: 1px solid var(--border); } th { color: var(--muted); }
+.error { color: #ff9fa9; } .attribution { font-size: 11px; margin: 8px 0 0; }
+@media (max-width: 700px) { .app-shell { padding: 12px; } .app-header, .decision-panel { align-items: start; flex-direction: column; } #candle-chart { height: 420px; } }

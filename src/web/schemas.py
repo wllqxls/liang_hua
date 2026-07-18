@@ -294,3 +294,35 @@ class DataFetchResponse(BaseModel):
     year: int
     items: list[DataStatus] = Field(default_factory=list)
     error: str | None = None
+
+
+class ManualReplayRequest(BaseModel):
+    """Create one server-side human decision replay."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    symbol: str = Field(default='BTC/USDT')
+    timeframe: Literal['5m', '15m'] = Field(default='5m')
+    data_year: int = Field(ge=2017, le=2100)
+    mode: ActiveSignalMode = Field(default=ActiveSignalMode.KEY_LEVEL)
+    cash: float = Field(default=100, gt=0)
+    opening_amount: float = Field(default=10, gt=0)
+    leverage: float = Field(default=1, ge=1, le=150)
+    taker_fee: float = Field(default=0.0005, ge=0, le=0.1)
+    slippage_rate: float = Field(default=0.0002, ge=0, le=0.1)
+
+
+class ManualDecisionRequest(BaseModel):
+    """One immutable decision for a paused replay signal."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    decision: Literal['BUY', 'SELL', 'SKIP']
+
+
+class SemiAutoWhitelistRequest(BaseModel):
+    """Request a local two-year human-signal whitelist."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    symbol: str = Field(default='BTC/USDT')
