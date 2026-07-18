@@ -143,6 +143,10 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert 'id="fetch-data-btn"' in html
     assert "shape: 'circle'" in script
     assert "shape: side === 'BUY' ? 'arrowUp' : 'arrowDown'" in script
+    assert 'id="taker-fee"' in html
+    assert 'id="slippage-rate"' in html
+    assert "taker_fee: number('taker-fee')" in script
+    assert "slippage_rate: number('slippage-rate')" in script
 
 
 def test_order_flow_status_returns_btc_and_eth(monkeypatch: Any) -> None:

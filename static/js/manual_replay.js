@@ -69,7 +69,7 @@ function chart(container) {
 }
 
 function number(id) { return Number(document.getElementById(id).value); }
-function payload() { return { symbol: document.getElementById('symbol').value, data_year: number('data-year'), timeframe: document.getElementById('signal-timeframe').value, mode: document.getElementById('mode').value, cash: number('cash'), opening_amount: number('opening-amount'), leverage: number('leverage'), taker_fee: 0.0005, slippage_rate: 0.0002 }; }
+function payload() { return { symbol: document.getElementById('symbol').value, data_year: number('data-year'), timeframe: document.getElementById('signal-timeframe').value, mode: document.getElementById('mode').value, cash: number('cash'), opening_amount: number('opening-amount'), leverage: number('leverage'), taker_fee: number('taker-fee'), slippage_rate: number('slippage-rate') }; }
 
 async function request(url, body) {
     const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });

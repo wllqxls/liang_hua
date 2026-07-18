@@ -22,6 +22,10 @@ button { cursor: pointer; font-weight: 700; } button:disabled { opacity: .55; cu
 .data-present { color: var(--green); }
 .data-missing { color: #ff9fa9; }
 .chart-title-group { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.advanced-options summary { cursor: pointer; font-weight: 700; }
+.advanced-grid { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: 14px; margin-top: 16px; }
+.field-note { color: var(--muted); font-size: 12px; line-height: 1.45; }
+.advanced-note { margin: 14px 0 0; color: var(--muted); font-size: 12px; }
 .chart-panel, .result-panel, .chart-wrap { min-width: 0; }
 .chart-wrap { position: relative; width: 100%; overflow: hidden; }
 #candle-chart { width: 100%; height: clamp(380px, 62vh, 620px); min-height: 380px; }
@@ -37,6 +41,7 @@ table { width: 100%; border-collapse: collapse; } th, td { text-align: left; pad
     .chart-toolbar { align-items: start; flex-direction: column; gap: 4px; }
     .controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .local-data-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .advanced-grid { grid-template-columns: 1fr; }
     .decision-actions { width: 100%; }
     #candle-chart { height: clamp(360px, 58vh, 480px); min-height: 360px; }
 }

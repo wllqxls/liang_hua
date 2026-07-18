@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from src.backtest.manual_replay import ManualReplay
 from src.strategies.signal_models import FilterLabel, MarketSnapshot, Signal, SignalMode
@@ -50,6 +51,26 @@ def test_manual_buy_uses_next_open_and_stop_first_conservative_exit() -> None:
     assert len(replay.trades) == 1
     assert replay.trades[0].exit_reason == 'STOP'
     assert replay.trades[0].fill_time == replay.snapshots.iloc[1].opened_at
+
+
+def test_manual_trade_applies_configured_taker_fee_and_slippage_on_both_sides() -> None:
+    replay = _replay()
+    replay.taker_fee = 0.001
+    replay.slippage_rate = 0.002
+    replay.state = 'AWAITING_DECISION'
+    replay.pending_signal = _signal(replay.snapshots.iloc[0])
+
+    replay.decide('BUY')
+
+    trade = replay.trades[0]
+    expected_fill = 100.0 * 1.002
+    expected_exit = (expected_fill - 1.0) * (1 - 0.002)
+    quantity = 10.0 / expected_fill
+    expected_pnl = quantity * (expected_exit - expected_fill) - 10.0 * 0.001 - quantity * expected_exit * 0.001
+    assert trade.fill_price == pytest.approx(expected_fill)
+    assert trade.exit_price == pytest.approx(expected_exit)
+    assert trade.pnl == pytest.approx(expected_pnl)
+    assert trade.equity == pytest.approx(100.0 + expected_pnl)
 
 
 def test_skip_does_not_create_trade() -> None:
