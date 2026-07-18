@@ -85,8 +85,36 @@
 
         <section class="panel chart-panel">
             <div class="chart-toolbar"><div class="chart-title-group"><strong id="chart-title">等待本地回放</strong><span id="replay-state" class="state-badge">未开始</span></div><span id="cursor-time"></span></div>
-            <div class="chart-wrap"><div id="candle-chart" aria-label="本地 K 线回放图"></div><div id="chart-tooltip" class="chart-tooltip hidden"></div></div>
-            <p class="attribution">图表由 <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">TradingView</a> Lightweight Charts 提供。</p>
+            <div class="chart-wrap">
+                <div id="candle-chart" aria-label="本地 K 线回放图"></div>
+                <svg id="chart-drawing-overlay" class="chart-drawing-overlay" aria-hidden="true"></svg>
+                <div id="chart-tooltip" class="chart-tooltip hidden"></div>
+                <div id="drawing-toolbar" class="drawing-toolbar hidden" role="toolbar" aria-label="画线工具">
+                    <div class="drawing-tools">
+                        <button type="button" data-draw-tool="select">选择</button>
+                        <button type="button" data-draw-tool="trend">趋势线</button>
+                        <button type="button" data-draw-tool="horizontal">水平线</button>
+                        <button type="button" data-draw-tool="ray">水平射线</button>
+                        <button type="button" data-draw-tool="vertical">垂直线</button>
+                        <button type="button" data-draw-tool="rectangle">矩形</button>
+                    </div>
+                    <div class="drawing-options">
+                        <label>颜色 <input id="draw-color" type="color" value="#f2c94c"></label>
+                        <label>粗细 <select id="draw-width"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option></select></label>
+                        <label>线型 <select id="draw-style"><option value="solid">实线</option><option value="dash">虚线</option><option value="dot">点线</option></select></label>
+                    </div>
+                    <div class="drawing-history">
+                        <button id="draw-undo" type="button">撤销</button>
+                        <button id="draw-delete" type="button">删除选中</button>
+                        <button id="draw-clear" type="button">清空当前图</button>
+                    </div>
+                    <p>画线时图表缩放暂时锁定；选择工具后可拖动线条或端点。Esc 取消，Delete 删除。</p>
+                </div>
+            </div>
+            <div class="chart-footer">
+                <p class="attribution">图表由 <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">TradingView</a> Lightweight Charts 提供。</p>
+                <button id="drawing-toggle" class="drawing-toggle" type="button" aria-expanded="false" aria-controls="drawing-toolbar">画图</button>
+            </div>
         </section>
 
         <section id="decision-panel" class="panel decision-panel hidden" aria-live="assertive">
@@ -100,6 +128,7 @@
                 <button class="short" data-decision="SELL" type="button">🔴 开空</button>
                 <button class="long" data-decision="BUY" type="button">🟢 开多</button>
                 <button class="skip" data-decision="SKIP" type="button">⏹️ 放弃</button>
+                <button id="continue-btn" class="continue hidden" type="button">▶ 继续</button>
             </div>
         </section>
 
@@ -120,6 +149,7 @@
         </section>
         <p id="error" class="error hidden"></p>
     </main>
+    <script src="/static/js/chart_drawings.js"></script>
     <script src="/static/js/manual_replay.js"></script>
 </body>
 </html>

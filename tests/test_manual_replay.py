@@ -51,6 +51,7 @@ def test_manual_buy_uses_next_open_and_stop_first_conservative_exit() -> None:
     assert len(replay.trades) == 1
     assert replay.trades[0].exit_reason == 'STOP'
     assert replay.trades[0].fill_time == replay.snapshots.iloc[1].opened_at
+    assert replay.state == 'AWAITING_CONTINUE'
 
 
 def test_manual_trade_applies_configured_taker_fee_and_slippage_on_both_sides() -> None:
@@ -85,6 +86,58 @@ def test_skip_does_not_create_trade() -> None:
     marker = replay.visible_payload()['signal_markers'][0]
     assert marker['time'] == int(_signal(replay.snapshots.iloc[0]).signal_time.timestamp()) - 300
     assert marker['summary'] == '候选做多'
+
+
+def test_open_position_advances_one_candle_at_a_time_then_waits_to_continue() -> None:
+    snapshots = pd.Series(
+        [
+            _snapshot(0),
+            _snapshot(1, high=100.5, low=99.5),
+            _snapshot(2, high=101.5, low=99.8),
+            _snapshot(3),
+        ],
+        index=pd.date_range('2025-01-01 00:05', periods=4, freq='5min', tz='UTC'),
+    )
+    replay = _replay()
+    replay.snapshots = snapshots
+    replay.state = 'AWAITING_DECISION'
+    replay.pending_signal = _signal(snapshots.iloc[0])
+
+    replay.decide('BUY')
+
+    assert replay.state == 'POSITION_OPEN'
+    assert replay.cursor == 1
+    assert not replay.trades
+    open_overlay = replay.visible_payload()['position_overlay']
+    assert open_overlay['status'] == 'OPEN'
+    assert open_overlay['entry_time'] == int(snapshots.iloc[1].opened_at.timestamp())
+    assert len(replay.visible_payload()['candles']) == 2
+
+    replay.step_position()
+
+    assert replay.cursor == 2
+    assert replay.state == 'AWAITING_CONTINUE'
+    assert replay.trades[0].exit_reason == 'TARGET'
+    closed_overlay = replay.visible_payload()['position_overlay']
+    assert closed_overlay['status'] == 'CLOSED'
+    assert closed_overlay['end_time'] == int(snapshots.iloc[2].opened_at.timestamp())
+    replay.advance(max_bars=40)
+    assert replay.cursor == 2
+    assert replay.state == 'AWAITING_CONTINUE'
+
+    replay.continue_after_exit()
+
+    assert replay.state == 'RUNNING'
+    assert replay.visible_payload()['position_overlay'] is None
+
+
+def test_position_step_and_continue_reject_wrong_states() -> None:
+    replay = _replay()
+
+    with pytest.raises(ValueError, match='open position'):
+        replay.step_position()
+    with pytest.raises(ValueError, match='waiting to continue'):
+        replay.continue_after_exit()
 
 
 def test_pending_signal_uses_chinese_reason_and_event_candle_open_time() -> None:

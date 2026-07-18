@@ -14,7 +14,13 @@ from src.strategies.signal_dispatcher import dispatch_signal
 from src.strategies.signal_models import MarginMode, Signal, SignalMode
 
 
-ReplayState = Literal['RUNNING', 'AWAITING_DECISION', 'FINISHED']
+ReplayState = Literal[
+    'RUNNING',
+    'AWAITING_DECISION',
+    'POSITION_OPEN',
+    'AWAITING_CONTINUE',
+    'FINISHED',
+]
 Decision = Literal['BUY', 'SELL', 'SKIP']
 SIGNAL_TIMEFRAME_SECONDS = {'5m': 5 * 60, '15m': 15 * 60}
 DISPLAY_REASONS = {
@@ -40,6 +46,19 @@ class ManualTrade:
     equity: float
 
 
+@dataclass(frozen=True, slots=True)
+class ActivePosition:
+    signal_time: pd.Timestamp
+    side: Literal['BUY', 'SELL']
+    entry_index: int
+    fill_time: pd.Timestamp
+    fill_price: float
+    stop_price: float
+    target_price: float
+    quantity: float
+    entry_fee: float
+
+
 @dataclass(slots=True)
 class ManualReplay:
     """A single replay that never exposes candles beyond its server cursor."""
@@ -59,6 +78,7 @@ class ManualReplay:
     cursor: int = 0
     state: ReplayState = 'RUNNING'
     pending_signal: Signal | None = None
+    active_position: ActivePosition | None = None
     decisions: list[dict[str, object]] = field(default_factory=list)
     trades: list[ManualTrade] = field(default_factory=list)
     equity_points: list[tuple[pd.Timestamp, float]] = field(default_factory=list)
@@ -147,7 +167,7 @@ class ManualReplay:
             self.state = 'FINISHED'
 
     def decide(self, decision: Decision) -> None:
-        """Record an immutable human decision and resolve accepted trades conservatively."""
+        """Record an immutable human decision and open accepted positions."""
         if self.state != 'AWAITING_DECISION' or self.pending_signal is None:
             raise ValueError('replay is not waiting for a decision')
         signal = self.pending_signal
@@ -164,7 +184,43 @@ class ManualReplay:
             self.cursor += 1
             self.state = 'RUNNING' if self.cursor < len(self.snapshots) - 1 else 'FINISHED'
             return
-        self._resolve_trade(signal, decision)
+        self._open_position(signal, decision)
+        if self.state == 'POSITION_OPEN':
+            self.step_position()
+
+    def step_position(self) -> None:
+        """Reveal and evaluate exactly one additional candle for an open position."""
+        if self.state != 'POSITION_OPEN' or self.active_position is None:
+            raise ValueError('replay has no open position to advance')
+        position = self.active_position
+        next_index = max(self.cursor + 1, position.entry_index)
+        if next_index >= len(self.snapshots):
+            self.state = 'FINISHED'
+            self.active_position = None
+            return
+        candle = self.snapshots.iloc[next_index]
+        self.cursor = next_index
+        exit_price: float | None = None
+        exit_reason: Literal['STOP', 'TARGET', 'FINALIZE'] | None = None
+        if position.side == 'BUY':
+            if candle.low <= position.stop_price:
+                exit_price, exit_reason = position.stop_price, 'STOP'
+            elif candle.high >= position.target_price:
+                exit_price, exit_reason = position.target_price, 'TARGET'
+        else:
+            if candle.high >= position.stop_price:
+                exit_price, exit_reason = position.stop_price, 'STOP'
+            elif candle.low <= position.target_price:
+                exit_price, exit_reason = position.target_price, 'TARGET'
+        if exit_price is None and next_index >= len(self.snapshots) - 1:
+            exit_price, exit_reason = candle.close, 'FINALIZE'
+        if exit_price is not None and exit_reason is not None:
+            self._close_position(exit_price, exit_reason, next_index)
+
+    def continue_after_exit(self) -> None:
+        """Leave the exit pause and allow the fast signal scan to resume."""
+        if self.state != 'AWAITING_CONTINUE':
+            raise ValueError('replay is not waiting to continue')
         self.state = 'RUNNING' if self.cursor < len(self.snapshots) - 1 else 'FINISHED'
 
     def visible_payload(self) -> dict[str, object]:
@@ -187,6 +243,7 @@ class ManualReplay:
             },
             'signal': signal_payload,
             'signal_markers': [*self.decisions, *([signal_payload] if signal_payload else [])],
+            'position_overlay': self._position_overlay_payload(),
             'trades': [_trade_payload(trade) for trade in self.trades],
             'equity_curve': [
                 {'timestamp': timestamp.isoformat(), 'equity': equity}
@@ -205,10 +262,11 @@ class ManualReplay:
         destination.write_text(json.dumps(payload, default=str, ensure_ascii=False, indent=2), encoding='utf-8')
         return destination
 
-    def _resolve_trade(self, signal: Signal, decision: Literal['BUY', 'SELL']) -> None:
+    def _open_position(self, signal: Signal, decision: Literal['BUY', 'SELL']) -> None:
         entry_index = self.cursor + 1
         if entry_index >= len(self.snapshots):
             self.cursor = len(self.snapshots) - 1
+            self.state = 'FINISHED'
             return
         entry = self.snapshots.iloc[entry_index]
         fill_price = _adverse_fill(decision, entry.open, self.slippage_rate)
@@ -220,47 +278,86 @@ class ManualReplay:
         quantity = self.opening_amount * self.leverage / fill_price
         entry_fee = self.opening_amount * self.leverage * self.taker_fee
         self.cash -= entry_fee
-        exit_index = entry_index
-        exit_price = entry.close
-        exit_reason: Literal['STOP', 'TARGET', 'FINALIZE'] = 'FINALIZE'
-        for index in range(entry_index, len(self.snapshots)):
-            candle = self.snapshots.iloc[index]
-            if decision == 'BUY':
-                if candle.low <= stop_price:
-                    exit_price, exit_reason, exit_index = stop_price, 'STOP', index
-                    break
-                if candle.high >= target_price:
-                    exit_price, exit_reason, exit_index = target_price, 'TARGET', index
-                    break
-            else:
-                if candle.high >= stop_price:
-                    exit_price, exit_reason, exit_index = stop_price, 'STOP', index
-                    break
-                if candle.low <= target_price:
-                    exit_price, exit_reason, exit_index = target_price, 'TARGET', index
-                    break
-            exit_price, exit_index = candle.close, index
-        exit_price = _adverse_fill('SELL' if decision == 'BUY' else 'BUY', exit_price, self.slippage_rate)
-        gross = quantity * (exit_price - fill_price) * direction
-        exit_fee = quantity * exit_price * self.taker_fee
-        self.cash += gross - exit_fee
-        exit_snapshot = self.snapshots.iloc[exit_index]
-        trade = ManualTrade(
+        self.active_position = ActivePosition(
             signal_time=signal.signal_time,
             side=decision,
+            entry_index=entry_index,
             fill_time=entry.opened_at,
             fill_price=fill_price,
             stop_price=stop_price,
             target_price=target_price,
+            quantity=quantity,
+            entry_fee=entry_fee,
+        )
+        self.state = 'POSITION_OPEN'
+
+    def _close_position(
+        self,
+        exit_price: float,
+        exit_reason: Literal['STOP', 'TARGET', 'FINALIZE'],
+        exit_index: int,
+    ) -> None:
+        position = self.active_position
+        if position is None:
+            raise ValueError('replay has no open position to close')
+        exit_price = _adverse_fill(
+            'SELL' if position.side == 'BUY' else 'BUY',
+            exit_price,
+            self.slippage_rate,
+        )
+        direction = 1 if position.side == 'BUY' else -1
+        gross = position.quantity * (exit_price - position.fill_price) * direction
+        exit_fee = position.quantity * exit_price * self.taker_fee
+        self.cash += gross - exit_fee
+        exit_snapshot = self.snapshots.iloc[exit_index]
+        trade = ManualTrade(
+            signal_time=position.signal_time,
+            side=position.side,
+            fill_time=position.fill_time,
+            fill_price=position.fill_price,
+            stop_price=position.stop_price,
+            target_price=position.target_price,
             exit_time=exit_snapshot.closed_at,
             exit_price=exit_price,
             exit_reason=exit_reason,
-            pnl=gross - entry_fee - exit_fee,
+            pnl=gross - position.entry_fee - exit_fee,
             equity=self.cash,
         )
         self.trades.append(trade)
         self.equity_points.append((trade.exit_time, self.cash))
-        self.cursor = exit_index + 1
+        self.cursor = exit_index
+        self.active_position = None
+        self.state = 'AWAITING_CONTINUE'
+
+    def _position_overlay_payload(self) -> dict[str, object] | None:
+        if self.active_position is not None:
+            position = self.active_position
+            current = self.snapshots.iloc[self.cursor]
+            return {
+                'status': 'OPEN',
+                'side': position.side,
+                'entry_time': int(position.fill_time.timestamp()),
+                'end_time': int(current.opened_at.timestamp()),
+                'fill_price': position.fill_price,
+                'stop_price': position.stop_price,
+                'target_price': position.target_price,
+                'leverage': self.leverage,
+            }
+        if self.state == 'AWAITING_CONTINUE' and self.trades:
+            trade = self.trades[-1]
+            return {
+                'status': 'CLOSED',
+                'side': trade.side,
+                'entry_time': int(trade.fill_time.timestamp()),
+                'end_time': int(trade.exit_time.timestamp()) - SIGNAL_TIMEFRAME_SECONDS[self.timeframe],
+                'fill_price': trade.fill_price,
+                'stop_price': trade.stop_price,
+                'target_price': trade.target_price,
+                'exit_price': trade.exit_price,
+                'exit_reason': trade.exit_reason,
+                'leverage': self.leverage,
+            }
+        return None
 
 
 def _adverse_fill(side: Literal['BUY', 'SELL'], price: float, slippage: float) -> float:
@@ -325,6 +422,8 @@ def _trade_payload(trade: ManualTrade) -> dict[str, object]:
         'side': trade.side,
         'fill_time': trade.fill_time.isoformat(),
         'fill_price': trade.fill_price,
+        'stop_price': trade.stop_price,
+        'target_price': trade.target_price,
         'exit_time': trade.exit_time.isoformat(),
         'exit_price': trade.exit_price,
         'exit_reason': trade.exit_reason,

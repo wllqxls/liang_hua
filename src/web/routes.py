@@ -236,7 +236,7 @@ def advance_manual_replay(session_id: str) -> dict[str, object]:
 
 @router.post('/api/manual-replays/{session_id}/decision')
 def decide_manual_replay(session_id: str, req: ManualDecisionRequest) -> dict[str, object]:
-    """Store one human decision and resolve accepted positions conservatively."""
+    """Store one human decision and open an accepted position."""
     with _manual_replays_lock:
         replay = _manual_replays.get(session_id)
         if replay is None:
@@ -245,6 +245,36 @@ def decide_manual_replay(session_id: str, req: ManualDecisionRequest) -> dict[st
             replay.decide(req.decision)
         except ValueError:
             raise HTTPException(status_code=409, detail='当前回放不等待人工决策') from None
+        replay.persist(MANUAL_REPLAY_RESULTS_ROOT)
+        return {'success': True, **replay.visible_payload()}
+
+
+@router.post('/api/manual-replays/{session_id}/step')
+def step_manual_position(session_id: str) -> dict[str, object]:
+    """Reveal and evaluate exactly one position candle."""
+    with _manual_replays_lock:
+        replay = _manual_replays.get(session_id)
+        if replay is None:
+            raise HTTPException(status_code=404, detail='回放会话不存在')
+        try:
+            replay.step_position()
+        except ValueError:
+            raise HTTPException(status_code=409, detail='当前没有可推进的持仓') from None
+        replay.persist(MANUAL_REPLAY_RESULTS_ROOT)
+        return {'success': True, **replay.visible_payload()}
+
+
+@router.post('/api/manual-replays/{session_id}/continue')
+def continue_manual_replay(session_id: str) -> dict[str, object]:
+    """Resume the fast signal scan after a completed trade pause."""
+    with _manual_replays_lock:
+        replay = _manual_replays.get(session_id)
+        if replay is None:
+            raise HTTPException(status_code=404, detail='回放会话不存在')
+        try:
+            replay.continue_after_exit()
+        except ValueError:
+            raise HTTPException(status_code=409, detail='当前回放不等待继续') from None
         replay.persist(MANUAL_REPLAY_RESULTS_ROOT)
         return {'success': True, **replay.visible_payload()}
 

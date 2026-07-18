@@ -8,6 +8,10 @@ let replayLoadVersion = 0;
 let lastChartViewKey = null;
 let lastFocusedSignalTime = null;
 let renderedSignalMarkers = [];
+let drawingController = null;
+let positionTimer = null;
+let positionStepInFlight = false;
+const POSITION_STEP_DELAY_MS = 700;
 
 const exchangeClock = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -86,6 +90,15 @@ function setupCharts() {
             wickUpColor: '#2ebd85', wickDownColor: '#f6465d',
         });
         candleMarkers = LightweightCharts.createSeriesMarkers(candleSeries, []);
+        drawingController = new ChartDrawingController({
+            overlay: document.getElementById('chart-drawing-overlay'),
+            toolbar: document.getElementById('drawing-toolbar'),
+            toggle: document.getElementById('drawing-toggle'),
+            colorInput: document.getElementById('draw-color'),
+            widthInput: document.getElementById('draw-width'),
+            styleInput: document.getElementById('draw-style'),
+        });
+        drawingController.attach(candleChart, candleSeries);
         candleChart.subscribeCrosshairMove(param => {
             const tip = document.getElementById('chart-tooltip');
             const signal = renderedSignalMarkers.find(item => item.displayTime === param.time);
@@ -123,6 +136,7 @@ function markerTimeForChart(time, timeframe) {
 }
 
 function render(data) {
+    clearTimeout(positionTimer);
     replay = data;
     setupCharts();
     const chartTimeframe = document.getElementById('chart-timeframe');
@@ -134,6 +148,12 @@ function render(data) {
     const shouldFocus = chartViewKey !== lastChartViewKey || (data.state === 'AWAITING_DECISION' && data.signal?.time !== lastFocusedSignalTime);
     candleSeries.setData(candles);
     applyCandlePriceFormat(candles);
+    drawingController.setContext({ year: data.year, symbol: data.symbol, timeframe });
+    drawingController.setRisk(data.position_overlay ? {
+        ...data.position_overlay,
+        entry_time: markerTimeForChart(data.position_overlay.entry_time, timeframe),
+        end_time: markerTimeForChart(data.position_overlay.end_time, timeframe),
+    } : null);
     renderedSignalMarkers = (data.signal_markers || []).map(item => ({
         ...item,
         displayTime: markerTimeForChart(item.time, timeframe),
@@ -152,25 +172,69 @@ function render(data) {
     equityChart.priceScale('right').applyOptions({ autoScale: true });
     equityChart.timeScale().fitContent();
     if (shouldFocus) focusLatestCandles(candles);
+    if (data.state === 'POSITION_OPEN') candleChart.timeScale().scrollToPosition(8, false);
     lastChartViewKey = chartViewKey;
     if (data.state === 'AWAITING_DECISION') lastFocusedSignalTime = data.signal?.time ?? null;
     document.getElementById('chart-title').textContent = `${data.symbol} · ${timeframe} 本地回放`;
     document.getElementById('cursor-time').textContent = `${exchangeDateTime(Math.floor(new Date(data.cursor_time).getTime() / 1000))}（上海）`;
-    const awaiting = data.state === 'AWAITING_DECISION';
-    document.getElementById('decision-panel').classList.toggle('hidden', !awaiting);
-    document.getElementById('replay-state').textContent = awaiting ? '等待你的决策' : data.state === 'FINISHED' ? '回放结束' : '回放中';
-    document.getElementById('replay-state').classList.toggle('state-awaiting', awaiting);
-    if (data.signal) { document.getElementById('signal-summary').textContent = data.signal.summary; document.getElementById('signal-reason').textContent = data.signal.reason; document.getElementById('signal-levels').textContent = `参考止损 ${data.signal.stop_price.toFixed(4)} · 参考止盈 ${data.signal.target_price.toFixed(4)}`; }
+    const awaitingDecision = data.state === 'AWAITING_DECISION';
+    const awaitingContinue = data.state === 'AWAITING_CONTINUE';
+    document.getElementById('decision-panel').classList.toggle('hidden', !awaitingDecision && !awaitingContinue);
+    document.querySelectorAll('[data-decision]').forEach(button => button.classList.toggle('hidden', !awaitingDecision));
+    document.getElementById('continue-btn').classList.toggle('hidden', !awaitingContinue);
+    const stateLabels = {
+        AWAITING_DECISION: '等待你的决策', POSITION_OPEN: '持仓逐 K 线回放',
+        AWAITING_CONTINUE: '已平仓，等待继续', FINISHED: '回放结束', RUNNING: '回放中',
+    };
+    document.getElementById('replay-state').textContent = stateLabels[data.state] || '回放中';
+    document.getElementById('replay-state').classList.toggle('state-awaiting', awaitingDecision || awaitingContinue);
+    if (data.signal) {
+        document.getElementById('signal-summary').textContent = data.signal.summary;
+        document.getElementById('signal-reason').textContent = data.signal.reason;
+        document.getElementById('signal-levels').textContent = `参考止损 ${data.signal.stop_price.toFixed(4)} · 参考止盈 ${data.signal.target_price.toFixed(4)}`;
+    } else if (awaitingContinue && data.trades.length) {
+        const trade = data.trades[data.trades.length - 1];
+        const exitLabels = { TARGET: '本笔已止盈', STOP: '本笔已止损', FINALIZE: '本笔已按期末价格平仓' };
+        document.getElementById('signal-summary').textContent = exitLabels[trade.exit_reason] || '本笔已平仓';
+        document.getElementById('signal-reason').textContent = `本笔盈亏 ${trade.pnl.toFixed(2)} · 当前权益 ${trade.equity.toFixed(2)}`;
+        document.getElementById('signal-levels').textContent = '点击继续，快速寻找下一个候选信号。';
+    }
     const rows = data.trades.map(item => `<tr><td>${item.side === 'BUY' ? '多' : '空'}</td><td>${item.fill_price.toFixed(4)}</td><td>${item.exit_price.toFixed(4)}</td><td>${item.exit_reason}</td><td>${item.pnl.toFixed(2)}</td><td>${item.equity.toFixed(2)}</td></tr>`).join('');
     document.getElementById('trade-table').innerHTML = rows || '<tr><td colspan="6">尚未接受任何交易</td></tr>';
-    if (data.state === 'RUNNING') setTimeout(advance, 250);
+    if (data.state === 'RUNNING') positionTimer = setTimeout(advance, 250);
+    if (data.state === 'POSITION_OPEN') positionTimer = setTimeout(stepPosition, POSITION_STEP_DELAY_MS);
 }
 
-async function advance() { if (!replay || replay.state !== 'RUNNING') return; try { render(await request(`/api/manual-replays/${replay.session_id}/advance`)); } catch (error) { showError(error); } }
+async function advance() {
+    if (!replay || replay.state !== 'RUNNING') return;
+    const sessionId = replay.session_id;
+    try {
+        const data = await request(`/api/manual-replays/${sessionId}/advance`);
+        if (replay?.session_id === sessionId) render(data);
+    } catch (error) { showError(error); }
+}
+async function stepPosition() {
+    if (!replay || replay.state !== 'POSITION_OPEN' || positionStepInFlight) return;
+    const sessionId = replay.session_id;
+    positionStepInFlight = true;
+    try {
+        const data = await request(`/api/manual-replays/${sessionId}/step`);
+        if (replay?.session_id === sessionId) render(data);
+    }
+    catch (error) { showError(error); }
+    finally { positionStepInFlight = false; }
+}
+async function continueReplay() {
+    if (!replay || replay.state !== 'AWAITING_CONTINUE') return;
+    try { render(await request(`/api/manual-replays/${replay.session_id}/continue`)); }
+    catch (error) { showError(error); }
+}
 function showError(error) { const el = document.getElementById('error'); el.textContent = error.message; el.classList.remove('hidden'); }
 
 async function startReplay() {
     const version = ++replayLoadVersion;
+    clearTimeout(positionTimer);
+    replay = null;
     const button = document.getElementById('start-btn');
     button.disabled = true;
     button.textContent = '正在加载…';
@@ -198,6 +262,7 @@ async function startReplay() {
 document.getElementById('start-btn').addEventListener('click', startReplay);
 document.getElementById('symbol').addEventListener('change', startReplay);
 document.querySelectorAll('[data-decision]').forEach(button => button.addEventListener('click', async () => { try { render(await request(`/api/manual-replays/${replay.session_id}/decision`, { decision: button.dataset.decision })); } catch (error) { showError(error); } }));
+document.getElementById('continue-btn').addEventListener('click', continueReplay);
 document.getElementById('chart-timeframe').addEventListener('change', () => { if (replay) { lastChartViewKey = null; render(replay); } });
 
 function escapeHtml(value) {
@@ -292,3 +357,5 @@ document.getElementById('whitelist-btn').addEventListener('click', async () => {
         document.getElementById('whitelist-status').textContent = data.items.length ? `已生成 ${data.items.length} 组；CSV 已保存到 results/semi_auto_factor_whitelist.csv` : '没有符合白名单门槛的候选。';
     } catch (error) { showError(error); } finally { button.disabled = false; }
 });
+
+setupCharts();

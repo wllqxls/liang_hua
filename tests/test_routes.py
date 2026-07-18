@@ -147,6 +147,46 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert 'id="slippage-rate"' in html
     assert "taker_fee: number('taker-fee')" in script
     assert "slippage_rate: number('slippage-rate')" in script
+    assert 'id="drawing-toggle"' in html
+    assert 'id="chart-drawing-overlay"' in html
+    assert 'id="continue-btn"' in html
+    assert '/static/js/chart_drawings.js' in html
+    assert '/step`' in script
+    assert '/continue`' in script
+    drawing_script = client.get('/static/js/chart_drawings.js').text
+    assert "['horizontal', 'ray', 'vertical']" in drawing_script
+    assert "type === 'rectangle'" in drawing_script
+    assert "manual-chart-drawings:v1" in drawing_script
+    assert "rgba(33,197,139,.20)" in drawing_script
+    assert "rgba(255,95,145,.22)" in drawing_script
+
+
+def test_manual_replay_position_step_and_continue_routes(monkeypatch: Any) -> None:
+    calls: list[str] = []
+
+    class ReplayStub:
+        def step_position(self) -> None:
+            calls.append('step')
+
+        def continue_after_exit(self) -> None:
+            calls.append('continue')
+
+        def persist(self, root: Path) -> Path:
+            calls.append('persist')
+            return root / 'session.json'
+
+        def visible_payload(self) -> dict[str, object]:
+            return {'session_id': 'session', 'state': 'POSITION_OPEN'}
+
+    monkeypatch.setitem(routes._manual_replays, 'session', ReplayStub())
+    client = TestClient(app)
+
+    step_response = client.post('/api/manual-replays/session/step')
+    continue_response = client.post('/api/manual-replays/session/continue')
+
+    assert step_response.status_code == 200
+    assert continue_response.status_code == 200
+    assert calls == ['step', 'persist', 'continue', 'persist']
 
 
 def test_order_flow_status_returns_btc_and_eth(monkeypatch: Any) -> None:
