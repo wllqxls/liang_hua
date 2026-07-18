@@ -50,7 +50,20 @@
             </label>
             <label>初始资金 <input id="cash" type="number" min="10" value="100"></label>
             <label>单笔保证金 <input id="opening-amount" type="number" min="1" value="10"></label>
-            <label>杠杆 <input id="leverage" type="number" min="1" max="150" value="1"></label>
+            <label>杠杆
+                <select id="leverage">
+                    <option value="1" selected>x1</option>
+                    <option value="2">x2</option>
+                    <option value="3">x3</option>
+                    <option value="5">x5</option>
+                    <option value="10">x10</option>
+                    <option value="20">x20</option>
+                    <option value="50">x50</option>
+                    <option value="100">x100</option>
+                    <option value="125">x125</option>
+                    <option value="150">x150</option>
+                </select>
+            </label>
             <button id="start-btn" class="primary" type="button">开始回放</button>
             <button id="whitelist-btn" type="button">生成半自动因子白名单</button>
         </section>

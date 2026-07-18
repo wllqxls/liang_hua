@@ -121,6 +121,9 @@ def test_index_renders_signal_mode_names() -> None:
     assert 'id="signal-timeframe"' in html
     assert '半自动交易回放' in html
     assert '<select id="strategy">' not in html
+    assert '<select id="leverage">' in html
+    assert '<input id="leverage"' not in html
+    assert all(f'<option value="{value}"' in html for value in (1, 2, 3, 5, 10, 20, 50, 100, 125, 150))
 
 
 def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
