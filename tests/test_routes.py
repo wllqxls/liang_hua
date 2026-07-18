@@ -123,6 +123,21 @@ def test_index_renders_signal_mode_names() -> None:
     assert '<select id="strategy">' not in html
 
 
+def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
+    client = TestClient(app)
+
+    html = client.get('/').text
+    script = client.get('/static/js/manual_replay.js').text
+
+    assert '/static/vendor/lightweight-charts.standalone.production.js' in html
+    assert 'unpkg.com' not in html
+    assert 'autoSize: true' in script
+    assert 'setVisibleLogicalRange' in script
+    assert "priceScale('right').applyOptions({ autoScale: true })" in script
+    assert "getElementById('symbol').addEventListener('change', startReplay)" in script
+    assert 'tickMarkFormatter: exchangeTickFormatter' in script
+
+
 def test_order_flow_status_returns_btc_and_eth(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         routes,

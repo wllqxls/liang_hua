@@ -61,15 +61,17 @@
         <section class="panel result-panel">
             <h2>人工筛选后的权益曲线</h2>
             <div id="equity-chart"></div>
-            <table>
-                <thead><tr><th>方向</th><th>进场</th><th>出场</th><th>原因</th><th>盈亏</th><th>权益</th></tr></thead>
-                <tbody id="trade-table"><tr><td colspan="6">尚未接受任何交易</td></tr></tbody>
-            </table>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>方向</th><th>进场</th><th>出场</th><th>原因</th><th>盈亏</th><th>权益</th></tr></thead>
+                    <tbody id="trade-table"><tr><td colspan="6">尚未接受任何交易</td></tr></tbody>
+                </table>
+            </div>
         </section>
         <section class="panel">
             <h2>半自动因子白名单</h2>
             <p id="whitelist-status" class="levels">使用 2024 排序、2025 验证；只输出符合毛收益与样本规则的候选。</p>
-            <table><thead><tr><th>排名</th><th>逻辑</th><th>周期</th><th>2024 事件</th><th>2025 事件</th><th>2024 毛收益</th><th>2025 毛收益</th><th>辨识度</th></tr></thead><tbody id="whitelist-table"><tr><td colspan="8">尚未生成</td></tr></tbody></table>
+            <div class="table-wrap"><table><thead><tr><th>排名</th><th>逻辑</th><th>周期</th><th>2024 事件</th><th>2025 事件</th><th>2024 毛收益</th><th>2025 毛收益</th><th>辨识度</th></tr></thead><tbody id="whitelist-table"><tr><td colspan="8">尚未生成</td></tr></tbody></table></div>
         </section>
         <p id="error" class="error hidden"></p>
     </main>
