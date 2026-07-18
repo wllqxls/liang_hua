@@ -17,13 +17,13 @@ def _snapshot(index: int, *, close: float = 100.0, high: float = 101.0, low: flo
     )
 
 
-def _signal(snapshot: MarketSnapshot) -> Signal:
+def _signal(snapshot: MarketSnapshot, *, reason: str = 'fixture') -> Signal:
     return Signal(
         mode=SignalMode.KEY_LEVEL, strategy='KEY_LEVEL', side='BUY', signal_time=snapshot.closed_at,
         signal_close=snapshot.close, atr_snapshot=1.0, stop_atr_multiple=1.0,
         target_atr_multiple=1.0, stop_distance=1.0, target_distance=1.0,
         estimated_stop_price=99.0, estimated_target_price=101.0,
-        environment_side='BUY', filter_label=FilterLabel.NEUTRAL, reason='fixture', score=1,
+        environment_side='BUY', filter_label=FilterLabel.NEUTRAL, reason=reason, score=1,
     )
 
 
@@ -62,5 +62,19 @@ def test_skip_does_not_create_trade() -> None:
     assert not replay.trades
     assert replay.decisions[0]['decision'] == 'SKIP'
     marker = replay.visible_payload()['signal_markers'][0]
-    assert marker['time'] == int(_signal(replay.snapshots.iloc[0]).signal_time.timestamp())
+    assert marker['time'] == int(_signal(replay.snapshots.iloc[0]).signal_time.timestamp()) - 300
     assert marker['summary'] == '候选做多'
+
+
+def test_pending_signal_uses_chinese_reason_and_event_candle_open_time() -> None:
+    replay = _replay()
+    replay.state = 'AWAITING_DECISION'
+    replay.pending_signal = _signal(
+        replay.snapshots.iloc[0],
+        reason='False break below the previous 20-candle low',
+    )
+
+    signal = replay.visible_payload()['signal']
+
+    assert signal['reason'] == '跌破前 20 根 K 线低点后重新收回，可能是假跌破'
+    assert signal['time'] == int(replay.snapshots.iloc[0].opened_at.timestamp())

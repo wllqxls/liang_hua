@@ -26,6 +26,7 @@ data/order_flow/
 # 回测结果（程序生成）
 results/*.json
 results/research/
+results/manual_replays/
 
 # IDE
 .vscode/

@@ -14,8 +14,25 @@
                 <h1>半自动交易回放</h1>
                 <p>机器筛选候选信号；是否进场由你决定。仅使用本地历史数据。</p>
             </div>
-            <span id="replay-state" class="state-badge">未开始</span>
+            <button id="local-data-toggle" class="data-toggle" type="button" aria-expanded="false" aria-controls="local-data-panel">本地数据</button>
         </header>
+
+        <section id="local-data-panel" class="panel local-data-panel hidden">
+            <div class="local-data-heading">
+                <div><h2>本地基础 K 线</h2><p>查看或拉取全年 5m、15m、1h、4h 数据。</p></div>
+                <button id="local-data-close" class="icon-button" type="button" aria-label="关闭本地数据">×</button>
+            </div>
+            <div class="local-data-actions">
+                <label>拉取币种
+                    <select id="data-fetch-symbol">{% for s in symbols %}<option value="{{ s }}" {% if s == 'BTC/USDT' %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+                </label>
+                <label>数据年份 <input id="data-fetch-year" type="number" min="2017" max="2100" value="2025"></label>
+                <button id="fetch-data-btn" class="primary" type="button">拉取全年全部周期</button>
+                <button id="refresh-data-btn" type="button">刷新状态</button>
+            </div>
+            <p id="data-status-text" class="levels">展开后自动读取本地数据状态。</p>
+            <div class="table-wrap"><table><thead><tr><th>交易对象</th><th>5m</th><th>15m</th><th>1h</th><th>4h</th><th>状态</th></tr></thead><tbody id="data-status-table"><tr><td colspan="6">尚未读取</td></tr></tbody></table></div>
+        </section>
 
         <section class="panel controls">
             <label>币种
@@ -39,7 +56,7 @@
         </section>
 
         <section class="panel chart-panel">
-            <div class="chart-toolbar"><strong id="chart-title">等待本地回放</strong><span id="cursor-time"></span></div>
+            <div class="chart-toolbar"><div class="chart-title-group"><strong id="chart-title">等待本地回放</strong><span id="replay-state" class="state-badge">未开始</span></div><span id="cursor-time"></span></div>
             <div class="chart-wrap"><div id="candle-chart" aria-label="本地 K 线回放图"></div><div id="chart-tooltip" class="chart-tooltip hidden"></div></div>
             <p class="attribution">图表由 <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">TradingView</a> Lightweight Charts 提供。</p>
         </section>

@@ -16,6 +16,13 @@ from src.strategies.signal_models import MarginMode, Signal, SignalMode
 
 ReplayState = Literal['RUNNING', 'AWAITING_DECISION', 'FINISHED']
 Decision = Literal['BUY', 'SELL', 'SKIP']
+SIGNAL_TIMEFRAME_SECONDS = {'5m': 5 * 60, '15m': 15 * 60}
+DISPLAY_REASONS = {
+    'False break below the previous 20-candle low': '跌破前 20 根 K 线低点后重新收回，可能是假跌破',
+    'False break above the previous 20-candle high': '突破前 20 根 K 线高点后重新跌回，可能是假突破',
+    'RSI oversold with lower Bollinger Band reclaim': 'RSI 超卖后重新站上布林带下轨，出现反弹候选',
+    'RSI overbought with upper Bollinger Band reclaim': 'RSI 超买后重新跌回布林带上轨下方，出现回落候选',
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,10 +153,10 @@ class ManualReplay:
         signal = self.pending_signal
         self.decisions.append({
             'timestamp': signal.signal_time.isoformat(),
-            'time': int(signal.signal_time.timestamp()),
+            'time': _signal_candle_time(signal, self.timeframe),
             'suggested_side': signal.side,
             'decision': decision,
-            'reason': signal.reason,
+            'reason': _display_reason(signal.reason),
             'summary': _signal_summary(signal.side),
         })
         self.pending_signal = None
@@ -166,7 +173,7 @@ class ManualReplay:
         start = max(0, visible_end - 500)
         visible = self.snapshots.iloc[start:visible_end]
         cursor_time = visible.index[-1]
-        signal_payload = _signal_payload(self.pending_signal) if self.pending_signal else None
+        signal_payload = _signal_payload(self.pending_signal, self.timeframe) if self.pending_signal else None
         return {
             'session_id': self.session_id,
             'state': self.state,
@@ -286,13 +293,13 @@ def _chart_frame_payload(frame: pd.DataFrame, cursor_time: pd.Timestamp, timefra
     ]
 
 
-def _signal_payload(signal: Signal | None) -> dict[str, object] | None:
+def _signal_payload(signal: Signal | None, timeframe: str) -> dict[str, object] | None:
     if signal is None:
         return None
     return {
-        'time': int(signal.signal_time.timestamp()),
+        'time': _signal_candle_time(signal, timeframe),
         'side': signal.side,
-        'reason': signal.reason,
+        'reason': _display_reason(signal.reason),
         'score': signal.score,
         'summary': _signal_summary(signal.side),
         'stop_price': signal.estimated_stop_price,
@@ -302,6 +309,14 @@ def _signal_payload(signal: Signal | None) -> dict[str, object] | None:
 
 def _signal_summary(side: Literal['BUY', 'SELL']) -> str:
     return f'候选{"做多" if side == "BUY" else "做空"}'
+
+
+def _signal_candle_time(signal: Signal, timeframe: str) -> int:
+    return int(signal.signal_time.timestamp()) - SIGNAL_TIMEFRAME_SECONDS[timeframe]
+
+
+def _display_reason(reason: str) -> str:
+    return DISPLAY_REASONS.get(reason, reason)
 
 
 def _trade_payload(trade: ManualTrade) -> dict[str, object]:

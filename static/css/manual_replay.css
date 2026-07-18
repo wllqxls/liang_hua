@@ -11,6 +11,17 @@ input, select, button { width: 100%; min-width: 0; border-radius: 7px; border: 1
 button { cursor: pointer; font-weight: 700; } button:disabled { opacity: .55; cursor: wait; }
 .primary, .long { background: var(--green); color: #042216; border-color: var(--green); } .short { background: var(--red); border-color: var(--red); color: #31040b; } .skip { background: #42536b; }
 .state-badge { border-radius: 999px; padding: 7px 12px; background: #263b54; } .state-awaiting { background: #735c18; }
+.data-toggle, .icon-button { width: auto; }
+.data-toggle { min-width: 112px; background: #263b54; }
+.local-data-panel { border-color: #3a5677; }
+.local-data-heading { display: flex; align-items: start; justify-content: space-between; gap: 18px; }
+.local-data-heading h2 { margin-bottom: 5px; }
+.local-data-heading p { margin-bottom: 0; color: var(--muted); }
+.icon-button { min-width: 38px; padding: 6px 10px; font-size: 22px; line-height: 1; }
+.local-data-actions { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(130px, .7fr) minmax(170px, .9fr) minmax(110px, .6fr); gap: 12px; align-items: end; margin-top: 16px; }
+.data-present { color: var(--green); }
+.data-missing { color: #ff9fa9; }
+.chart-title-group { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .chart-panel, .result-panel, .chart-wrap { min-width: 0; }
 .chart-wrap { position: relative; width: 100%; overflow: hidden; }
 #candle-chart { width: 100%; height: clamp(380px, 62vh, 620px); min-height: 380px; }
@@ -25,10 +36,12 @@ table { width: 100%; border-collapse: collapse; } th, td { text-align: left; pad
     .app-header, .decision-panel { align-items: stretch; flex-direction: column; }
     .chart-toolbar { align-items: start; flex-direction: column; gap: 4px; }
     .controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .local-data-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .decision-actions { width: 100%; }
     #candle-chart { height: clamp(360px, 58vh, 480px); min-height: 360px; }
 }
 @media (max-width: 420px) {
     .controls { grid-template-columns: 1fr; }
+    .local-data-actions { grid-template-columns: 1fr; }
     .decision-actions { grid-template-columns: 1fr; }
 }

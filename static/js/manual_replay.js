@@ -7,6 +7,7 @@ let equitySeries = null;
 let replayLoadVersion = 0;
 let lastChartViewKey = null;
 let lastFocusedSignalTime = null;
+let renderedSignalMarkers = [];
 
 const exchangeClock = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -87,7 +88,7 @@ function setupCharts() {
         candleMarkers = LightweightCharts.createSeriesMarkers(candleSeries, []);
         candleChart.subscribeCrosshairMove(param => {
             const tip = document.getElementById('chart-tooltip');
-            const signal = replay?.signal_markers?.find(item => item.time === param.time);
+            const signal = renderedSignalMarkers.find(item => item.displayTime === param.time);
             if (!signal || !param.point) { tip.classList.add('hidden'); return; }
             const decision = signal.decision ? ` · 人工选择：${signal.decision}` : '';
             tip.textContent = `${signal.summary}：${signal.reason}${decision}`;
@@ -116,18 +117,35 @@ function focusLatestCandles(candles) {
     });
 }
 
+function markerTimeForChart(time, timeframe) {
+    const seconds = { '5m': 5 * 60, '15m': 15 * 60, '1h': 60 * 60 }[timeframe];
+    return Math.floor(time / seconds) * seconds;
+}
+
 function render(data) {
     replay = data;
     setupCharts();
-    const timeframe = document.getElementById('chart-timeframe').value;
+    const chartTimeframe = document.getElementById('chart-timeframe');
+    const isNewSignal = data.state === 'AWAITING_DECISION' && data.signal?.time !== lastFocusedSignalTime;
+    if (isNewSignal) chartTimeframe.value = data.timeframe;
+    const timeframe = chartTimeframe.value;
     const candles = data.charts[timeframe] || data.candles;
     const chartViewKey = `${data.session_id}:${timeframe}`;
     const shouldFocus = chartViewKey !== lastChartViewKey || (data.state === 'AWAITING_DECISION' && data.signal?.time !== lastFocusedSignalTime);
     candleSeries.setData(candles);
     applyCandlePriceFormat(candles);
-    const markers = (data.signal_markers || []).map(item => {
+    renderedSignalMarkers = (data.signal_markers || []).map(item => ({
+        ...item,
+        displayTime: markerTimeForChart(item.time, timeframe),
+    }));
+    const markers = renderedSignalMarkers.flatMap(item => {
         const side = item.side || item.suggested_side;
-        return { time: item.time, position: side === 'BUY' ? 'belowBar' : 'aboveBar', color: side === 'BUY' ? '#21c58b' : '#f05d6f', shape: side === 'BUY' ? 'arrowUp' : 'arrowDown', text: item.summary };
+        const position = side === 'BUY' ? 'belowBar' : 'aboveBar';
+        const color = side === 'BUY' ? '#21c58b' : '#f05d6f';
+        return [
+            { time: item.displayTime, position, color, shape: 'circle', size: 0.45 },
+            { time: item.displayTime, position, color, shape: side === 'BUY' ? 'arrowUp' : 'arrowDown', size: 0.85, text: side === 'BUY' ? '做多' : '做空' },
+        ];
     });
     candleMarkers.setMarkers(markers);
     equitySeries.setData(data.equity_curve.map(item => ({ time: Math.floor(new Date(item.timestamp).getTime() / 1000), value: item.equity })));
@@ -156,7 +174,7 @@ async function startReplay() {
     const button = document.getElementById('start-btn');
     button.disabled = true;
     button.textContent = '正在加载…';
-    document.getElementById('replay-state').textContent = '载入本地数据';
+    document.getElementById('replay-state').textContent = '回放加载中';
     try {
         document.getElementById('error').classList.add('hidden');
         const data = await request('/api/manual-replays', payload());
@@ -181,6 +199,89 @@ document.getElementById('start-btn').addEventListener('click', startReplay);
 document.getElementById('symbol').addEventListener('change', startReplay);
 document.querySelectorAll('[data-decision]').forEach(button => button.addEventListener('click', async () => { try { render(await request(`/api/manual-replays/${replay.session_id}/decision`, { decision: button.dataset.decision })); } catch (error) { showError(error); } }));
 document.getElementById('chart-timeframe').addEventListener('change', () => { if (replay) { lastChartViewKey = null; render(replay); } });
+
+function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+}
+
+function renderLocalDataStatus(items) {
+    const grouped = new Map();
+    for (const item of items || []) {
+        if (!grouped.has(item.symbol)) grouped.set(item.symbol, new Map());
+        grouped.get(item.symbol).set(item.timeframe, item);
+    }
+    const rows = Array.from(grouped.entries()).map(([symbol, periods]) => {
+        const cells = ['5m', '15m', '1h', '4h'].map(timeframe => {
+            const item = periods.get(timeframe);
+            if (!item?.exists) return '<td class="data-missing">缺失</td>';
+            const count = item.rows == null ? '--' : Number(item.rows).toLocaleString('zh-CN');
+            return `<td class="data-present">${count} 行</td>`;
+        }).join('');
+        const complete = ['5m', '15m', '1h', '4h'].every(timeframe => periods.get(timeframe)?.exists);
+        return `<tr><td>${escapeHtml(symbol)}</td>${cells}<td class="${complete ? 'data-present' : 'data-missing'}">${complete ? '完整' : '不完整'}</td></tr>`;
+    }).join('');
+    document.getElementById('data-status-table').innerHTML = rows || '<tr><td colspan="6">暂无数据状态</td></tr>';
+}
+
+async function loadLocalDataStatus(successMessage = '') {
+    const year = number('data-fetch-year');
+    const status = document.getElementById('data-status-text');
+    const button = document.getElementById('refresh-data-btn');
+    if (!Number.isInteger(year) || year < 2017 || year > 2100) { status.textContent = '请输入 2017–2100 之间的年份'; return; }
+    button.disabled = true;
+    status.textContent = `正在读取 ${year} 年本地数据状态…`;
+    try {
+        const response = await fetch(`/api/data-status?year=${encodeURIComponent(year)}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || '读取失败');
+        renderLocalDataStatus(data);
+        status.textContent = successMessage || `${year} 年数据状态已更新`;
+    } catch (error) {
+        status.textContent = `读取失败：${error.message}`;
+        renderLocalDataStatus([]);
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function fetchLocalData() {
+    const symbol = document.getElementById('data-fetch-symbol').value;
+    const year = number('data-fetch-year');
+    const status = document.getElementById('data-status-text');
+    const button = document.getElementById('fetch-data-btn');
+    if (!Number.isInteger(year) || year < 2017 || year > 2100) { status.textContent = '请输入 2017–2100 之间的年份'; return; }
+    button.disabled = true;
+    status.textContent = `正在拉取 ${symbol} ${year} 年 5m、15m、1h、4h 数据…`;
+    try {
+        const response = await fetch('/api/fetch-data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol, year }) });
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || data.detail || '拉取失败');
+        const saved = (data.items || []).map(item => `${item.timeframe} ${Number(item.rows || 0).toLocaleString('zh-CN')} 行`).join('，');
+        await loadLocalDataStatus(`已保存 ${symbol} ${year} 年：${saved}`);
+    } catch (error) {
+        status.textContent = `拉取失败：${error.message}`;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+function setLocalDataPanel(open) {
+    const panel = document.getElementById('local-data-panel');
+    document.getElementById('local-data-toggle').setAttribute('aria-expanded', String(open));
+    panel.classList.toggle('hidden', !open);
+    if (open) {
+        document.getElementById('data-fetch-symbol').value = document.getElementById('symbol').value;
+        document.getElementById('data-fetch-year').value = document.getElementById('data-year').value;
+        loadLocalDataStatus();
+    }
+}
+
+document.getElementById('local-data-toggle').addEventListener('click', () => setLocalDataPanel(document.getElementById('local-data-panel').classList.contains('hidden')));
+document.getElementById('local-data-close').addEventListener('click', () => setLocalDataPanel(false));
+document.getElementById('refresh-data-btn').addEventListener('click', () => loadLocalDataStatus());
+document.getElementById('fetch-data-btn').addEventListener('click', fetchLocalData);
+document.getElementById('data-fetch-year').addEventListener('change', () => loadLocalDataStatus());
+
 document.getElementById('whitelist-btn').addEventListener('click', async () => {
     const button = document.getElementById('whitelist-btn'); button.disabled = true;
     document.getElementById('whitelist-status').textContent = '正在扫描 2024/2025 本地数据，请稍候…';

@@ -136,6 +136,10 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert "priceScale('right').applyOptions({ autoScale: true })" in script
     assert "getElementById('symbol').addEventListener('change', startReplay)" in script
     assert 'tickMarkFormatter: exchangeTickFormatter' in script
+    assert 'id="local-data-toggle"' in html
+    assert 'id="fetch-data-btn"' in html
+    assert "shape: 'circle'" in script
+    assert "shape: side === 'BUY' ? 'arrowUp' : 'arrowDown'" in script
 
 
 def test_order_flow_status_returns_btc_and_eth(monkeypatch: Any) -> None:
