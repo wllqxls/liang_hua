@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -8,12 +8,16 @@ import pandas as pd
 import pytest
 
 from src.data.yearly import (
+    MARKET_SOURCE,
     YEARLY_TIMEFRAMES,
+    fetch_binance_um_futures_year,
     fetch_symbol_year,
     inspect_year_data,
     merge_yearly_ohlcv,
+    rebuild_year_from_futures_5m,
     validate_year,
     year_bounds,
+    yearly_data_source,
     yearly_data_dir,
     yearly_data_path,
 )
@@ -147,3 +151,58 @@ def test_fetch_symbol_year_merges_with_existing_csv(tmp_path: Path) -> None:
     saved = pd.read_csv(path, index_col=0, parse_dates=True)
     assert len(saved) == 2
     assert saved.iloc[0]['Open'] == 10
+
+
+def test_rebuild_futures_year_writes_all_periods_and_source_manifest(tmp_path: Path) -> None:
+    index = pd.date_range(
+        '2025-01-01', '2026-01-01', freq='5min', inclusive='left', tz='UTC',
+    )
+    five_minute = pd.DataFrame(
+        {
+            'Open': 100.0,
+            'High': 101.0,
+            'Low': 99.0,
+            'Close': 100.5,
+            'Volume': 2.0,
+        },
+        index=index,
+    )
+
+    statuses = rebuild_year_from_futures_5m(
+        'BTC/USDT', 2025, five_minute, data_dir=tmp_path,
+    )
+
+    assert yearly_data_source(tmp_path, 'BTC/USDT', 2025) == MARKET_SOURCE
+    assert {item.source for item in statuses} == {MARKET_SOURCE}
+    assert {item.timeframe: item.rows for item in statuses} == {
+        '5m': 105120,
+        '15m': 35040,
+        '1h': 8760,
+        '4h': 2190,
+    }
+    four_hour = pd.read_csv(
+        yearly_data_path(tmp_path, 'BTC/USDT', '4h', 2025),
+        index_col=0,
+        parse_dates=True,
+    )
+    assert four_hour.iloc[0]['Open'] == 100
+    assert four_hour.iloc[0]['Close'] == 100.5
+    assert four_hour.iloc[0]['Volume'] == 96
+
+
+def test_inspect_marks_existing_file_without_manifest_as_legacy_source(tmp_path: Path) -> None:
+    path = yearly_data_path(tmp_path, 'BTC/USDT', '5m', 2025)
+    path.parent.mkdir(parents=True)
+    _frame([('2025-01-01T00:00:00Z', 1)]).to_csv(path)
+
+    status = inspect_year_data(tmp_path, 'BTC/USDT', 2025)
+
+    assert status[0].exists is True
+    assert status[0].source is None
+
+
+def test_futures_archive_rejects_current_incomplete_year(tmp_path: Path) -> None:
+    current_year = datetime.now(timezone.utc).year
+
+    with pytest.raises(ValueError, match='已经结束的完整年份'):
+        fetch_binance_um_futures_year('BTC/USDT', current_year, data_dir=tmp_path)

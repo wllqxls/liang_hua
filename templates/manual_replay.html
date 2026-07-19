@@ -30,12 +30,12 @@
                 </div>
             </div>
             <section id="market-data-page" class="local-data-page" role="tabpanel" aria-hidden="false">
-                <p class="local-data-description">查看或拉取所选币种全年 5m、15m、1h、4h 基础 K 线。</p>
+                <p class="local-data-description">下载币安官方 USD-M 永续月度 5m 归档并校验，15m、1h、4h 均由同一份 5m 聚合；仅支持已经结束的完整年份。</p>
                 <div class="local-data-actions">
                     <label>拉取币种
                         <select id="data-fetch-symbol">{% for s in symbols %}<option value="{{ s }}" {% if s == 'BTC/USDT' %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
                     </label>
-                    <button id="fetch-data-btn" class="primary" type="button">拉取全年全部周期</button>
+                    <button id="fetch-data-btn" class="primary" type="button">拉取全年 USD-M 永续行情</button>
                     <button id="refresh-data-btn" type="button">刷新状态</button>
                 </div>
                 <p id="data-status-text" class="levels">展开后自动读取本地数据状态。</p>

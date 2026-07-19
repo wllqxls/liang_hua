@@ -1264,11 +1264,14 @@ async def fetch_data(req: DataFetchRequest) -> DataFetchResponse:
             year=req.year,
             items=[DataStatus.model_validate(item.__dict__) for item in statuses],
         )
+    except FileNotFoundError as e:
+        logger.exception('USD-M 历史归档不可用')
+        return _fetch_error_response(req, f'USD-M 历史归档不可用: {e}')
     except (OSError, RuntimeError, ValueError) as e:
         logger.exception("数据拉取失败")
         return _fetch_error_response(
             req,
-            f"数据拉取失败: {e}。请检查网络、代理或交易所接口状态。",
+            f"USD-M 永续行情数据拉取失败: {e}。请检查网络或官方归档状态。",
         )
 
 

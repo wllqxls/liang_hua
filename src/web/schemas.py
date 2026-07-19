@@ -285,6 +285,7 @@ class DataStatus(BaseModel):
     exists: bool
     rows: int | None = None
     file_size_kb: float | None = None
+    source: str | None = None
 
 
 class DataFetchResponse(BaseModel):

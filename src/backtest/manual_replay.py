@@ -11,6 +11,7 @@ import pandas as pd
 
 from src.backtest.engine import BacktestEngine
 from src.backtest.signal_simulator import funding_cash_flow
+from src.data.yearly import MARKET_SOURCE, yearly_data_source
 from src.research.order_flow_events import load_funding_year, load_order_flow_year
 from src.research.order_flow_failed_push import aggregate_order_flow_to_15m
 from src.research.order_flow_fading_push import build_fading_push_candidates
@@ -156,6 +157,8 @@ class ManualReplay:
         )
         engine = BacktestEngine(data_dir=data_dir)
         safe_symbol = symbol.replace('/', '_')
+        if yearly_data_source(data_dir.parent, symbol, year) != MARKET_SOURCE:
+            raise ValueError('基础 K 线是旧现货或未知来源，请先在“本地数据”重新拉取该年度 USD-M 永续行情')
         paths = {
             timeframe: data_dir / f'{safe_symbol}_{timeframe}.csv',
             '1h': data_dir / f'{safe_symbol}_1h.csv',

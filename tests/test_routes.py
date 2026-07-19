@@ -152,6 +152,11 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert 'tickMarkFormatter: exchangeTickFormatter' in script
     assert 'id="local-data-toggle"' in html
     assert 'id="fetch-data-btn"' in html
+    assert '拉取全年 USD-M 永续行情' in html
+    assert '仅支持已经结束的完整年份' in html
+    assert 'BINANCE_UM_FUTURES_ARCHIVE' in script
+    assert '旧来源待重拉' in script
+    assert '完整（USD-M 永续）' in script
     assert 'id="market-data-tab"' in html
     assert 'id="order-flow-data-tab"' in html
     assert '>增强 K 线</button>' in html

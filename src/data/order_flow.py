@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -745,8 +746,8 @@ def _parse_day(value: str) -> date:
 
 
 def _validate_kline_spec(spec: FuturesKlineArchiveSpec) -> None:
-    if spec.symbol not in SUPPORTED_SYMBOLS:
-        raise ValueError(f'unsupported order-flow symbol: {spec.symbol}')
+    if re.fullmatch(r'[A-Z0-9]{5,20}', spec.symbol) is None:
+        raise ValueError(f'invalid futures kline symbol: {spec.symbol}')
     if spec.cadence not in {'daily', 'monthly'}:
         raise ValueError(f'unsupported kline archive cadence: {spec.cadence}')
     if spec.cadence == 'daily':

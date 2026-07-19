@@ -98,9 +98,18 @@ function syncModeInputs() {
     document.getElementById('mode-note').textContent = modeSelect.selectedOptions[0]?.dataset.description || '';
 }
 
+async function responseJson(response) {
+    const text = await response.text();
+    try {
+        return JSON.parse(text);
+    } catch (_) {
+        throw new Error(text.trim() || `服务端返回了无法识别的响应（HTTP ${response.status}）`);
+    }
+}
+
 async function request(url, body) {
     const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
-    const data = await response.json();
+    const data = await responseJson(response);
     if (!response.ok || !data.success) throw new Error(data.detail || data.error || '请求失败');
     return data;
 }
@@ -344,7 +353,9 @@ function renderLocalDataStatus(items) {
             return `<td class="data-present">${count} 行</td>`;
         }).join('');
         const complete = ['5m', '15m', '1h', '4h'].every(timeframe => periods.get(timeframe)?.exists);
-        return `<tr><td>${escapeHtml(symbol)}</td>${cells}<td class="${complete ? 'data-present' : 'data-missing'}">${complete ? '完整' : '不完整'}</td></tr>`;
+        const correctSource = complete && ['5m', '15m', '1h', '4h'].every(timeframe => periods.get(timeframe)?.source === 'BINANCE_UM_FUTURES_ARCHIVE');
+        const label = !complete ? '不完整' : correctSource ? '完整（USD-M 永续）' : '旧来源待重拉';
+        return `<tr><td>${escapeHtml(symbol)}</td>${cells}<td class="${correctSource ? 'data-present' : 'data-missing'}">${label}</td></tr>`;
     }).join('');
     document.getElementById('data-status-table').innerHTML = rows || '<tr><td colspan="6">暂无数据状态</td></tr>';
 }
@@ -358,7 +369,7 @@ async function loadLocalDataStatus(successMessage = '') {
     status.textContent = `正在读取 ${year} 年本地数据状态…`;
     try {
         const response = await fetch(`/api/data-status?year=${encodeURIComponent(year)}`);
-        const data = await response.json();
+        const data = await responseJson(response);
         if (!response.ok) throw new Error(data.detail || '读取失败');
         renderLocalDataStatus(data);
         status.textContent = successMessage || `${year} 年数据状态已更新`;
@@ -377,10 +388,10 @@ async function fetchLocalData() {
     const button = document.getElementById('fetch-data-btn');
     if (!Number.isInteger(year) || year < 2017 || year > 2100) { status.textContent = '请输入 2017–2100 之间的年份'; return; }
     button.disabled = true;
-    status.textContent = `正在拉取 ${symbol} ${year} 年 5m、15m、1h、4h 数据…`;
+    status.textContent = `正在下载并校验 ${symbol} ${year} 年 USD-M 永续归档…`;
     try {
         const response = await fetch('/api/fetch-data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol, year }) });
-        const data = await response.json();
+        const data = await responseJson(response);
         if (!response.ok || !data.success) throw new Error(data.error || data.detail || '拉取失败');
         const saved = (data.items || []).map(item => `${item.timeframe} ${Number(item.rows || 0).toLocaleString('zh-CN')} 行`).join('，');
         await loadLocalDataStatus(`已保存 ${symbol} ${year} 年：${saved}`);
@@ -440,7 +451,7 @@ async function loadOrderFlowStatus(successMessage = '') {
     status.textContent = `正在读取 ${year} 年增强数据状态…`;
     try {
         const response = await fetch(`/api/order-flow/status?year=${encodeURIComponent(year)}`);
-        const data = await response.json();
+        const data = await responseJson(response);
         if (!response.ok) throw new Error(data.detail || '读取失败');
         renderOrderFlowStatus(data);
         orderFlowStatusLoaded = true;
@@ -480,11 +491,11 @@ async function fetchOrderFlowYear() {
         const createdResponse = await fetch('/api/order-flow/jobs', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year }),
         });
-        const created = await createdResponse.json();
+        const created = await responseJson(createdResponse);
         if (!createdResponse.ok || !created.success || !created.job_id) throw new Error(created.detail || created.error || '任务启动失败');
         while (true) {
             const jobResponse = await fetch(`/api/order-flow/jobs/${created.job_id}`);
-            const job = await jobResponse.json();
+            const job = await responseJson(jobResponse);
             if (!jobResponse.ok) throw new Error(job.detail || '任务状态读取失败');
             const completed = Number(job.completed_count || 0);
             const total = Math.max(1, Number(job.total_count || 1));
