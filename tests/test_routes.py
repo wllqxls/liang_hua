@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from main import app
 from src.backtest.engine import BacktestResult
+from src.backtest.semi_auto_optimizer import WhiteListValidation
 from src.web import routes
 from src.data.order_flow_yearly import OrderFlowYearStatus
 
@@ -157,10 +158,13 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert 'BINANCE_UM_FUTURES_ARCHIVE' in script
     assert '旧来源待重拉' in script
     assert '完整（USD-M 永续）' in script
-    assert '只读取 2024 增强数据' in html
+    assert '先用 2024 搜索，再由你逐条触发 2025 独立验证' in html
+    assert '才能载入人工回放' in html
     assert 'average_funding_return' in script
     assert 'average_net_return' in script
     assert '2024 订单流搜索完成，白名单为空' in script
+    assert "document.getElementById('start-btn').disabled = isOrderFlow && !activeWhitelistProfile" in script
+    assert '载入人工回放' in script
     assert 'id="market-data-tab"' in html
     assert 'id="order-flow-data-tab"' in html
     assert '>增强 K 线</button>' in html
@@ -270,6 +274,79 @@ def test_manual_replay_position_step_and_continue_routes(monkeypatch: Any) -> No
     assert step_response.status_code == 200
     assert continue_response.status_code == 200
     assert calls == ['step', 'persist', 'continue', 'persist']
+
+
+def test_failed_whitelist_profile_cannot_create_manual_replay(monkeypatch: Any) -> None:
+    monkeypatch.setattr(routes, 'is_validation_passed_profile', lambda *args, **kwargs: False)
+
+    response = TestClient(app).post(
+        '/api/manual-replays',
+        json={
+            'symbol': 'BTC/USDT',
+            'data_year': 2025,
+            'timeframe': '15m',
+            'mode': 'ORDER_FLOW_FADING_15M',
+            'whitelist_profile': {
+                'taker_buy_ratio_threshold': 0.575,
+                'oi_change_45m_threshold': 0.002,
+                'holding_window': '4h',
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert '尚未通过2025独立验证' in response.json()['detail']
+
+
+def test_order_flow_manual_replay_requires_validated_whitelist_profile() -> None:
+    response = TestClient(app).post(
+        '/api/manual-replays',
+        json={
+            'symbol': 'BTC/USDT',
+            'data_year': 2025,
+            'timeframe': '15m',
+            'mode': 'ORDER_FLOW_FADING_15M',
+        },
+    )
+
+    assert response.status_code == 422
+    assert '先生成白名单' in response.json()['detail']
+
+
+def test_whitelist_validation_endpoint_persists_result(monkeypatch: Any) -> None:
+    validation = WhiteListValidation(
+        symbol='BTC/USDT', validation_year=2025,
+        taker_buy_ratio_threshold=0.575, oi_change_45m_threshold=0.002,
+        holding_window='4h', events=87, average_gross_return=0.0009,
+        average_round_trip_cost=0.0014, average_funding_return=0.00003,
+        average_net_return=-0.00047, net_win_rate=0.4,
+        median_net_return=-0.0008, profit_factor=0.8,
+        top_3_net_share=0.9, passed=False, status='FAILED',
+    )
+    writes: list[tuple[WhiteListValidation, Path]] = []
+    monkeypatch.setattr(routes, 'validate_semi_auto_candidate', lambda *args, **kwargs: validation)
+    monkeypatch.setattr(
+        routes,
+        'write_semi_auto_validation',
+        lambda value, path: writes.append((value, path)),
+    )
+
+    response = TestClient(app).post(
+        '/api/semi-auto-whitelist/validate',
+        json={
+            'symbol': 'BTC/USDT',
+            'taker_buy_ratio_threshold': 0.575,
+            'oi_change_45m_threshold': 0.002,
+            'holding_window': '4h',
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()['validation']['passed'] is False
+    assert writes == [(
+        validation,
+        routes.PROJECT_ROOT / 'results' / 'semi_auto_factor_whitelist.csv',
+    )]
 
 
 def test_order_flow_status_returns_btc_and_eth(monkeypatch: Any) -> None:

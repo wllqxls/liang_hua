@@ -25,7 +25,14 @@ from fastapi.templating import Jinja2Templates
 
 from src.backtest.engine import BacktestEngine
 from src.backtest.manual_replay import ManualReplay
-from src.backtest.semi_auto_optimizer import build_semi_auto_whitelist, write_semi_auto_whitelist
+from src.backtest.semi_auto_optimizer import (
+    HOLDING_WINDOWS,
+    build_semi_auto_whitelist,
+    is_validation_passed_profile,
+    validate_semi_auto_candidate,
+    write_semi_auto_validation,
+    write_semi_auto_whitelist,
+)
 from src.backtest.optimizer import (
     STAGE_ONE_BUDGET,
     STAGE_TWO_BUDGET,
@@ -60,6 +67,7 @@ from src.web.schemas import (
     ManualDecisionRequest,
     ManualReplayRequest,
     SemiAutoWhitelistRequest,
+    SemiAutoWhitelistValidationRequest,
     OrderFlowFetchRequest,
     OrderFlowJobCreated,
     OrderFlowJobStatus,
@@ -217,6 +225,20 @@ def create_manual_replay(req: ManualReplayRequest) -> dict[str, object]:
         raise HTTPException(status_code=422, detail='不支持的交易对象')
     if req.opening_amount > req.cash:
         raise HTTPException(status_code=422, detail='开仓金额不能大于账户资金')
+    profile = req.whitelist_profile
+    if req.mode is ManualSignalMode.ORDER_FLOW_FADING_15M and profile is None:
+        raise HTTPException(status_code=422, detail='请先生成白名单并载入通过2025独立验证的参数')
+    if profile is not None:
+        if req.mode is not ManualSignalMode.ORDER_FLOW_FADING_15M:
+            raise HTTPException(status_code=422, detail='白名单参数只能用于主动资金退潮回放')
+        if not is_validation_passed_profile(
+            PROJECT_ROOT / 'results' / 'semi_auto_factor_whitelist.csv',
+            symbol=req.symbol,
+            taker_buy_ratio_threshold=profile.taker_buy_ratio_threshold,
+            oi_change_45m_threshold=profile.oi_change_45m_threshold,
+            holding_window=profile.holding_window,
+        ):
+            raise HTTPException(status_code=422, detail='该白名单参数尚未通过2025独立验证')
     session_id = uuid.uuid4().hex
     try:
         replay = ManualReplay.create(
@@ -234,6 +256,16 @@ def create_manual_replay(req: ManualReplayRequest) -> dict[str, object]:
             slippage_rate=req.slippage_rate,
             maintenance_margin_rate=req.maintenance_margin_rate,
             liquidation_fee_rate=req.liquidation_fee_rate,
+            order_flow_taker_threshold=(
+                profile.taker_buy_ratio_threshold if profile is not None else 0.55
+            ),
+            order_flow_oi_threshold=(
+                profile.oi_change_45m_threshold if profile is not None else 0.002
+            ),
+            maximum_holding_bars=(
+                HOLDING_WINDOWS[profile.holding_window] if profile is not None else None
+            ),
+            whitelist_profile=(profile.model_dump() if profile is not None else None),
         )
         replay.advance(max_bars=200)
     except FileNotFoundError:
@@ -323,6 +355,31 @@ def create_semi_auto_whitelist(req: SemiAutoWhitelistRequest) -> dict[str, objec
     destination = PROJECT_ROOT / 'results' / 'semi_auto_factor_whitelist.csv'
     write_semi_auto_whitelist(items, destination)
     return {'success': True, 'items': [asdict(item) for item in items], 'path': str(destination)}
+
+
+@router.post('/api/semi-auto-whitelist/validate')
+def validate_whitelist_candidate(
+    req: SemiAutoWhitelistValidationRequest,
+) -> dict[str, object]:
+    """Validate one exact 2024 profile on untouched 2025 order-flow data."""
+    destination = PROJECT_ROOT / 'results' / 'semi_auto_factor_whitelist.csv'
+    try:
+        validation = validate_semi_auto_candidate(
+            DATA_ROOT,
+            symbol=req.symbol,
+            taker_buy_ratio_threshold=req.taker_buy_ratio_threshold,
+            oi_change_45m_threshold=req.oi_change_45m_threshold,
+            holding_window=req.holding_window,
+        )
+        write_semi_auto_validation(validation, destination)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail='验证需要对应的2024白名单以及2025增强5m、OI与资金费率数据',
+        ) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f'白名单验证失败: {exc}') from None
+    return {'success': True, 'validation': asdict(validation)}
 
 
 @router.post("/api/backtest", response_model=BacktestResponse)

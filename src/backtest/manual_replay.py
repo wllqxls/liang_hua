@@ -38,12 +38,13 @@ ReplayState = Literal[
     'FINISHED',
 ]
 Decision = Literal['BUY', 'SELL', 'SKIP']
-ExitReason = Literal['STOP', 'TARGET', 'LIQUIDATION', 'FINALIZE']
+ExitReason = Literal['STOP', 'TARGET', 'LIQUIDATION', 'TIME', 'FINALIZE']
 SIGNAL_TIMEFRAME_SECONDS = {'5m': 5 * 60, '15m': 15 * 60}
 EXIT_REASON_LABELS = {
     'STOP': '止损',
     'TARGET': '止盈',
     'LIQUIDATION': '强平',
+    'TIME': '时间退出',
     'FINALIZE': '期末平仓',
 }
 MARGIN_MODE_LABELS = {
@@ -111,6 +112,8 @@ class ManualReplay:
     leverage: float
     taker_fee: float
     slippage_rate: float
+    maximum_holding_bars: int | None = None
+    whitelist_profile: dict[str, object] | None = None
     margin_mode: MarginMode = MarginMode.ISOLATED
     maintenance_margin_rate: float = 0.005
     liquidation_fee_rate: float = 0.005
@@ -142,6 +145,10 @@ class ManualReplay:
         margin_mode: MarginMode,
         maintenance_margin_rate: float,
         liquidation_fee_rate: float,
+        order_flow_taker_threshold: float = 0.55,
+        order_flow_oi_threshold: float = 0.002,
+        maximum_holding_bars: int | None = None,
+        whitelist_profile: dict[str, object] | None = None,
     ) -> 'ManualReplay':
         if timeframe not in {'5m', '15m'}:
             raise ValueError('manual replay signal timeframe must be 5m or 15m')
@@ -149,6 +156,8 @@ class ManualReplay:
             raise ValueError('opening amount must not exceed cash')
         if opening_amount * leverage * taker_fee >= cash:
             raise ValueError('账户资金不足以支付开仓手续费')
+        if maximum_holding_bars is not None and maximum_holding_bars < 1:
+            raise ValueError('maximum holding bars must be positive')
         validate_manual_candidate_scope(
             mode=mode,
             symbol=symbol,
@@ -208,7 +217,11 @@ class ManualReplay:
             candidate_features, _, _ = build_fading_push_candidates(
                 aggregate_order_flow_to_15m(five_minute),
                 funding_rate=funding_rates,
+                taker_buy_ratio_threshold=order_flow_taker_threshold,
+                oi_change_threshold=order_flow_oi_threshold,
             )
+            candidate_features['taker_buy_ratio_threshold'] = order_flow_taker_threshold
+            candidate_features['oi_change_threshold'] = order_flow_oi_threshold
         return cls(
             session_id=session_id,
             symbol=symbol,
@@ -222,6 +235,8 @@ class ManualReplay:
             leverage=float(leverage),
             taker_fee=float(taker_fee),
             slippage_rate=float(slippage_rate),
+            maximum_holding_bars=maximum_holding_bars,
+            whitelist_profile=whitelist_profile,
             margin_mode=margin_mode,
             maintenance_margin_rate=float(maintenance_margin_rate),
             liquidation_fee_rate=float(liquidation_fee_rate),
@@ -306,6 +321,12 @@ class ManualReplay:
                 raise ValueError('replay lost its open position')
             if _close_crossed_liquidation(position, candle.close):
                 exit_price, exit_reason = candle.close, 'LIQUIDATION'
+        if (
+            exit_price is None
+            and self.maximum_holding_bars is not None
+            and next_index >= position.entry_index + self.maximum_holding_bars - 1
+        ):
+            exit_price, exit_reason = candle.close, 'TIME'
         if exit_price is None and next_index >= len(self.snapshots) - 1:
             exit_price, exit_reason = candle.close, 'FINALIZE'
         if exit_price is not None and exit_reason is not None:
@@ -402,6 +423,7 @@ class ManualReplay:
             'cursor_time': cursor_time.isoformat(),
             'decisions': len(self.decisions),
             'funding_available': not self.funding_rates.empty,
+            'whitelist_profile': self.whitelist_profile,
         }
 
     def _pending_signal_payload(self) -> dict[str, object]:
@@ -544,6 +566,8 @@ class ManualReplay:
                 'risk_warning': position.risk_warning,
                 'leverage': self.leverage,
                 'funding': position.funding,
+                'time_exit_at': self._time_exit_at(position),
+                'remaining_holding_bars': self._remaining_holding_bars(position),
             }
         if self.state == 'AWAITING_CONTINUE' and self.trades:
             trade = self.trades[-1]
@@ -565,6 +589,21 @@ class ManualReplay:
                 'funding': trade.funding,
             }
         return None
+
+    def _time_exit_at(self, position: ActivePosition) -> str | None:
+        if self.maximum_holding_bars is None:
+            return None
+        exit_index = min(
+            len(self.snapshots) - 1,
+            position.entry_index + self.maximum_holding_bars - 1,
+        )
+        return self.snapshots.iloc[exit_index].closed_at.isoformat()
+
+    def _remaining_holding_bars(self, position: ActivePosition) -> int | None:
+        if self.maximum_holding_bars is None:
+            return None
+        exit_index = position.entry_index + self.maximum_holding_bars - 1
+        return max(0, exit_index - self.cursor)
 
 
 def _liquidation_price(

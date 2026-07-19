@@ -143,6 +143,45 @@ def test_open_position_advances_one_candle_at_a_time_then_waits_to_continue() ->
     assert replay.visible_payload()['position_overlay'] is None
 
 
+def test_whitelist_position_exits_at_frozen_holding_window() -> None:
+    snapshots = pd.Series(
+        [
+            _snapshot(0),
+            _snapshot(1, close=100.1, high=100.5, low=99.5),
+            _snapshot(2, close=100.2, high=100.6, low=99.6),
+        ],
+        index=pd.date_range('2025-01-01 00:05', periods=3, freq='5min', tz='UTC'),
+    )
+    replay = _replay()
+    replay.snapshots = snapshots
+    replay.maximum_holding_bars = 2
+    replay.whitelist_profile = {
+        'taker_buy_ratio_threshold': 0.575,
+        'oi_change_45m_threshold': 0.002,
+        'holding_window': '4h',
+    }
+    replay.state = 'AWAITING_DECISION'
+    replay.pending_signal = replace(
+        _signal(snapshots.iloc[0]),
+        stop_distance=20.0,
+        target_distance=20.0,
+        estimated_stop_price=80.0,
+        estimated_target_price=120.0,
+    )
+
+    replay.decide('BUY')
+    assert replay.state == 'POSITION_OPEN'
+    assert replay.visible_payload()['position_overlay']['remaining_holding_bars'] == 1
+
+    replay.step_position()
+
+    assert replay.state == 'AWAITING_CONTINUE'
+    assert replay.trades[0].exit_reason == 'TIME'
+    payload = replay.visible_payload()
+    assert payload['trades'][0]['exit_reason_label'] == '时间退出'
+    assert payload['whitelist_profile']['holding_window'] == '4h'
+
+
 def test_position_step_and_continue_reject_wrong_states() -> None:
     replay = _replay()
 

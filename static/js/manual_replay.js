@@ -14,6 +14,9 @@ let positionTimer = null;
 let positionStepInFlight = false;
 let orderFlowRunning = false;
 let orderFlowStatusLoaded = false;
+let whitelistItems = [];
+let whitelistValidations = new Map();
+let activeWhitelistProfile = null;
 const POSITION_STEP_DELAY_MS = 700;
 
 const exchangeClock = new Intl.DateTimeFormat('en-CA', {
@@ -76,7 +79,7 @@ function chart(container) {
 }
 
 function number(id) { return Number(document.getElementById(id).value); }
-function payload() { return { symbol: document.getElementById('symbol').value, data_year: number('data-year'), timeframe: document.getElementById('signal-timeframe').value, mode: document.getElementById('mode').value, cash: number('cash'), opening_amount: number('opening-amount'), margin_mode: document.getElementById('margin-mode').value, leverage: number('leverage'), taker_fee: number('taker-fee'), slippage_rate: number('slippage-rate'), maintenance_margin_rate: number('maintenance-margin-rate'), liquidation_fee_rate: number('liquidation-fee-rate') }; }
+function payload() { return { symbol: document.getElementById('symbol').value, data_year: number('data-year'), timeframe: document.getElementById('signal-timeframe').value, mode: document.getElementById('mode').value, cash: number('cash'), opening_amount: number('opening-amount'), margin_mode: document.getElementById('margin-mode').value, leverage: number('leverage'), taker_fee: number('taker-fee'), slippage_rate: number('slippage-rate'), maintenance_margin_rate: number('maintenance-margin-rate'), liquidation_fee_rate: number('liquidation-fee-rate'), whitelist_profile: activeWhitelistProfile }; }
 
 function syncModeInputs() {
     const modeSelect = document.getElementById('mode');
@@ -95,7 +98,12 @@ function syncModeInputs() {
         timeframe.value = '5m';
     }
     timeframe.disabled = isOrderFlow || isEthRsi;
-    document.getElementById('mode-note').textContent = modeSelect.selectedOptions[0]?.dataset.description || '';
+    const baseNote = modeSelect.selectedOptions[0]?.dataset.description || '';
+    const profileNote = activeWhitelistProfile
+        ? `已载入验证通过白名单：Taker≥${(activeWhitelistProfile.taker_buy_ratio_threshold * 100).toFixed(1)}%，OI≥${(activeWhitelistProfile.oi_change_45m_threshold * 100).toFixed(1)}%，最长持有 ${activeWhitelistProfile.holding_window}。`
+        : '';
+    document.getElementById('mode-note').textContent = profileNote || baseNote;
+    document.getElementById('start-btn').disabled = isOrderFlow && !activeWhitelistProfile;
 }
 
 async function responseJson(response) {
@@ -243,6 +251,9 @@ function render(data) {
     };
     document.getElementById('replay-state').textContent = stateLabels[data.state] || '回放中';
     document.getElementById('replay-state').classList.toggle('state-awaiting', awaitingDecision || awaitingContinue);
+    if (data.state === 'POSITION_OPEN' && data.position_overlay?.time_exit_at) {
+        document.getElementById('replay-state').textContent = `持仓逐 K 线回放 · 距时间退出 ${data.position_overlay.remaining_holding_bars} 根`;
+    }
     const positionWarning = document.getElementById('position-risk-warning');
     const activeRiskWarning = data.state === 'POSITION_OPEN' ? data.position_overlay?.risk_warning : null;
     positionWarning.textContent = activeRiskWarning || '';
@@ -256,7 +267,7 @@ function render(data) {
         signalWarning.classList.toggle('hidden', !data.signal.risk_warning);
     } else if (awaitingContinue && data.trades.length) {
         const trade = data.trades[data.trades.length - 1];
-        const exitLabels = { TARGET: '本笔已止盈', STOP: '本笔已止损', LIQUIDATION: '本笔已强平', FINALIZE: '本笔已按期末价格平仓' };
+        const exitLabels = { TARGET: '本笔已止盈', STOP: '本笔已止损', LIQUIDATION: '本笔已强平', TIME: '本笔已按白名单窗口退出', FINALIZE: '本笔已按期末价格平仓' };
         document.getElementById('signal-summary').textContent = exitLabels[trade.exit_reason] || '本笔已平仓';
         document.getElementById('signal-reason').textContent = `本笔盈亏 ${trade.pnl.toFixed(2)} · 资金费收支 ${trade.funding >= 0 ? '+' : ''}${trade.funding.toFixed(4)} · 当前权益 ${trade.equity.toFixed(2)}`;
         document.getElementById('signal-levels').textContent = '点击继续，快速寻找下一个候选信号。';
@@ -327,8 +338,8 @@ async function startReplay() {
 }
 
 document.getElementById('start-btn').addEventListener('click', startReplay);
-document.getElementById('symbol').addEventListener('change', () => { syncModeInputs(); startReplay(); });
-document.getElementById('mode').addEventListener('change', () => { syncModeInputs(); startReplay(); });
+document.getElementById('symbol').addEventListener('change', () => { activeWhitelistProfile = null; syncModeInputs(); if (!document.getElementById('start-btn').disabled) startReplay(); });
+document.getElementById('mode').addEventListener('change', () => { activeWhitelistProfile = null; syncModeInputs(); if (!document.getElementById('start-btn').disabled) startReplay(); });
 document.querySelectorAll('[data-decision]').forEach(button => button.addEventListener('click', async () => { try { render(await request(`/api/manual-replays/${replay.session_id}/decision`, { decision: button.dataset.decision })); } catch (error) { showError(error); } }));
 document.getElementById('continue-btn').addEventListener('click', continueReplay);
 document.getElementById('chart-timeframe').addEventListener('change', () => { if (replay) { lastChartViewKey = null; render(replay); } });
@@ -549,13 +560,86 @@ document.getElementById('data-fetch-year').addEventListener('change', () => {
     else loadLocalDataStatus();
 });
 
+function whitelistKey(item) {
+    return `${item.symbol}|${item.taker_buy_ratio_threshold}|${item.oi_change_45m_threshold}|${item.holding_window}`;
+}
+
+function metricPercent(value, digits = 3) {
+    return value == null ? '—' : `${(Number(value) * 100).toFixed(digits)}%`;
+}
+
+function metricNumber(value, digits = 2) {
+    return value == null ? '—' : Number(value).toFixed(digits);
+}
+
+function renderWhitelistRows() {
+    const rows = whitelistItems.map((item, index) => {
+        const validation = whitelistValidations.get(whitelistKey(item));
+        const status = !validation ? '待验证' : validation.passed ? '验证通过' : '验证失败';
+        const statusClass = validation?.passed ? 'data-present' : validation ? 'data-missing' : '';
+        const action = !validation
+            ? `<button type="button" data-validate-whitelist="${index}">验证2025</button>`
+            : validation.passed
+                ? `<button type="button" class="primary" data-load-whitelist="${index}">载入人工回放</button>`
+                : '<button type="button" disabled>禁止载入</button>';
+        return `<tr><td>${item.rank}</td><td>${escapeHtml(item.trigger_logic)}</td><td>${item.events}</td><td>${metricPercent(item.average_gross_return)}</td><td>${metricPercent(item.average_funding_return, 4)}</td><td>${metricPercent(item.average_net_return)}</td><td>${validation?.events ?? '—'}</td><td>${metricPercent(validation?.average_gross_return)}</td><td>${metricPercent(validation?.average_net_return)}</td><td>${metricPercent(validation?.net_win_rate, 2)}</td><td>${metricNumber(validation?.profit_factor)}</td><td>${metricPercent(validation?.median_net_return)}</td><td>${metricPercent(validation?.top_3_net_share, 1)}</td><td class="${statusClass}">${status}</td><td>${action}</td></tr>`;
+    }).join('');
+    document.getElementById('whitelist-table').innerHTML = rows || '<tr><td colspan="15">2024 年没有同时满足 30–100 次、毛收益与成本后净收益均大于 0 的候选</td></tr>';
+}
+
+async function validateWhitelist(index) {
+    const item = whitelistItems[index];
+    if (!item) return;
+    const status = document.getElementById('whitelist-status');
+    status.textContent = `正在用冻结参数验证 ${item.symbol} 2025，请稍候…`;
+    try {
+        const data = await request('/api/semi-auto-whitelist/validate', {
+            symbol: item.symbol,
+            taker_buy_ratio_threshold: item.taker_buy_ratio_threshold,
+            oi_change_45m_threshold: item.oi_change_45m_threshold,
+            holding_window: item.holding_window,
+        });
+        whitelistValidations.set(whitelistKey(item), data.validation);
+        renderWhitelistRows();
+        status.textContent = data.validation.passed
+            ? '2025 独立验证通过，可以载入人工回放。'
+            : '2025 独立验证失败：候选已保留审计，但禁止载入回放。';
+    } catch (error) { showError(error); }
+}
+
+function loadWhitelistReplay(index) {
+    const item = whitelistItems[index];
+    const validation = item ? whitelistValidations.get(whitelistKey(item)) : null;
+    if (!item || !validation?.passed) return;
+    activeWhitelistProfile = {
+        taker_buy_ratio_threshold: item.taker_buy_ratio_threshold,
+        oi_change_45m_threshold: item.oi_change_45m_threshold,
+        holding_window: item.holding_window,
+    };
+    document.getElementById('symbol').value = item.symbol;
+    document.getElementById('data-year').value = '2025';
+    document.getElementById('mode').value = 'ORDER_FLOW_FADING_15M';
+    document.getElementById('signal-timeframe').value = '15m';
+    syncModeInputs();
+    startReplay();
+}
+
+document.getElementById('whitelist-table').addEventListener('click', event => {
+    const validateButton = event.target.closest('[data-validate-whitelist]');
+    if (validateButton) { validateWhitelist(Number(validateButton.dataset.validateWhitelist)); return; }
+    const loadButton = event.target.closest('[data-load-whitelist]');
+    if (loadButton) loadWhitelistReplay(Number(loadButton.dataset.loadWhitelist));
+});
+
 document.getElementById('whitelist-btn').addEventListener('click', async () => {
     const button = document.getElementById('whitelist-btn'); button.disabled = true;
     document.getElementById('whitelist-status').textContent = '正在扫描 2024 年增强 5m、OI 与真实资金费率，请稍候…';
     try {
         const data = await request('/api/semi-auto-whitelist', { symbol: document.getElementById('symbol').value });
-        const rows = data.items.map(item => `<tr><td>${item.rank}</td><td>${item.trigger_logic}</td><td>${item.events}</td><td>${(item.average_gross_return * 100).toFixed(3)}%</td><td>${(item.average_round_trip_cost * 100).toFixed(3)}%</td><td>${(item.average_funding_return * 100).toFixed(4)}%</td><td>${(item.average_net_return * 100).toFixed(3)}%</td><td>${item.visual_score.toFixed(2)}</td></tr>`).join('');
-        document.getElementById('whitelist-table').innerHTML = rows || '<tr><td colspan="8">2024 年没有同时满足 30–100 次、毛收益与成本后净收益均大于 0 的候选</td></tr>';
+        whitelistItems = data.items;
+        whitelistValidations = new Map();
+        activeWhitelistProfile = null;
+        renderWhitelistRows();
         document.getElementById('whitelist-status').textContent = data.items.length ? `已生成 ${data.items.length} 组 2024 订单流候选；CSV 已保存到 results/semi_auto_factor_whitelist.csv` : '2024 订单流搜索完成，白名单为空。';
     } catch (error) { showError(error); } finally { button.disabled = false; }
 });

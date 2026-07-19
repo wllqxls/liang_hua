@@ -48,6 +48,26 @@ class WhiteListItem:
     trigger_logic: str
 
 
+@dataclass(frozen=True, slots=True)
+class WhiteListValidation:
+    symbol: str
+    validation_year: int
+    taker_buy_ratio_threshold: float
+    oi_change_45m_threshold: float
+    holding_window: str
+    events: int
+    average_gross_return: float
+    average_round_trip_cost: float
+    average_funding_return: float
+    average_net_return: float
+    net_win_rate: float
+    median_net_return: float
+    profit_factor: float | None
+    top_3_net_share: float | None
+    passed: bool
+    status: str
+
+
 def build_semi_auto_whitelist(
     data_root: Path,
     *,
@@ -128,6 +148,71 @@ def build_semi_auto_whitelist(
     return [replace(item, rank=index) for index, item in enumerate(rows[:5], start=1)]
 
 
+def validate_semi_auto_candidate(
+    data_root: Path,
+    *,
+    symbol: str,
+    taker_buy_ratio_threshold: float,
+    oi_change_45m_threshold: float,
+    holding_window: str,
+) -> WhiteListValidation:
+    """Validate one frozen 2024 candidate on untouched 2025 data."""
+    if symbol not in SUPPORTED_SYMBOLS:
+        raise ValueError('order-flow whitelist only supports BTC/USDT and ETH/USDT')
+    if taker_buy_ratio_threshold not in TAKER_BUY_RATIO_THRESHOLDS:
+        raise ValueError('taker threshold is outside the frozen 2024 grid')
+    if oi_change_45m_threshold not in OI_CHANGE_THRESHOLDS:
+        raise ValueError('OI threshold is outside the frozen 2024 grid')
+    if holding_window not in HOLDING_WINDOWS:
+        raise ValueError('holding window is outside the frozen 2024 grid')
+    archive_symbol = symbol.replace('/', '')
+    order_flow_root = Path(data_root) / ORDER_FLOW_ROOT
+    five_minute = load_order_flow_year(order_flow_root, symbol=archive_symbol, year=2025)
+    funding_rates = _normalize_funding_rates(
+        load_funding_year(order_flow_root, symbol=archive_symbol, year=2025),
+    )
+    if funding_rates.empty:
+        raise FileNotFoundError(f'{archive_symbol} 2025 fundingRate is empty')
+    fifteen_minute = aggregate_order_flow_to_15m(five_minute)
+    events, _, _ = build_fading_push_candidates(
+        fifteen_minute,
+        funding_rate=funding_rates,
+        taker_buy_ratio_threshold=taker_buy_ratio_threshold,
+        oi_change_threshold=oi_change_45m_threshold,
+        event_cooldown_bars=EVENT_COOLDOWN_BARS,
+    )
+    metrics = _candidate_metrics(
+        fifteen_minute=fifteen_minute,
+        five_minute=five_minute,
+        funding_rates=funding_rates,
+        events=events,
+        holding_bars=HOLDING_WINDOWS[holding_window],
+    )
+    passed = bool(
+        MINIMUM_EVENTS <= metrics['events'] <= MAXIMUM_EVENTS
+        and metrics['average_gross_return'] > 0
+        and metrics['average_net_return'] > 0
+    )
+    return WhiteListValidation(
+        symbol=symbol,
+        validation_year=2025,
+        taker_buy_ratio_threshold=taker_buy_ratio_threshold,
+        oi_change_45m_threshold=oi_change_45m_threshold,
+        holding_window=holding_window,
+        events=int(metrics['events']),
+        average_gross_return=float(metrics['average_gross_return']),
+        average_round_trip_cost=FIXED_ROUND_TRIP_COST,
+        average_funding_return=float(metrics['average_funding_return']),
+        average_net_return=float(metrics['average_net_return']),
+        net_win_rate=float(metrics['net_win_rate']),
+        median_net_return=float(metrics['median_net_return']),
+        profit_factor=metrics['profit_factor'],
+        top_3_net_share=metrics['top_3_net_share'],
+        passed=passed,
+        status='PASSED' if passed else 'FAILED',
+    )
+
+
 def write_semi_auto_whitelist(items: list[WhiteListItem], destination: Path) -> None:
     """Write the compact 2024 order-flow whitelist CSV, including an empty result."""
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -146,6 +231,71 @@ def write_semi_auto_whitelist(items: list[WhiteListItem], destination: Path) -> 
     )
 
 
+def write_semi_auto_validation(
+    validation: WhiteListValidation,
+    destination: Path,
+) -> None:
+    """Persist 2025 validation beside its exact frozen 2024 candidate row."""
+    if not destination.exists():
+        raise FileNotFoundError('semi-auto whitelist CSV does not exist')
+    frame = pd.read_csv(destination, encoding='utf-8-sig')
+    match = (
+        frame['symbol'].eq(validation.symbol)
+        & frame['taker_buy_ratio_threshold'].astype(float).eq(
+            validation.taker_buy_ratio_threshold,
+        )
+        & frame['oi_change_45m_threshold'].astype(float).eq(
+            validation.oi_change_45m_threshold,
+        )
+        & frame['holding_window'].eq(validation.holding_window)
+    )
+    if int(match.sum()) != 1:
+        raise ValueError('frozen whitelist candidate was not found exactly once')
+    values = asdict(validation)
+    for key, value in values.items():
+        if key in {
+            'symbol', 'taker_buy_ratio_threshold', 'oi_change_45m_threshold',
+            'holding_window',
+        }:
+            continue
+        column = key if key == 'validation_year' else f'validation_{key}'
+        frame.loc[match, column] = value
+    frame.to_csv(
+        destination,
+        index=False,
+        encoding='utf-8-sig',
+        lineterminator='\n',
+    )
+
+
+def is_validation_passed_profile(
+    destination: Path,
+    *,
+    symbol: str,
+    taker_buy_ratio_threshold: float,
+    oi_change_45m_threshold: float,
+    holding_window: str,
+) -> bool:
+    """Return whether the exact profile has a persisted passing 2025 audit."""
+    if not destination.exists():
+        return False
+    frame = pd.read_csv(destination, encoding='utf-8-sig')
+    required = {
+        'symbol', 'taker_buy_ratio_threshold', 'oi_change_45m_threshold',
+        'holding_window', 'validation_passed',
+    }
+    if not required <= set(frame.columns):
+        return False
+    match = (
+        frame['symbol'].eq(symbol)
+        & frame['taker_buy_ratio_threshold'].astype(float).eq(taker_buy_ratio_threshold)
+        & frame['oi_change_45m_threshold'].astype(float).eq(oi_change_45m_threshold)
+        & frame['holding_window'].eq(holding_window)
+        & frame['validation_passed'].astype(str).str.lower().eq('true')
+    )
+    return int(match.sum()) == 1
+
+
 def _candidate_metrics(
     *,
     fifteen_minute: pd.DataFrame,
@@ -153,7 +303,7 @@ def _candidate_metrics(
     funding_rates: pd.Series,
     events: pd.DataFrame,
     holding_bars: int,
-) -> dict[str, float | int]:
+) -> dict[str, float | int | None]:
     """Use next-open entry, fixed-window close exit, fixed cost and real funding."""
     gross_returns: list[float] = []
     funding_returns: list[float] = []
@@ -187,12 +337,26 @@ def _candidate_metrics(
         net_returns.append(gross - FIXED_ROUND_TRIP_COST + funding)
         visual_scores.append(_visual_score(event))
     count = len(gross_returns)
+    net_array = np.asarray(net_returns, dtype=float)
+    gains = float(net_array[net_array > 0].sum()) if count else 0.0
+    losses = float(-net_array[net_array < 0].sum()) if count else 0.0
+    profit_factor = gains / losses if losses > 0 else None
+    total_net = float(net_array.sum()) if count else 0.0
+    top_3_net_share = (
+        float(np.sort(net_array)[-3:].sum() / total_net)
+        if count and total_net > 0
+        else None
+    )
     return {
         'events': count,
         'average_gross_return': float(np.mean(gross_returns)) if count else 0.0,
         'average_funding_return': float(np.mean(funding_returns)) if count else 0.0,
         'average_net_return': float(np.mean(net_returns)) if count else 0.0,
         'visual_score': float(np.mean(visual_scores)) if count else 0.0,
+        'net_win_rate': float((net_array > 0).mean()) if count else 0.0,
+        'median_net_return': float(np.median(net_array)) if count else 0.0,
+        'profit_factor': profit_factor,
+        'top_3_net_share': top_3_net_share,
     }
 
 

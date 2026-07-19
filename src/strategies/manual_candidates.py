@@ -78,12 +78,14 @@ def _build_order_flow_fading_signal(
     taker_buy_ratio = float(features['taker_buy_ratio'])
     oi_change = float(features['oi_change_45m'])
     funding_rate = float(features['funding_rate'])
+    taker_threshold = float(features.get('taker_buy_ratio_threshold', 0.55))
+    oi_threshold = float(features.get('oi_change_threshold', 0.002))
     stop_distance = snapshot.atr * ORDER_FLOW_STOP_ATR_MULTIPLE
     target_distance = snapshot.atr * ORDER_FLOW_TARGET_ATR_MULTIPLE
     funding_text = '暂无已结算值' if pd.isna(funding_rate) else f'{funding_rate * 100:.4f}%'
     reason = (
-        f'主动买入占比 {taker_buy_ratio * 100:.1f}%（≥55%）'
-        f'，45 分钟 OI 增长 {oi_change * 100:.2f}%（≥0.20%）'
+        f'主动买入占比 {taker_buy_ratio * 100:.1f}%（≥{taker_threshold * 100:g}%）'
+        f'，45 分钟 OI 增长 {oi_change * 100:.2f}%（≥{oi_threshold * 100:g}%）'
         f'，但收盘低于前一根；最近资金费率 {funding_text}'
     )
     return Signal(

@@ -91,7 +91,7 @@
                 </select>
             </label>
             <button id="start-btn" class="primary" type="button">开始回放</button>
-            <button id="whitelist-btn" type="button">生成半自动因子白名单</button>
+            <button id="whitelist-btn" type="button">生成 2024 订单流白名单</button>
         </section>
 
         <details class="panel advanced-options">
@@ -205,12 +205,12 @@
         </section>
         <section class="panel">
             <h2>半自动因子白名单</h2>
-            <p id="whitelist-status" class="levels">只读取 2024 增强数据；下一根 15m 开盘进场，扣除 0.14% 往返成本与真实资金费率，2025 保持未读。</p>
-            <div class="table-wrap"><table><thead><tr><th>排名</th><th>触发逻辑</th><th>事件</th><th>毛收益</th><th>往返成本</th><th>资金费</th><th>净收益</th><th>辨识度</th></tr></thead><tbody id="whitelist-table"><tr><td colspan="8">尚未生成</td></tr></tbody></table></div>
+            <p id="whitelist-status" class="levels">先用 2024 搜索，再由你逐条触发 2025 独立验证；只有扣除 0.14% 往返成本与真实资金费率后仍通过的参数，才能载入人工回放。</p>
+            <div class="table-wrap"><table><thead><tr><th>排名</th><th>触发逻辑</th><th>2024事件</th><th>2024毛收益</th><th>2024资金费</th><th>2024净收益</th><th>2025事件</th><th>2025毛收益</th><th>2025净收益</th><th>净胜率</th><th>PF</th><th>净收益中位数</th><th>前三笔集中度</th><th>状态</th><th>操作</th></tr></thead><tbody id="whitelist-table"><tr><td colspan="15">尚未生成</td></tr></tbody></table></div>
         </section>
         <p id="error" class="error hidden"></p>
     </main>
     <script src="/static/js/chart_drawings.js?v=20260719-8"></script>
-    <script src="/static/js/manual_replay.js?v=20260719-11"></script>
+    <script src="/static/js/manual_replay.js?v=20260719-13"></script>
 </body>
 </html>

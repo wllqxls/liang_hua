@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pandas as pd
 import pytest
 
@@ -9,9 +11,14 @@ from src.backtest.semi_auto_optimizer import (
     HOLDING_WINDOWS,
     OI_CHANGE_THRESHOLDS,
     TAKER_BUY_RATIO_THRESHOLDS,
+    WhiteListItem,
+    WhiteListValidation,
     _candidate_metrics,
     _sample_score,
     build_semi_auto_whitelist,
+    is_validation_passed_profile,
+    validate_semi_auto_candidate,
+    write_semi_auto_validation,
     write_semi_auto_whitelist,
 )
 from src.research.event_factors import FIXED_ROUND_TRIP_COST
@@ -111,3 +118,114 @@ def test_whitelist_loader_reads_only_2024(monkeypatch, tmp_path) -> None:
 
     assert build_semi_auto_whitelist(tmp_path, symbol='BTC/USDT') == []
     assert years == [DESIGN_YEAR, DESIGN_YEAR]
+
+
+def test_candidate_validation_reads_only_2025_and_applies_net_gate(monkeypatch, tmp_path) -> None:
+    years: list[int] = []
+    five_minute = pd.DataFrame(
+        {'close': [100.0]},
+        index=pd.DatetimeIndex(['2025-01-01 00:00:00+00:00']),
+    )
+
+    def fake_order_flow(root, *, symbol, year):
+        years.append(year)
+        return five_minute
+
+    def fake_funding(root, *, symbol, year):
+        years.append(year)
+        return pd.Series([0.0001], index=five_minute.index)
+
+    monkeypatch.setattr(optimizer, 'load_order_flow_year', fake_order_flow)
+    monkeypatch.setattr(optimizer, 'load_funding_year', fake_funding)
+    monkeypatch.setattr(optimizer, 'aggregate_order_flow_to_15m', lambda frame: frame)
+    monkeypatch.setattr(
+        optimizer,
+        'build_fading_push_candidates',
+        lambda *args, **kwargs: (pd.DataFrame(), 0, 0),
+    )
+    monkeypatch.setattr(
+        optimizer,
+        '_candidate_metrics',
+        lambda **kwargs: {
+            'events': 65,
+            'average_gross_return': 0.001,
+            'average_funding_return': 0.0,
+            'average_net_return': -0.0004,
+            'net_win_rate': 0.4,
+            'median_net_return': -0.0002,
+            'profit_factor': 0.8,
+            'top_3_net_share': None,
+            'visual_score': 0.5,
+        },
+    )
+
+    validation = validate_semi_auto_candidate(
+        tmp_path,
+        symbol='BTC/USDT',
+        taker_buy_ratio_threshold=0.575,
+        oi_change_45m_threshold=0.002,
+        holding_window='4h',
+    )
+
+    assert years == [2025, 2025]
+    assert validation.passed is False
+    assert validation.status == 'FAILED'
+
+
+def test_validation_persistence_controls_exact_replay_profile(tmp_path) -> None:
+    destination = tmp_path / 'whitelist.csv'
+    item = WhiteListItem(
+        rank=1,
+        symbol='BTC/USDT',
+        mode='ORDER_FLOW_FADING_15M',
+        timeframe='15m',
+        design_year=2024,
+        taker_buy_ratio_threshold=0.575,
+        oi_change_45m_threshold=0.002,
+        holding_window='4h',
+        events=54,
+        average_gross_return=0.0028,
+        average_round_trip_cost=0.0014,
+        average_funding_return=0.00004,
+        average_net_return=0.00144,
+        visual_score=0.5,
+        sample_score=0.7,
+        trigger_logic='fixture',
+    )
+    write_semi_auto_whitelist([item], destination)
+    failed = WhiteListValidation(
+        symbol='BTC/USDT',
+        validation_year=2025,
+        taker_buy_ratio_threshold=0.575,
+        oi_change_45m_threshold=0.002,
+        holding_window='4h',
+        events=87,
+        average_gross_return=0.0009,
+        average_round_trip_cost=0.0014,
+        average_funding_return=0.00003,
+        average_net_return=-0.00047,
+        net_win_rate=0.4,
+        median_net_return=-0.0008,
+        profit_factor=0.8,
+        top_3_net_share=0.9,
+        passed=False,
+        status='FAILED',
+    )
+
+    write_semi_auto_validation(failed, destination)
+
+    assert not is_validation_passed_profile(
+        destination,
+        symbol='BTC/USDT',
+        taker_buy_ratio_threshold=0.575,
+        oi_change_45m_threshold=0.002,
+        holding_window='4h',
+    )
+    write_semi_auto_validation(replace(failed, passed=True, status='PASSED'), destination)
+    assert is_validation_passed_profile(
+        destination,
+        symbol='BTC/USDT',
+        taker_buy_ratio_threshold=0.575,
+        oi_change_45m_threshold=0.002,
+        holding_window='4h',
+    )

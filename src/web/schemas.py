@@ -298,6 +298,16 @@ class DataFetchResponse(BaseModel):
     error: str | None = None
 
 
+class WhitelistReplayProfile(BaseModel):
+    """One validation-passed order-flow profile loaded into manual replay."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    taker_buy_ratio_threshold: Literal[0.55, 0.575, 0.6]
+    oi_change_45m_threshold: Literal[0.002, 0.005, 0.01]
+    holding_window: Literal['30m', '1h', '4h']
+
+
 class ManualReplayRequest(BaseModel):
     """Create one server-side human decision replay."""
 
@@ -315,6 +325,7 @@ class ManualReplayRequest(BaseModel):
     slippage_rate: float = Field(default=0.0002, ge=0, le=0.1)
     maintenance_margin_rate: float = Field(default=0.005, ge=0, lt=1)
     liquidation_fee_rate: float = Field(default=0.005, ge=0, le=0.1)
+    whitelist_profile: WhitelistReplayProfile | None = None
 
 
 class ManualDecisionRequest(BaseModel):
@@ -329,5 +340,11 @@ class SemiAutoWhitelistRequest(BaseModel):
     """Request a local 2024 order-flow human-signal whitelist."""
 
     model_config = ConfigDict(extra='forbid')
+
+    symbol: str = Field(default='BTC/USDT')
+
+
+class SemiAutoWhitelistValidationRequest(WhitelistReplayProfile):
+    """Validate one exact frozen 2024 profile on 2025 data."""
 
     symbol: str = Field(default='BTC/USDT')
