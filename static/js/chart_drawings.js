@@ -2,6 +2,9 @@ class ChartDrawingController {
     constructor(options) {
         this.overlay = options.overlay;
         this.toolbar = options.toolbar;
+        this.styleToolbar = options.styleToolbar;
+        this.styleDragHandle = options.styleDragHandle;
+        this.chartWrap = options.chartWrap;
         this.toggle = options.toggle;
         this.colorInput = options.colorInput;
         this.widthInput = options.widthInput;
@@ -15,6 +18,7 @@ class ChartDrawingController {
         this.tool = 'select';
         this.pendingPoint = null;
         this.drag = null;
+        this.styleDrag = null;
         this.risk = null;
         this.priceLines = [];
         this._bindControls();
@@ -38,7 +42,11 @@ class ChartDrawingController {
         this.history = [];
         try {
             const stored = JSON.parse(this._storage()?.getItem(key) || '[]');
-            this.drawings = Array.isArray(stored) ? stored : [];
+            this.drawings = Array.isArray(stored) ? stored.map(drawing => {
+                if (drawing.type === 'trend') return { ...drawing, type: 'ray' };
+                if (drawing.type === 'ray' && drawing.points?.length === 1) return { ...drawing, type: 'horizontalRay' };
+                return drawing;
+            }) : [];
         } catch (error) {
             this.drawings = [];
         }
@@ -60,6 +68,7 @@ class ChartDrawingController {
             this.pendingPoint = null;
             this.drag = null;
         }
+        this._syncStyleToolbarVisibility();
         this.redraw();
     }
 
@@ -85,6 +94,12 @@ class ChartDrawingController {
         this.toolbar.querySelector('#draw-undo').addEventListener('click', () => this._undo());
         this.toolbar.querySelector('#draw-delete').addEventListener('click', () => this._deleteSelected());
         this.toolbar.querySelector('#draw-clear').addEventListener('click', () => this._clear());
+        this.colorInput.addEventListener('change', () => this._applySelectedStyle());
+        this.widthInput.addEventListener('change', () => this._applySelectedStyle());
+        this.styleInput.addEventListener('change', () => this._applySelectedStyle());
+        this.styleDragHandle.addEventListener('pointerdown', event => this._startStyleDrag(event));
+        window.addEventListener('pointermove', event => this._moveStyleToolbar(event));
+        window.addEventListener('pointerup', () => { this.styleDrag = null; });
         this.overlay.addEventListener('pointerdown', event => this._pointerDown(event));
         this.overlay.addEventListener('pointermove', event => this._pointerMove(event));
         this.overlay.addEventListener('pointerup', event => this._pointerUp(event));
@@ -96,6 +111,10 @@ class ChartDrawingController {
                 this.drag = null;
                 this.redraw();
             }
+            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+                event.preventDefault();
+                this._undo();
+            }
             if (event.key === 'Delete' || event.key === 'Backspace') this._deleteSelected();
         });
         this._selectTool('select');
@@ -104,9 +123,11 @@ class ChartDrawingController {
     _selectTool(tool) {
         this.tool = tool;
         this.pendingPoint = null;
+        if (tool !== 'select') this.selectedId = null;
         this.toolbar.querySelectorAll('[data-draw-tool]').forEach(button => {
             button.classList.toggle('active', button.dataset.drawTool === tool);
         });
+        this._syncStyleToolbarVisibility();
         this.redraw();
     }
 
@@ -120,6 +141,7 @@ class ChartDrawingController {
         }
         if (drawingId) {
             this.selectedId = drawingId;
+            this._loadSelectedStyle();
             this._startDrag(event, drawingId, null);
             return;
         }
@@ -127,10 +149,11 @@ class ChartDrawingController {
         if (!point) return;
         if (this.tool === 'select') {
             this.selectedId = null;
+            this._syncStyleToolbarVisibility();
             this.redraw();
             return;
         }
-        if (['horizontal', 'ray', 'vertical'].includes(this.tool)) {
+        if (['horizontal', 'horizontalRay', 'vertical'].includes(this.tool)) {
             this._pushHistory();
             this.drawings.push(this._newDrawing(this.tool, [point]));
             this._save();
@@ -155,6 +178,7 @@ class ChartDrawingController {
         event.preventDefault();
         this._pushHistory();
         this.selectedId = drawingId;
+        this._loadSelectedStyle();
         this.drag = {
             drawingId,
             endpoint,
@@ -238,11 +262,12 @@ class ChartDrawingController {
             'data-drawing-id': drawing.id,
             style: 'pointer-events:stroke;cursor:move',
         };
-        if (drawing.type === 'trend') {
-            this._svg('line', { ...common, x1: points[0].x, y1: points[0].y, x2: points[1].x, y2: points[1].y });
+        if (drawing.type === 'ray') {
+            const end = this._rayEnd(points[0], points[1], width, height);
+            this._svg('line', { ...common, x1: points[0].x, y1: points[0].y, x2: end.x, y2: end.y });
         } else if (drawing.type === 'horizontal') {
             this._svg('line', { ...common, x1: 0, y1: points[0].y, x2: width, y2: points[0].y });
-        } else if (drawing.type === 'ray') {
+        } else if (drawing.type === 'horizontalRay') {
             this._svg('line', { ...common, x1: points[0].x, y1: points[0].y, x2: width, y2: points[0].y });
         } else if (drawing.type === 'vertical') {
             this._svg('line', { ...common, x1: points[0].x, y1: 0, x2: points[0].x, y2: height });
@@ -320,6 +345,69 @@ class ChartDrawingController {
         return '';
     }
 
+    _rayEnd(start, direction, width, height) {
+        const dx = direction.x - start.x;
+        const dy = direction.y - start.y;
+        const candidates = [];
+        if (dx > 0) candidates.push((width - start.x) / dx);
+        if (dx < 0) candidates.push((0 - start.x) / dx);
+        if (dy > 0) candidates.push((height - start.y) / dy);
+        if (dy < 0) candidates.push((0 - start.y) / dy);
+        const scale = Math.min(...candidates.filter(value => value >= 1));
+        if (!Number.isFinite(scale)) return direction;
+        return { x: start.x + dx * scale, y: start.y + dy * scale };
+    }
+
+    _syncStyleToolbarVisibility() {
+        const open = !this.toolbar.classList.contains('hidden');
+        const shouldShow = open && (this.tool !== 'select' || this.selectedId !== null);
+        this.styleToolbar.classList.toggle('hidden', !shouldShow);
+    }
+
+    _loadSelectedStyle() {
+        const drawing = this.drawings.find(item => item.id === this.selectedId);
+        if (drawing) {
+            this.colorInput.value = drawing.color;
+            this.widthInput.value = String(drawing.width);
+            this.styleInput.value = drawing.style;
+        }
+        this._syncStyleToolbarVisibility();
+    }
+
+    _applySelectedStyle() {
+        const drawing = this.drawings.find(item => item.id === this.selectedId);
+        if (!drawing) return;
+        this._pushHistory();
+        drawing.color = this.colorInput.value;
+        drawing.width = Number(this.widthInput.value);
+        drawing.style = this.styleInput.value;
+        this._save();
+        this.redraw();
+    }
+
+    _startStyleDrag(event) {
+        event.preventDefault();
+        const toolbarBounds = this.styleToolbar.getBoundingClientRect();
+        const wrapBounds = this.chartWrap.getBoundingClientRect();
+        this.styleDrag = {
+            startX: event.clientX,
+            startY: event.clientY,
+            left: toolbarBounds.left - wrapBounds.left,
+            top: toolbarBounds.top - wrapBounds.top,
+        };
+        this.styleDragHandle.setPointerCapture(event.pointerId);
+    }
+
+    _moveStyleToolbar(event) {
+        if (!this.styleDrag) return;
+        const maxLeft = Math.max(0, this.chartWrap.clientWidth - this.styleToolbar.offsetWidth);
+        const maxTop = Math.max(0, this.chartWrap.clientHeight - this.styleToolbar.offsetHeight);
+        const left = Math.max(0, Math.min(maxLeft, this.styleDrag.left + event.clientX - this.styleDrag.startX));
+        const top = Math.max(0, Math.min(maxTop, this.styleDrag.top + event.clientY - this.styleDrag.startY));
+        this.styleToolbar.style.left = `${left}px`;
+        this.styleToolbar.style.top = `${top}px`;
+    }
+
     _pushHistory() {
         this.history.push(JSON.stringify(this.drawings));
         if (this.history.length > 50) this.history.shift();
@@ -330,6 +418,7 @@ class ChartDrawingController {
         if (previous == null) return;
         this.drawings = JSON.parse(previous);
         this.selectedId = null;
+        this._syncStyleToolbarVisibility();
         this._save();
         this.redraw();
     }
@@ -339,6 +428,7 @@ class ChartDrawingController {
         this._pushHistory();
         this.drawings = this.drawings.filter(item => item.id !== this.selectedId);
         this.selectedId = null;
+        this._syncStyleToolbarVisibility();
         this._save();
         this.redraw();
     }
@@ -348,6 +438,7 @@ class ChartDrawingController {
         this._pushHistory();
         this.drawings = [];
         this.selectedId = null;
+        this._syncStyleToolbarVisibility();
         this._save();
         this.redraw();
     }

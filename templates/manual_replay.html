@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>半自动交易回放</title>
-    <link rel="stylesheet" href="/static/css/manual_replay.css">
+    <link rel="stylesheet" href="/static/css/manual_replay.css?v=20260719">
     <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -89,31 +89,53 @@
                 <div id="candle-chart" aria-label="本地 K 线回放图"></div>
                 <svg id="chart-drawing-overlay" class="chart-drawing-overlay" aria-hidden="true"></svg>
                 <div id="chart-tooltip" class="chart-tooltip hidden"></div>
-                <div id="drawing-toolbar" class="drawing-toolbar hidden" role="toolbar" aria-label="画线工具">
-                    <div class="drawing-tools">
-                        <button type="button" data-draw-tool="select">选择</button>
-                        <button type="button" data-draw-tool="trend">趋势线</button>
-                        <button type="button" data-draw-tool="horizontal">水平线</button>
-                        <button type="button" data-draw-tool="ray">水平射线</button>
-                        <button type="button" data-draw-tool="vertical">垂直线</button>
-                        <button type="button" data-draw-tool="rectangle">矩形</button>
-                    </div>
-                    <div class="drawing-options">
-                        <label>颜色 <input id="draw-color" type="color" value="#f2c94c"></label>
-                        <label>粗细 <select id="draw-width"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option></select></label>
-                        <label>线型 <select id="draw-style"><option value="solid">实线</option><option value="dash">虚线</option><option value="dot">点线</option></select></label>
-                    </div>
-                    <div class="drawing-history">
-                        <button id="draw-undo" type="button">撤销</button>
-                        <button id="draw-delete" type="button">删除选中</button>
-                        <button id="draw-clear" type="button">清空当前图</button>
-                    </div>
-                    <p>画线时图表缩放暂时锁定；选择工具后可拖动线条或端点。Esc 取消，Delete 删除。</p>
+                <div id="drawing-style-toolbar" class="drawing-style-toolbar hidden" role="toolbar" aria-label="画线样式">
+                    <button id="drawing-style-drag" class="style-drag-handle" type="button" aria-label="拖动画线样式栏" title="拖动样式栏">
+                        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="7" cy="5" r="1.2"/><circle cx="13" cy="5" r="1.2"/><circle cx="7" cy="10" r="1.2"/><circle cx="13" cy="10" r="1.2"/><circle cx="7" cy="15" r="1.2"/><circle cx="13" cy="15" r="1.2"/></svg>
+                    </button>
+                    <input id="draw-color" class="draw-color" type="color" value="#f2c94c" aria-label="线条颜色" title="线条颜色">
+                    <select id="draw-width" aria-label="线条粗细" title="线条粗细"><option value="1">1 px</option><option value="2" selected>2 px</option><option value="3">3 px</option><option value="4">4 px</option></select>
+                    <select id="draw-style" aria-label="线型" title="线型"><option value="solid">━━━━</option><option value="dash">━ ━ ━</option><option value="dot">· · · ·</option></select>
                 </div>
             </div>
             <div class="chart-footer">
-                <p class="attribution">图表由 <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">TradingView</a> Lightweight Charts 提供。</p>
-                <button id="drawing-toggle" class="drawing-toggle" type="button" aria-expanded="false" aria-controls="drawing-toolbar">画图</button>
+                <div id="drawing-toolbar" class="drawing-toolbar hidden" role="toolbar" aria-label="画线工具">
+                    <div class="drawing-tools">
+                        <button type="button" data-draw-tool="select" aria-label="选择" title="选择 / 移动画线">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3l13 9-6 1.5 3.5 6-2.7 1.5-3.4-6L5 19z"/></svg>
+                        </button>
+                        <button type="button" data-draw-tool="ray" aria-label="射线" title="射线">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="18" r="2"/><path d="M7 16L19 4m-5 1h5v5"/></svg>
+                        </button>
+                        <button type="button" data-draw-tool="horizontal" aria-label="水平线" title="水平线">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h18"/></svg>
+                        </button>
+                        <button type="button" data-draw-tool="horizontalRay" aria-label="水平射线" title="水平射线">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2"/><path d="M7 12h14m-4-3 4 3-4 3"/></svg>
+                        </button>
+                        <button type="button" data-draw-tool="vertical" aria-label="垂直线" title="垂直线">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18"/></svg>
+                        </button>
+                        <button type="button" data-draw-tool="rectangle" aria-label="矩形" title="矩形">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="1"/></svg>
+                        </button>
+                    </div>
+                    <span class="drawing-divider" aria-hidden="true"></span>
+                    <div class="drawing-history">
+                        <button id="draw-undo" type="button" aria-label="撤销" title="撤销（Ctrl+Z）">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7H4v-5M4 7c3-4 10-5 14-1s3 11-2 14"/></svg>
+                        </button>
+                        <button id="draw-delete" type="button" aria-label="删除选中" title="删除选中（Delete）">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 14H7L6 7m4 4v6m4-6v6"/></svg>
+                        </button>
+                        <button id="draw-clear" type="button" aria-label="清空当前图" title="清空当前图">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17l8-12 5 3-8 12H3zm7-2 5 3m2-11 3 2"/></svg>
+                        </button>
+                    </div>
+                </div>
+                <button id="drawing-toggle" class="drawing-toggle" type="button" aria-expanded="false" aria-controls="drawing-toolbar">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4-1 11-11-3-3L5 16zm10-13 3 3"/></svg><span>画图</span>
+                </button>
             </div>
         </section>
 
@@ -149,7 +171,7 @@
         </section>
         <p id="error" class="error hidden"></p>
     </main>
-    <script src="/static/js/chart_drawings.js"></script>
-    <script src="/static/js/manual_replay.js"></script>
+    <script src="/static/js/chart_drawings.js?v=20260719"></script>
+    <script src="/static/js/manual_replay.js?v=20260719"></script>
 </body>
 </html>

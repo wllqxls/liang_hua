@@ -149,12 +149,21 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert "slippage_rate: number('slippage-rate')" in script
     assert 'id="drawing-toggle"' in html
     assert 'id="chart-drawing-overlay"' in html
+    assert 'id="drawing-style-toolbar"' in html
+    assert 'id="drawing-style-drag"' in html
+    assert 'data-draw-tool="ray"' in html
+    assert 'data-draw-tool="horizontalRay"' in html
+    assert '图表由' not in html
+    assert '>趋势线<' not in html
     assert 'id="continue-btn"' in html
     assert '/static/js/chart_drawings.js' in html
     assert '/step`' in script
     assert '/continue`' in script
     drawing_script = client.get('/static/js/chart_drawings.js').text
-    assert "['horizontal', 'ray', 'vertical']" in drawing_script
+    assert "['horizontal', 'horizontalRay', 'vertical']" in drawing_script
+    assert "drawing.type === 'ray'" in drawing_script
+    assert '_rayEnd' in drawing_script
+    assert '_startStyleDrag' in drawing_script
     assert "type === 'rectangle'" in drawing_script
     assert "manual-chart-drawings:v1" in drawing_script
     assert "rgba(33,197,139,.20)" in drawing_script

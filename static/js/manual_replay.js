@@ -93,6 +93,9 @@ function setupCharts() {
         drawingController = new ChartDrawingController({
             overlay: document.getElementById('chart-drawing-overlay'),
             toolbar: document.getElementById('drawing-toolbar'),
+            styleToolbar: document.getElementById('drawing-style-toolbar'),
+            styleDragHandle: document.getElementById('drawing-style-drag'),
+            chartWrap: document.querySelector('.chart-wrap'),
             toggle: document.getElementById('drawing-toggle'),
             colorInput: document.getElementById('draw-color'),
             widthInput: document.getElementById('draw-width'),
