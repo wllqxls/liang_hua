@@ -64,8 +64,17 @@ def build_fading_push_candidates(
     fifteen_minute: pd.DataFrame,
     *,
     funding_rate: pd.Series | None = None,
+    taker_buy_ratio_threshold: float = TAKER_BUY_RATIO_THRESHOLD,
+    oi_change_threshold: float = OI_CHANGE_THRESHOLD,
+    event_cooldown_bars: int = EVENT_COOLDOWN_BARS,
 ) -> tuple[pd.DataFrame, int, int]:
     """Build frozen candidates without attaching any future-return labels."""
+    if not 0 <= taker_buy_ratio_threshold <= 1:
+        raise ValueError('taker_buy_ratio_threshold must be between 0 and 1')
+    if not math.isfinite(oi_change_threshold):
+        raise ValueError('oi_change_threshold must be finite')
+    if event_cooldown_bars < 1:
+        raise ValueError('event_cooldown_bars must be positive')
     frame = _validated_frame(fifteen_minute)
     features = _build_features(frame, funding_rate=funding_rate)
     metric_window_ok = features['metrics_available'].rolling(
@@ -75,11 +84,13 @@ def build_fading_push_candidates(
     qualified = (
         metric_window_ok
         & enough_history
-        & features['taker_buy_ratio'].ge(TAKER_BUY_RATIO_THRESHOLD)
-        & features['oi_change_45m'].ge(OI_CHANGE_THRESHOLD)
+        & features['taker_buy_ratio'].ge(taker_buy_ratio_threshold)
+        & features['oi_change_45m'].ge(oi_change_threshold)
         & features['close'].lt(features['previous_close'])
     )
-    events = _apply_cooldown(features.loc[qualified].copy())
+    events = _apply_cooldown(
+        features.loc[qualified].copy(), cooldown_bars=event_cooldown_bars,
+    )
     events['side'] = 'SELL'
     events.index.name = 'timestamp'
     return events, int(qualified.sum()), int((enough_history & ~metric_window_ok).sum())
@@ -214,12 +225,16 @@ def _build_features(frame: pd.DataFrame, *, funding_rate: pd.Series | None) -> p
     return features
 
 
-def _apply_cooldown(candidates: pd.DataFrame) -> pd.DataFrame:
+def _apply_cooldown(
+    candidates: pd.DataFrame,
+    *,
+    cooldown_bars: int = EVENT_COOLDOWN_BARS,
+) -> pd.DataFrame:
     selected: list[pd.Timestamp] = []
     last_position: int | None = None
     for timestamp in candidates.index:
         position = int(timestamp.value // TIMEFRAME.value)
-        if last_position is None or position - last_position >= EVENT_COOLDOWN_BARS:
+        if last_position is None or position - last_position >= cooldown_bars:
             selected.append(timestamp)
             last_position = position
     return candidates.loc[selected].copy()

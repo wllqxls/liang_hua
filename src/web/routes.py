@@ -311,13 +311,15 @@ def continue_manual_replay(session_id: str) -> dict[str, object]:
 
 @router.post('/api/semi-auto-whitelist')
 def create_semi_auto_whitelist(req: SemiAutoWhitelistRequest) -> dict[str, object]:
-    """Generate the local 2024/2025 human-signal whitelist CSV."""
-    if req.symbol not in SYMBOLS:
-        raise HTTPException(status_code=422, detail='不支持的交易对象')
+    """Generate the local 2024 order-flow human-signal whitelist CSV."""
+    if req.symbol not in {'BTC/USDT', 'ETH/USDT'}:
+        raise HTTPException(status_code=422, detail='订单流白名单只支持 BTC/USDT 和 ETH/USDT')
     try:
         items = build_semi_auto_whitelist(DATA_ROOT, symbol=req.symbol)
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail='白名单需要该币种 2024/2025 的 5m、15m、1h、4h 本地数据') from None
+        raise HTTPException(status_code=404, detail='白名单需要该币种 2024 年增强 5m、OI 与资金费率数据') from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f'订单流白名单数据无效: {exc}') from None
     destination = PROJECT_ROOT / 'results' / 'semi_auto_factor_whitelist.csv'
     write_semi_auto_whitelist(items, destination)
     return {'success': True, 'items': [asdict(item) for item in items], 'path': str(destination)}

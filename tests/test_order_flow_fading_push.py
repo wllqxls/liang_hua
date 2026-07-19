@@ -92,6 +92,28 @@ def test_cooldown_removes_overlapping_candidates() -> None:
     assert list(events.index) == [frame.index[first], frame.index[third]]
 
 
+def test_candidate_thresholds_and_cooldown_are_explicit_search_inputs() -> None:
+    frame = _frame()
+    _add_fading_push(frame, 30, oi=1_006.0)
+    _add_fading_push(frame, 31, close=99.7, oi=1_009.0)
+
+    strict, _, _ = build_fading_push_candidates(
+        frame,
+        taker_buy_ratio_threshold=0.575,
+        oi_change_threshold=0.005,
+        event_cooldown_bars=1,
+    )
+    relaxed, _, _ = build_fading_push_candidates(
+        frame,
+        taker_buy_ratio_threshold=0.55,
+        oi_change_threshold=0.005,
+        event_cooldown_bars=1,
+    )
+
+    assert strict.empty
+    assert list(relaxed.index) == [frame.index[30], frame.index[31]]
+
+
 def test_summary_marks_insufficient_buckets_as_descriptive() -> None:
     frame = _frame()
     _add_fading_push(frame, 30)

@@ -157,6 +157,10 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert 'BINANCE_UM_FUTURES_ARCHIVE' in script
     assert '旧来源待重拉' in script
     assert '完整（USD-M 永续）' in script
+    assert '只读取 2024 增强数据' in html
+    assert 'average_funding_return' in script
+    assert 'average_net_return' in script
+    assert '2024 订单流搜索完成，白名单为空' in script
     assert 'id="market-data-tab"' in html
     assert 'id="order-flow-data-tab"' in html
     assert '>增强 K 线</button>' in html

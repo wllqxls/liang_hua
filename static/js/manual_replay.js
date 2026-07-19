@@ -551,12 +551,12 @@ document.getElementById('data-fetch-year').addEventListener('change', () => {
 
 document.getElementById('whitelist-btn').addEventListener('click', async () => {
     const button = document.getElementById('whitelist-btn'); button.disabled = true;
-    document.getElementById('whitelist-status').textContent = '正在扫描 2024/2025 本地数据，请稍候…';
+    document.getElementById('whitelist-status').textContent = '正在扫描 2024 年增强 5m、OI 与真实资金费率，请稍候…';
     try {
         const data = await request('/api/semi-auto-whitelist', { symbol: document.getElementById('symbol').value });
-        const rows = data.items.map(item => `<tr><td>${item.rank}</td><td>${item.trigger_logic}</td><td>${item.timeframe}</td><td>${item.events_2024}</td><td>${item.events_2025}</td><td>${(item.gross_return_2024 * 100).toFixed(3)}%</td><td>${(item.gross_return_2025 * 100).toFixed(3)}%</td><td>${item.visual_score.toFixed(2)}</td></tr>`).join('');
-        document.getElementById('whitelist-table').innerHTML = rows || '<tr><td colspan="8">没有同时满足两年毛收益与 30–100 次样本门槛的候选</td></tr>';
-        document.getElementById('whitelist-status').textContent = data.items.length ? `已生成 ${data.items.length} 组；CSV 已保存到 results/semi_auto_factor_whitelist.csv` : '没有符合白名单门槛的候选。';
+        const rows = data.items.map(item => `<tr><td>${item.rank}</td><td>${item.trigger_logic}</td><td>${item.events}</td><td>${(item.average_gross_return * 100).toFixed(3)}%</td><td>${(item.average_round_trip_cost * 100).toFixed(3)}%</td><td>${(item.average_funding_return * 100).toFixed(4)}%</td><td>${(item.average_net_return * 100).toFixed(3)}%</td><td>${item.visual_score.toFixed(2)}</td></tr>`).join('');
+        document.getElementById('whitelist-table').innerHTML = rows || '<tr><td colspan="8">2024 年没有同时满足 30–100 次、毛收益与成本后净收益均大于 0 的候选</td></tr>';
+        document.getElementById('whitelist-status').textContent = data.items.length ? `已生成 ${data.items.length} 组 2024 订单流候选；CSV 已保存到 results/semi_auto_factor_whitelist.csv` : '2024 订单流搜索完成，白名单为空。';
     } catch (error) { showError(error); } finally { button.disabled = false; }
 });
 

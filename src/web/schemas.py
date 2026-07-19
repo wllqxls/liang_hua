@@ -326,7 +326,7 @@ class ManualDecisionRequest(BaseModel):
 
 
 class SemiAutoWhitelistRequest(BaseModel):
-    """Request a local two-year human-signal whitelist."""
+    """Request a local 2024 order-flow human-signal whitelist."""
 
     model_config = ConfigDict(extra='forbid')
 

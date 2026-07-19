@@ -205,12 +205,12 @@
         </section>
         <section class="panel">
             <h2>半自动因子白名单</h2>
-            <p id="whitelist-status" class="levels">使用 2024 排序、2025 验证；只输出符合毛收益与样本规则的候选。</p>
-            <div class="table-wrap"><table><thead><tr><th>排名</th><th>逻辑</th><th>周期</th><th>2024 事件</th><th>2025 事件</th><th>2024 毛收益</th><th>2025 毛收益</th><th>辨识度</th></tr></thead><tbody id="whitelist-table"><tr><td colspan="8">尚未生成</td></tr></tbody></table></div>
+            <p id="whitelist-status" class="levels">只读取 2024 增强数据；下一根 15m 开盘进场，扣除 0.14% 往返成本与真实资金费率，2025 保持未读。</p>
+            <div class="table-wrap"><table><thead><tr><th>排名</th><th>触发逻辑</th><th>事件</th><th>毛收益</th><th>往返成本</th><th>资金费</th><th>净收益</th><th>辨识度</th></tr></thead><tbody id="whitelist-table"><tr><td colspan="8">尚未生成</td></tr></tbody></table></div>
         </section>
         <p id="error" class="error hidden"></p>
     </main>
     <script src="/static/js/chart_drawings.js?v=20260719-8"></script>
-    <script src="/static/js/manual_replay.js?v=20260719-10"></script>
+    <script src="/static/js/manual_replay.js?v=20260719-11"></script>
 </body>
 </html>

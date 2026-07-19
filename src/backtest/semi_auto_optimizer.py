@@ -1,19 +1,31 @@
-"""Rank visual, statistically positive signal profiles for human replay."""
+"""Search 2024 order-flow fading candidates for cost-positive human signals."""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
+import math
+import numpy as np
 import pandas as pd
 
-from src.backtest.engine import BacktestEngine
-from src.backtest.optimizer import SIGNAL_PARAMETER_OPTIONS
-from src.strategies.signal_dispatcher import dispatch_signal
-from src.strategies.signal_models import ACTIVE_SIGNAL_MODES, SignalMode, SignalParameters
+from src.research.event_factors import FIXED_ROUND_TRIP_COST
+from src.research.order_flow_events import load_funding_year, load_order_flow_year
+from src.research.order_flow_failed_push import aggregate_order_flow_to_15m
+from src.research.order_flow_fading_push import build_fading_push_candidates
 
 
-HOLD_BARS = {'5m': 48, '15m': 16}
+DESIGN_YEAR = 2024
+ORDER_FLOW_ROOT = Path('order_flow/binance_um')
+TIMEFRAME = '15m'
+TAKER_BUY_RATIO_THRESHOLDS = (0.55, 0.575, 0.60)
+OI_CHANGE_THRESHOLDS = (0.002, 0.005, 0.01)
+HOLDING_WINDOWS = {'30m': 2, '1h': 4, '4h': 16}
+EVENT_COOLDOWN_BARS = 4
+MINIMUM_EVENTS = 30
+MAXIMUM_EVENTS = 100
+TARGET_EVENTS = 65
+SUPPORTED_SYMBOLS = {'BTC/USDT', 'ETH/USDT'}
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,107 +34,216 @@ class WhiteListItem:
     symbol: str
     mode: str
     timeframe: str
-    parameters: SignalParameters
-    events_2024: int
-    events_2025: int
-    gross_return_2024: float
-    gross_return_2025: float
+    design_year: int
+    taker_buy_ratio_threshold: float
+    oi_change_45m_threshold: float
+    holding_window: str
+    events: int
+    average_gross_return: float
+    average_round_trip_cost: float
+    average_funding_return: float
+    average_net_return: float
     visual_score: float
     sample_score: float
     trigger_logic: str
 
 
-def build_semi_auto_whitelist(data_root: Path, *, symbol: str) -> list[WhiteListItem]:
-    """Use 2024 ranking and 2025 confirmation without any net-profit objective."""
+def build_semi_auto_whitelist(
+    data_root: Path,
+    *,
+    symbol: str,
+) -> list[WhiteListItem]:
+    """Search the frozen 27-combination 2024 order-flow design grid."""
+    if symbol not in SUPPORTED_SYMBOLS:
+        raise ValueError('order-flow whitelist only supports BTC/USDT and ETH/USDT')
+    archive_symbol = symbol.replace('/', '')
+    order_flow_root = Path(data_root) / ORDER_FLOW_ROOT
+    five_minute = load_order_flow_year(
+        order_flow_root,
+        symbol=archive_symbol,
+        year=DESIGN_YEAR,
+    )
+    funding_rates = _normalize_funding_rates(load_funding_year(
+        order_flow_root,
+        symbol=archive_symbol,
+        year=DESIGN_YEAR,
+    ))
+    if funding_rates.empty:
+        raise FileNotFoundError(f'{archive_symbol} {DESIGN_YEAR} fundingRate is empty')
+    fifteen_minute = aggregate_order_flow_to_15m(five_minute)
+
     rows: list[WhiteListItem] = []
-    snapshot_cache = {
-        (year, timeframe): _load_snapshots(data_root, symbol, year, timeframe)
-        for year in (2024, 2025)
-        for timeframe in ('5m', '15m')
-    }
-    for mode in ACTIVE_SIGNAL_MODES:
-        for timeframe in ('5m', '15m'):
-            for parameters in SIGNAL_PARAMETER_OPTIONS:
-                metrics = {
-                    year: _candidate_metrics(
-                        snapshot_cache[(year, timeframe)], timeframe, mode, parameters
-                    )
-                    for year in (2024, 2025)
-                }
-                first, second = metrics[2024], metrics[2025]
-                if not (30 <= first['events'] <= 100 and 30 <= second['events'] <= 100):
+    for taker_threshold in TAKER_BUY_RATIO_THRESHOLDS:
+        for oi_threshold in OI_CHANGE_THRESHOLDS:
+            events, _, _ = build_fading_push_candidates(
+                fifteen_minute,
+                funding_rate=funding_rates,
+                taker_buy_ratio_threshold=taker_threshold,
+                oi_change_threshold=oi_threshold,
+                event_cooldown_bars=EVENT_COOLDOWN_BARS,
+            )
+            for holding_window, holding_bars in HOLDING_WINDOWS.items():
+                metrics = _candidate_metrics(
+                    fifteen_minute=fifteen_minute,
+                    five_minute=five_minute,
+                    funding_rates=funding_rates,
+                    events=events,
+                    holding_bars=holding_bars,
+                )
+                if not MINIMUM_EVENTS <= metrics['events'] <= MAXIMUM_EVENTS:
                     continue
-                if first['gross_return'] <= 0 or second['gross_return'] <= 0:
+                if metrics['average_gross_return'] <= 0 or metrics['average_net_return'] <= 0:
                     continue
                 rows.append(WhiteListItem(
-                    rank=0, symbol=symbol, mode=mode.value, timeframe=timeframe,
-                    parameters=parameters, events_2024=first['events'], events_2025=second['events'],
-                    gross_return_2024=first['gross_return'], gross_return_2025=second['gross_return'],
-                    visual_score=(first['visual_score'] + second['visual_score']) / 2,
-                    sample_score=(first['sample_score'] + second['sample_score']) / 2,
-                    trigger_logic=_trigger_logic(mode),
+                    rank=0,
+                    symbol=symbol,
+                    mode='ORDER_FLOW_FADING_15M',
+                    timeframe=TIMEFRAME,
+                    design_year=DESIGN_YEAR,
+                    taker_buy_ratio_threshold=taker_threshold,
+                    oi_change_45m_threshold=oi_threshold,
+                    holding_window=holding_window,
+                    events=int(metrics['events']),
+                    average_gross_return=metrics['average_gross_return'],
+                    average_round_trip_cost=FIXED_ROUND_TRIP_COST,
+                    average_funding_return=metrics['average_funding_return'],
+                    average_net_return=metrics['average_net_return'],
+                    visual_score=metrics['visual_score'],
+                    sample_score=_sample_score(int(metrics['events'])),
+                    trigger_logic=(
+                        f'15m 主动买入占比≥{taker_threshold * 100:g}%，'
+                        f'45分钟 OI 增长≥{oi_threshold * 100:g}%，收盘走弱后做空，'
+                        f'持有 {holding_window}'
+                    ),
                 ))
-    rows.sort(key=lambda item: (item.visual_score, item.sample_score, item.gross_return_2024), reverse=True)
+    rows.sort(
+        key=lambda item: (
+            item.average_net_return,
+            item.sample_score,
+            item.visual_score,
+            item.average_gross_return,
+        ),
+        reverse=True,
+    )
     return [replace(item, rank=index) for index, item in enumerate(rows[:5], start=1)]
 
 
 def write_semi_auto_whitelist(items: list[WhiteListItem], destination: Path) -> None:
-    """Write the only optimizer deliverable: a compact human-signal whitelist CSV."""
+    """Write the compact 2024 order-flow whitelist CSV, including an empty result."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    rows = []
-    for item in items:
-        row = asdict(item)
-        row['parameters'] = str(asdict(item.parameters))
-        rows.append(row)
     columns = [
-        'rank', 'symbol', 'mode', 'timeframe', 'parameters', 'events_2024',
-        'events_2025', 'gross_return_2024', 'gross_return_2025',
-        'visual_score', 'sample_score', 'trigger_logic',
+        'rank', 'symbol', 'mode', 'timeframe', 'design_year',
+        'taker_buy_ratio_threshold', 'oi_change_45m_threshold', 'holding_window',
+        'events', 'average_gross_return', 'average_round_trip_cost',
+        'average_funding_return', 'average_net_return', 'visual_score',
+        'sample_score', 'trigger_logic',
     ]
-    pd.DataFrame(rows, columns=columns).to_csv(destination, index=False, encoding='utf-8-sig')
-
-
-def _load_snapshots(data_root: Path, symbol: str, year: int, timeframe: str) -> pd.Series:
-    engine = BacktestEngine(data_dir=data_root / str(year))
-    safe = symbol.replace('/', '_')
-    paths = {timeframe: data_root / str(year) / f'{safe}_{timeframe}.csv', '1h': data_root / str(year) / f'{safe}_1h.csv', '4h': data_root / str(year) / f'{safe}_4h.csv'}
-    missing = [str(path) for path in paths.values() if not path.exists()]
-    if missing:
-        raise FileNotFoundError(f'semi-auto whitelist requires local CSV data: {missing}')
-    return engine._load_signal_snapshots(  # noqa: SLF001 - controlled local adapter
-        safe_symbol=safe,
-        timeframe=timeframe,
-        paths=paths,
+    pd.DataFrame([asdict(item) for item in items], columns=columns).to_csv(
+        destination,
+        index=False,
+        encoding='utf-8-sig',
+        lineterminator='\n',
     )
 
 
-def _candidate_metrics(snapshots: pd.Series, timeframe: str, mode: SignalMode, parameters: SignalParameters) -> dict[str, float | int]:
-    events: list[tuple[float, float]] = []
-    horizon = HOLD_BARS[timeframe]
-    for index in range(0, len(snapshots) - horizon):
-        snapshot = snapshots.iloc[index]
-        signal = dispatch_signal(snapshot, mode, parameters=parameters)
-        if signal is None:
+def _candidate_metrics(
+    *,
+    fifteen_minute: pd.DataFrame,
+    five_minute: pd.DataFrame,
+    funding_rates: pd.Series,
+    events: pd.DataFrame,
+    holding_bars: int,
+) -> dict[str, float | int]:
+    """Use next-open entry, fixed-window close exit, fixed cost and real funding."""
+    gross_returns: list[float] = []
+    funding_returns: list[float] = []
+    net_returns: list[float] = []
+    visual_scores: list[float] = []
+    positions = pd.Series(np.arange(len(fifteen_minute)), index=fifteen_minute.index)
+    for timestamp, event in events.iterrows():
+        event_position = int(positions.loc[timestamp])
+        entry_position = event_position + 1
+        exit_position = event_position + holding_bars
+        if entry_position >= len(fifteen_minute) or exit_position >= len(fifteen_minute):
             continue
-        future_close = snapshots.iloc[index + horizon].close
-        direction = 1 if signal.side == 'BUY' else -1
-        gross = direction * (future_close / signal.signal_close - 1)
-        body = abs(snapshot.close - snapshot.open) / snapshot.atr
-        upper = (snapshot.high - max(snapshot.open, snapshot.close)) / snapshot.atr
-        lower = (min(snapshot.open, snapshot.close) - snapshot.low) / snapshot.atr
-        events.append((gross, max(body, upper, lower)))
-    count = len(events)
+        entry_bar = fifteen_minute.iloc[entry_position]
+        exit_bar = fifteen_minute.iloc[exit_position]
+        entry_time = pd.Timestamp(fifteen_minute.index[entry_position])
+        exit_time = pd.Timestamp(fifteen_minute.index[exit_position]) + pd.Timedelta(minutes=15)
+        entry_price = float(entry_bar['open'])
+        exit_price = float(exit_bar['close'])
+        if not math.isfinite(entry_price) or not math.isfinite(exit_price) or entry_price <= 0:
+            raise ValueError('order-flow whitelist encountered an invalid entry or exit price')
+        gross = (entry_price - exit_price) / entry_price
+        funding = _short_funding_return(
+            five_minute=five_minute,
+            funding_rates=funding_rates,
+            entry_time=entry_time,
+            exit_time=exit_time,
+            entry_price=entry_price,
+        )
+        gross_returns.append(gross)
+        funding_returns.append(funding)
+        net_returns.append(gross - FIXED_ROUND_TRIP_COST + funding)
+        visual_scores.append(_visual_score(event))
+    count = len(gross_returns)
     return {
         'events': count,
-        'gross_return': sum(item[0] for item in events) / count if count else 0.0,
-        'visual_score': sum(item[1] for item in events) / count if count else 0.0,
-        'sample_score': max(0.0, 1 - abs(count - 65) / 35),
+        'average_gross_return': float(np.mean(gross_returns)) if count else 0.0,
+        'average_funding_return': float(np.mean(funding_returns)) if count else 0.0,
+        'average_net_return': float(np.mean(net_returns)) if count else 0.0,
+        'visual_score': float(np.mean(visual_scores)) if count else 0.0,
     }
 
 
-def _trigger_logic(mode: SignalMode) -> str:
-    return {
-        SignalMode.KEY_LEVEL: '关键位假突破/假跌破后收回',
-        SignalMode.RSI_REVERSAL: 'RSI 极值与布林带收回',
-        SignalMode.KEY_LEVEL_RSI: '关键位优先，RSI 作为补充',
-    }[mode]
+def _short_funding_return(
+    *,
+    five_minute: pd.DataFrame,
+    funding_rates: pd.Series,
+    entry_time: pd.Timestamp,
+    exit_time: pd.Timestamp,
+    entry_price: float,
+) -> float:
+    """Return signed funding PnL divided by entry notional for one short trade."""
+    due = funding_rates.loc[
+        (funding_rates.index > entry_time) & (funding_rates.index <= exit_time)
+    ]
+    total = 0.0
+    for settlement_time, rate in due.items():
+        completed = five_minute.loc[
+            (five_minute.index + pd.Timedelta(minutes=5)) <= settlement_time,
+            'close',
+        ]
+        reference_price = float(completed.iloc[-1]) if not completed.empty else entry_price
+        total += float(rate) * reference_price / entry_price
+    return total
+
+
+def _normalize_funding_rates(rates: pd.Series) -> pd.Series:
+    if not isinstance(rates.index, pd.DatetimeIndex):
+        raise ValueError('funding rate index must be a DatetimeIndex')
+    normalized = rates.copy()
+    if normalized.index.tz is None:
+        normalized.index = normalized.index.tz_localize('UTC')
+    else:
+        normalized.index = normalized.index.tz_convert('UTC')
+    normalized.index = normalized.index.floor('min')
+    if normalized.index.has_duplicates:
+        normalized = normalized.groupby(level=0).last()
+    return normalized.sort_index().astype(float)
+
+
+def _visual_score(event: pd.Series) -> float:
+    atr = float(event['atr_pct']) * float(event['close'])
+    if not math.isfinite(atr) or atr <= 0:
+        return 0.0
+    open_price = float(event['open'])
+    close_price = float(event['close'])
+    body = abs(close_price - open_price)
+    upper_wick = float(event['high']) - max(open_price, close_price)
+    lower_wick = min(open_price, close_price) - float(event['low'])
+    return max(body, upper_wick, lower_wick) / atr
+
+
+def _sample_score(events: int) -> float:
+    return max(0.0, 1 - abs(events - TARGET_EVENTS) / (TARGET_EVENTS - MINIMUM_EVENTS))
