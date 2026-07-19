@@ -15,7 +15,7 @@ from src.strategies.signal_models import (
     SignalMode,
 )
 from src.web.routes import MODE_OPTIONS
-from src.web.schemas import BacktestRequest
+from src.web.schemas import BacktestRequest, ManualReplayRequest
 
 
 class FakeSeries:
@@ -47,8 +47,10 @@ class FakeContextData:
             self.ContextFastMA = FakeSeries(fast_ma)
 
 
-def test_index_exposes_only_stable_signal_modes() -> None:
+def test_manual_index_exposes_experiments_before_failed_baselines() -> None:
     assert [item['value'] for item in MODE_OPTIONS] == [
+        'ORDER_FLOW_FADING_15M',
+        'ETH_RSI_WHITELIST_5M',
         'KEY_LEVEL',
         'RSI_REVERSAL',
         'KEY_LEVEL_RSI',
@@ -64,6 +66,13 @@ def test_api_schema_exposes_only_stable_signal_modes() -> None:
         'RSI_REVERSAL',
         'KEY_LEVEL_RSI',
     ]
+
+
+def test_manual_api_defaults_to_15m_order_flow_experiment() -> None:
+    request = ManualReplayRequest(data_year=2025)
+
+    assert request.mode.value == 'ORDER_FLOW_FADING_15M'
+    assert request.timeframe == '15m'
 
 
 def test_optimizer_candidates_cover_only_stable_signal_modes() -> None:

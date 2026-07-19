@@ -10,8 +10,15 @@ from typing import Literal
 import pandas as pd
 
 from src.backtest.engine import BacktestEngine
+from src.research.order_flow_events import load_funding_year, load_order_flow_year
+from src.research.order_flow_failed_push import aggregate_order_flow_to_15m
+from src.research.order_flow_fading_push import build_fading_push_candidates
+from src.strategies.manual_candidates import (
+    evaluate_manual_candidate,
+    validate_manual_candidate_scope,
+)
 from src.strategies.signal_dispatcher import dispatch_signal
-from src.strategies.signal_models import MarginMode, Signal, SignalMode
+from src.strategies.signal_models import ManualSignalMode, MarketSnapshot, Signal, SignalMode
 
 
 ReplayState = Literal[
@@ -67,7 +74,7 @@ class ManualReplay:
     symbol: str
     timeframe: str
     year: int
-    mode: SignalMode
+    mode: ManualSignalMode | SignalMode
     snapshots: pd.Series
     chart_frames: dict[str, pd.DataFrame]
     cash: float
@@ -82,6 +89,7 @@ class ManualReplay:
     decisions: list[dict[str, object]] = field(default_factory=list)
     trades: list[ManualTrade] = field(default_factory=list)
     equity_points: list[tuple[pd.Timestamp, float]] = field(default_factory=list)
+    candidate_features: pd.DataFrame | None = None
 
     @classmethod
     def create(
@@ -92,7 +100,7 @@ class ManualReplay:
         symbol: str,
         timeframe: str,
         year: int,
-        mode: SignalMode,
+        mode: ManualSignalMode,
         cash: float,
         opening_amount: float,
         leverage: float,
@@ -103,6 +111,12 @@ class ManualReplay:
             raise ValueError('manual replay signal timeframe must be 5m or 15m')
         if opening_amount > cash:
             raise ValueError('opening amount must not exceed cash')
+        validate_manual_candidate_scope(
+            mode=mode,
+            symbol=symbol,
+            timeframe=timeframe,
+            year=year,
+        )
         engine = BacktestEngine(data_dir=data_dir)
         safe_symbol = symbol.replace('/', '_')
         paths = {
@@ -132,6 +146,24 @@ class ManualReplay:
             chart_frames[chart_timeframe] = frame.loc[
                 (frame.index >= start) & (frame.index < end)
             ]
+        candidate_features = None
+        if mode is ManualSignalMode.ORDER_FLOW_FADING_15M:
+            order_flow_root = data_dir.parent / 'order_flow' / 'binance_um'
+            order_flow_symbol = symbol.replace('/', '')
+            five_minute = load_order_flow_year(
+                order_flow_root,
+                symbol=order_flow_symbol,
+                year=year,
+            )
+            funding = load_funding_year(
+                order_flow_root,
+                symbol=order_flow_symbol,
+                year=year,
+            )
+            candidate_features, _, _ = build_fading_push_candidates(
+                aggregate_order_flow_to_15m(five_minute),
+                funding_rate=funding,
+            )
         return cls(
             session_id=session_id,
             symbol=symbol,
@@ -146,6 +178,7 @@ class ManualReplay:
             taker_fee=float(taker_fee),
             slippage_rate=float(slippage_rate),
             equity_points=[(snapshots.index[0], float(cash))],
+            candidate_features=candidate_features,
         )
 
     def advance(self, *, max_bars: int = 40) -> None:
@@ -155,7 +188,7 @@ class ManualReplay:
         remaining = max(1, min(max_bars, 500))
         while remaining and self.cursor < len(self.snapshots):
             snapshot = self.snapshots.iloc[self.cursor]
-            signal = dispatch_signal(snapshot, self.mode)
+            signal = self._evaluate_snapshot(snapshot)
             if signal is not None:
                 self.pending_signal = signal
                 self.state = 'AWAITING_DECISION'
@@ -165,6 +198,18 @@ class ManualReplay:
         if self.cursor >= len(self.snapshots) - 1:
             self.cursor = len(self.snapshots) - 1
             self.state = 'FINISHED'
+
+    def _evaluate_snapshot(self, snapshot: MarketSnapshot) -> Signal | None:
+        if isinstance(self.mode, SignalMode):
+            return dispatch_signal(snapshot, self.mode)
+        features = None
+        if self.candidate_features is not None and snapshot.opened_at in self.candidate_features.index:
+            features = self.candidate_features.loc[snapshot.opened_at]
+        return evaluate_manual_candidate(
+            snapshot,
+            self.mode,
+            order_flow_features=features,
+        )
 
     def decide(self, decision: Decision) -> None:
         """Record an immutable human decision and open accepted positions."""

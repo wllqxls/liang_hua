@@ -20,6 +20,14 @@ class ActiveSignalMode(StrEnum):
     KEY_LEVEL_RSI = 'KEY_LEVEL_RSI'
 
 
+class ManualSignalMode(StrEnum):
+    ORDER_FLOW_FADING_15M = 'ORDER_FLOW_FADING_15M'
+    ETH_RSI_WHITELIST_5M = 'ETH_RSI_WHITELIST_5M'
+    KEY_LEVEL = 'KEY_LEVEL'
+    RSI_REVERSAL = 'RSI_REVERSAL'
+    KEY_LEVEL_RSI = 'KEY_LEVEL_RSI'
+
+
 ACTIVE_SIGNAL_MODES = (
     SignalMode.KEY_LEVEL,
     SignalMode.RSI_REVERSAL,
@@ -84,7 +92,7 @@ class MarketSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class Signal:
-    mode: SignalMode
+    mode: SignalMode | ManualSignalMode
     strategy: str
     side: Literal['BUY', 'SELL']
     signal_time: pd.Timestamp
@@ -160,7 +168,7 @@ class SimulationTrade:
         return self.signal.side
 
     @property
-    def mode(self) -> SignalMode:
+    def mode(self) -> SignalMode | ManualSignalMode:
         return self.signal.mode
 
     @property

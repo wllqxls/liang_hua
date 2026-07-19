@@ -46,7 +46,8 @@
                 <select id="chart-timeframe"><option value="5m">5m</option><option value="15m">15m</option><option value="1h">1h</option></select>
             </label>
             <label>候选逻辑
-                <select id="mode">{% for mode in modes %}<option value="{{ mode.value }}">{{ mode.label }}</option>{% endfor %}</select>
+                <select id="mode">{% for group in mode_groups %}<optgroup label="{{ group.label }}">{% for mode in group.options %}<option value="{{ mode.value }}" data-description="{{ mode.description }}">{{ mode.label }}</option>{% endfor %}</optgroup>{% endfor %}</select>
+                <span id="mode-note" class="field-note"></span>
             </label>
             <label>初始资金 <input id="cash" type="number" min="10" value="100"></label>
             <label>单笔保证金 <input id="opening-amount" type="number" min="1" value="10"></label>
@@ -175,6 +176,6 @@
         <p id="error" class="error hidden"></p>
     </main>
     <script src="/static/js/chart_drawings.js?v=20260719-6"></script>
-    <script src="/static/js/manual_replay.js?v=20260719-6"></script>
+    <script src="/static/js/manual_replay.js?v=20260719-7"></script>
 </body>
 </html>

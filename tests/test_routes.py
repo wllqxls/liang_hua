@@ -107,17 +107,23 @@ def test_index_renders_signal_mode_names() -> None:
 
     assert response.status_code == 200
     assert [item['value'] for item in routes.MODE_OPTIONS] == [
+        'ORDER_FLOW_FADING_15M',
+        'ETH_RSI_WHITELIST_5M',
         'KEY_LEVEL',
         'RSI_REVERSAL',
         'KEY_LEVEL_RSI',
     ]
     html = response.text
+    assert '<optgroup label="半自动实验候选">' in html
+    assert '<option value="ORDER_FLOW_FADING_15M"' in html
+    assert '主动资金退潮（15m 实验）' in html
+    assert '<optgroup label="历史失败基线">' in html
     assert '<option value="KEY_LEVEL"' in html
-    assert '>关键位</option>' in html
+    assert '>关键位（失败基线）</option>' in html
     assert '<option value="RSI_REVERSAL"' in html
-    assert '>RSI 反转</option>' in html
+    assert '>RSI 反转（失败基线）</option>' in html
     assert '<option value="KEY_LEVEL_RSI"' in html
-    assert '>关键位 + RSI 反转</option>' in html
+    assert '>关键位 + RSI（失败基线）</option>' in html
     assert 'id="signal-timeframe"' in html
     assert '半自动交易回放' in html
     assert '<select id="strategy">' not in html
@@ -137,7 +143,9 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert 'autoSize: true' in script
     assert 'setVisibleLogicalRange' in script
     assert "priceScale('right').applyOptions({ autoScale: true })" in script
-    assert "getElementById('symbol').addEventListener('change', startReplay)" in script
+    assert "getElementById('symbol').addEventListener('change'" in script
+    assert "getElementById('mode').addEventListener('change'" in script
+    assert "timeframe.value = '15m'" in script
     assert 'tickMarkFormatter: exchangeTickFormatter' in script
     assert 'id="local-data-toggle"' in html
     assert 'id="fetch-data-btn"' in html

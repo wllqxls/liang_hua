@@ -47,6 +47,25 @@ def build_fading_push_events(
     funding_rate: pd.Series | None = None,
 ) -> tuple[pd.DataFrame, int, int]:
     """Build SELL events using only information known at the 15m close."""
+    events, eligible_rows, excluded_metric_rows = build_fading_push_candidates(
+        fifteen_minute,
+        funding_rate=funding_rate,
+    )
+    features = _build_features(_validated_frame(fifteen_minute), funding_rate=funding_rate)
+    for horizon, bars in HORIZONS.items():
+        future_close = features['close'].shift(-bars).reindex(events.index)
+        gross = events['close'] / future_close - 1.0
+        events[f'forward_return_{horizon}'] = gross
+        events[f'forward_return_{horizon}_net'] = gross - FIXED_ROUND_TRIP_COST
+    return events, eligible_rows, excluded_metric_rows
+
+
+def build_fading_push_candidates(
+    fifteen_minute: pd.DataFrame,
+    *,
+    funding_rate: pd.Series | None = None,
+) -> tuple[pd.DataFrame, int, int]:
+    """Build frozen candidates without attaching any future-return labels."""
     frame = _validated_frame(fifteen_minute)
     features = _build_features(frame, funding_rate=funding_rate)
     metric_window_ok = features['metrics_available'].rolling(
@@ -62,11 +81,6 @@ def build_fading_push_events(
     )
     events = _apply_cooldown(features.loc[qualified].copy())
     events['side'] = 'SELL'
-    for horizon, bars in HORIZONS.items():
-        future_close = features['close'].shift(-bars).reindex(events.index)
-        gross = events['close'] / future_close - 1.0
-        events[f'forward_return_{horizon}'] = gross
-        events[f'forward_return_{horizon}_net'] = gross - FIXED_ROUND_TRIP_COST
     events.index.name = 'timestamp'
     return events, int(qualified.sum()), int((enough_history & ~metric_window_ok).sum())
 

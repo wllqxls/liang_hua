@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.strategies.signal_models import (
     ActiveSignalMode,
+    ManualSignalMode,
     MarginMode,
     SignalMode,
     SignalParameters,
@@ -302,9 +303,9 @@ class ManualReplayRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     symbol: str = Field(default='BTC/USDT')
-    timeframe: Literal['5m', '15m'] = Field(default='5m')
+    timeframe: Literal['5m', '15m'] = Field(default='15m')
     data_year: int = Field(ge=2017, le=2100)
-    mode: ActiveSignalMode = Field(default=ActiveSignalMode.KEY_LEVEL)
+    mode: ManualSignalMode = Field(default=ManualSignalMode.ORDER_FLOW_FADING_15M)
     cash: float = Field(default=100, gt=0)
     opening_amount: float = Field(default=10, gt=0)
     leverage: float = Field(default=1, ge=1, le=150)

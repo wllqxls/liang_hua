@@ -42,7 +42,7 @@ from src.data.order_flow_yearly import (
     fetch_order_flow_year,
     inspect_order_flow_year,
 )
-from src.strategies.signal_models import ACTIVE_SIGNAL_MODES, SignalMode
+from src.strategies.signal_models import ACTIVE_SIGNAL_MODES, ManualSignalMode, SignalMode
 from src.web.schemas import (
     BacktestRequest,
     BacktestResponse,
@@ -76,23 +76,44 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _templates_dir = PROJECT_ROOT / "templates"
 templates = Jinja2Templates(directory=str(_templates_dir))
 
-MODE_OPTIONS = [
+MODE_GROUPS = [
     {
-        'value': 'KEY_LEVEL',
-        'label': '关键位',
-        'description': '支撑假跌破做多，阻力假突破做空',
+        'label': '半自动实验候选',
+        'options': [
+            {
+                'value': 'ORDER_FLOW_FADING_15M',
+                'label': '主动资金退潮（15m 实验）',
+                'description': '主动买入占优、OI 增长但价格走弱；仅 BTC/ETH 2024–2025',
+            },
+            {
+                'value': 'ETH_RSI_WHITELIST_5M',
+                'label': 'ETH 5m RSI 白名单（实验）',
+                'description': '两年毛收益为正的人工筛选候选；不代表覆盖成本',
+            },
+        ],
     },
     {
-        'value': 'RSI_REVERSAL',
-        'label': 'RSI 反转',
-        'description': 'RSI 极值配合布林带收回',
-    },
-    {
-        'value': 'KEY_LEVEL_RSI',
-        'label': '关键位 + RSI 反转',
-        'description': '关键位优先，RSI 仅作兜底',
+        'label': '历史失败基线',
+        'options': [
+            {
+                'value': 'KEY_LEVEL',
+                'label': '关键位（失败基线）',
+                'description': '仅用于对照：历史自动验证未通过',
+            },
+            {
+                'value': 'RSI_REVERSAL',
+                'label': 'RSI 反转（失败基线）',
+                'description': '仅用于对照：通用组合历史自动验证未通过',
+            },
+            {
+                'value': 'KEY_LEVEL_RSI',
+                'label': '关键位 + RSI（失败基线）',
+                'description': '仅用于对照：历史自动验证未通过',
+            },
+        ],
     },
 ]
+MODE_OPTIONS = [option for group in MODE_GROUPS for option in group['options']]
 MODE_LABELS = {option['value']: option['label'] for option in MODE_OPTIONS}
 
 TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
@@ -184,6 +205,7 @@ async def index(request: Request) -> HTMLResponse:
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
         "modes": MODE_OPTIONS,
+        "mode_groups": MODE_GROUPS,
     }
     return templates.TemplateResponse(request, 'manual_replay.html', context)
 
@@ -203,7 +225,7 @@ def create_manual_replay(req: ManualReplayRequest) -> dict[str, object]:
             symbol=req.symbol,
             timeframe=req.timeframe,
             year=req.data_year,
-            mode=SignalMode(req.mode.value),
+            mode=ManualSignalMode(req.mode.value),
             cash=req.cash,
             opening_amount=req.opening_amount,
             leverage=req.leverage,
@@ -212,9 +234,14 @@ def create_manual_replay(req: ManualReplayRequest) -> dict[str, object]:
         )
         replay.advance(max_bars=200)
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail='缺少本地 5m/15m、1h 或 4h 数据') from None
-    except ValueError:
-        raise HTTPException(status_code=422, detail='回放参数或本地数据无效') from None
+        detail = (
+            '缺少本地增强 5m、OI 或资金费率数据，请先在“本地数据”中拉取订单流年度包'
+            if req.mode is ManualSignalMode.ORDER_FLOW_FADING_15M
+            else '缺少本地 5m/15m、1h 或 4h 数据'
+        )
+        raise HTTPException(status_code=404, detail=detail) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc) or '回放参数或本地数据无效') from None
     with _manual_replays_lock:
         _manual_replays[session_id] = replay
         while len(_manual_replays) > MAX_STORED_MANUAL_REPLAYS:

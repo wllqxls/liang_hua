@@ -76,6 +76,26 @@ function chart(container) {
 function number(id) { return Number(document.getElementById(id).value); }
 function payload() { return { symbol: document.getElementById('symbol').value, data_year: number('data-year'), timeframe: document.getElementById('signal-timeframe').value, mode: document.getElementById('mode').value, cash: number('cash'), opening_amount: number('opening-amount'), leverage: number('leverage'), taker_fee: number('taker-fee'), slippage_rate: number('slippage-rate') }; }
 
+function syncModeInputs() {
+    const modeSelect = document.getElementById('mode');
+    const mode = modeSelect.value;
+    const symbol = document.getElementById('symbol');
+    const timeframe = document.getElementById('signal-timeframe');
+    const year = document.getElementById('data-year');
+    const isOrderFlow = mode === 'ORDER_FLOW_FADING_15M';
+    const isEthRsi = mode === 'ETH_RSI_WHITELIST_5M';
+    if (isOrderFlow) {
+        if (!['BTC/USDT', 'ETH/USDT'].includes(symbol.value)) symbol.value = 'BTC/USDT';
+        if (![2024, 2025].includes(Number(year.value))) year.value = '2025';
+        timeframe.value = '15m';
+    } else if (isEthRsi) {
+        symbol.value = 'ETH/USDT';
+        timeframe.value = '5m';
+    }
+    timeframe.disabled = isOrderFlow || isEthRsi;
+    document.getElementById('mode-note').textContent = modeSelect.selectedOptions[0]?.dataset.description || '';
+}
+
 async function request(url, body) {
     const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
     const data = await response.json();
@@ -256,6 +276,7 @@ async function continueReplay() {
 function showError(error) { const el = document.getElementById('error'); el.textContent = error.message; el.classList.remove('hidden'); }
 
 async function startReplay() {
+    syncModeInputs();
     const version = ++replayLoadVersion;
     clearTimeout(positionTimer);
     replay = null;
@@ -284,7 +305,8 @@ async function startReplay() {
 }
 
 document.getElementById('start-btn').addEventListener('click', startReplay);
-document.getElementById('symbol').addEventListener('change', startReplay);
+document.getElementById('symbol').addEventListener('change', () => { syncModeInputs(); startReplay(); });
+document.getElementById('mode').addEventListener('change', () => { syncModeInputs(); startReplay(); });
 document.querySelectorAll('[data-decision]').forEach(button => button.addEventListener('click', async () => { try { render(await request(`/api/manual-replays/${replay.session_id}/decision`, { decision: button.dataset.decision })); } catch (error) { showError(error); } }));
 document.getElementById('continue-btn').addEventListener('click', continueReplay);
 document.getElementById('chart-timeframe').addEventListener('change', () => { if (replay) { lastChartViewKey = null; render(replay); } });
@@ -384,4 +406,5 @@ document.getElementById('whitelist-btn').addEventListener('click', async () => {
     } catch (error) { showError(error); } finally { button.disabled = false; }
 });
 
+syncModeInputs();
 setupCharts();

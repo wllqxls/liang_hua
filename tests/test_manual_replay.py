@@ -4,7 +4,14 @@ import pandas as pd
 import pytest
 
 from src.backtest.manual_replay import ManualReplay
-from src.strategies.signal_models import FilterLabel, MarketSnapshot, Signal, SignalMode
+from src.strategies.manual_candidates import validate_manual_candidate_scope
+from src.strategies.signal_models import (
+    FilterLabel,
+    ManualSignalMode,
+    MarketSnapshot,
+    Signal,
+    SignalMode,
+)
 
 
 def _snapshot(index: int, *, close: float = 100.0, high: float = 101.0, low: float = 99.0) -> MarketSnapshot:
@@ -152,3 +159,42 @@ def test_pending_signal_uses_chinese_reason_and_event_candle_open_time() -> None
 
     assert signal['reason'] == '跌破前 20 根 K 线低点后重新收回，可能是假跌破'
     assert signal['time'] == int(replay.snapshots.iloc[0].opened_at.timestamp())
+
+
+def test_order_flow_candidate_pauses_on_matching_open_time_without_future_labels() -> None:
+    replay = _replay()
+    replay.mode = ManualSignalMode.ORDER_FLOW_FADING_15M
+    replay.timeframe = '15m'
+    replay.candidate_features = pd.DataFrame(
+        {
+            'taker_buy_ratio': [0.568],
+            'oi_change_45m': [0.0023],
+            'funding_rate': [0.0001],
+        },
+        index=pd.DatetimeIndex([replay.snapshots.iloc[0].opened_at]),
+    )
+
+    replay.advance(max_bars=1)
+
+    assert replay.state == 'AWAITING_DECISION'
+    assert replay.pending_signal is not None
+    assert replay.pending_signal.side == 'SELL'
+    assert '主动买入占比 56.8%' in replay.pending_signal.reason
+    assert '45 分钟 OI 增长 0.23%' in replay.pending_signal.reason
+
+
+def test_manual_experimental_scopes_are_frozen() -> None:
+    with pytest.raises(ValueError, match='15m'):
+        validate_manual_candidate_scope(
+            mode=ManualSignalMode.ORDER_FLOW_FADING_15M,
+            symbol='BTC/USDT',
+            timeframe='5m',
+            year=2025,
+        )
+    with pytest.raises(ValueError, match='ETH/USDT'):
+        validate_manual_candidate_scope(
+            mode=ManualSignalMode.ETH_RSI_WHITELIST_5M,
+            symbol='BTC/USDT',
+            timeframe='5m',
+            year=2025,
+        )

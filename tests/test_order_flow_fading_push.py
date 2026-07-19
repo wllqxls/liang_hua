@@ -6,6 +6,7 @@ import pytest
 from src.research.event_factors import FIXED_ROUND_TRIP_COST
 from src.research.order_flow_fading_push import (
     EVENT_COOLDOWN_BARS,
+    build_fading_push_candidates,
     build_fading_push_events,
     summarize_fading_push_events,
 )
@@ -48,6 +49,19 @@ def test_event_uses_same_closed_bar_and_adds_future_sell_labels() -> None:
     assert row['taker_buy_ratio'] == pytest.approx(0.55)
     assert row['forward_return_30m'] == pytest.approx(99.8 / 98.0 - 1.0)
     assert row['forward_return_30m_net'] == pytest.approx(99.8 / 98.0 - 1.0 - FIXED_ROUND_TRIP_COST)
+
+
+def test_replay_candidates_match_events_without_future_labels() -> None:
+    frame = _frame()
+    _add_fading_push(frame, 30)
+
+    candidates, eligible_rows, excluded_metric_rows = build_fading_push_candidates(frame)
+    events, _, _ = build_fading_push_events(frame)
+
+    assert candidates.index.equals(events.index)
+    assert eligible_rows == 1
+    assert excluded_metric_rows == 0
+    assert not any(column.startswith('forward_return_') for column in candidates.columns)
 
 
 def test_oi_gap_in_the_four_bar_feature_window_excludes_event() -> None:
