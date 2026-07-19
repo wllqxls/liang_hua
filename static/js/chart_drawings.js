@@ -40,7 +40,7 @@ class ChartDrawingController {
         ['wheel', 'dblclick', 'touchmove'].forEach(eventName => {
             this.chartContainer.addEventListener(eventName, () => this._scheduleRedraw(), { passive: true });
         });
-        this.chartWrap.addEventListener('wheel', event => this._handlePriceWheel(event), {
+        this.chartWrap.addEventListener('wheel', event => this._handleChartWheel(event), {
             capture: true,
             passive: false,
         });
@@ -405,32 +405,31 @@ class ChartDrawingController {
         };
     }
 
-    _handlePriceWheel(event) {
+    _handleChartWheel(event) {
         if (!this.chart || !this.series || event.deltaY === 0) return;
         const firstRow = this.chartContainer.querySelector('table')?.rows?.[0];
         const paneCell = firstRow?.cells?.[1];
-        if (!firstRow || !paneCell) return;
-        const priceRowBounds = firstRow.getBoundingClientRect();
-        const chartBounds = this.chartContainer.getBoundingClientRect();
-        const insidePriceRow = event.clientX >= chartBounds.left
-            && event.clientX <= chartBounds.right
-            && event.clientY >= priceRowBounds.top
-            && event.clientY <= priceRowBounds.bottom;
-        if (!insidePriceRow) return;
+        const priceAxisCell = firstRow?.cells?.[2];
+        if (!firstRow || !paneCell || !priceAxisCell) return;
+        const paneBounds = paneCell.getBoundingClientRect();
+        const priceAxisBounds = priceAxisCell.getBoundingClientRect();
+        const insidePane = this._insideBounds(event, paneBounds);
+        const insidePriceAxis = this._insideBounds(event, priceAxisBounds);
+        if (!insidePane && !insidePriceAxis) return;
 
         event.preventDefault();
         event.stopPropagation();
+        if (insidePane) return;
         const priceScale = this.chart.priceScale('right');
         const range = priceScale.getVisibleRange();
         if (!range || !Number.isFinite(range.from) || !Number.isFinite(range.to) || range.to <= range.from) return;
-        const paneBounds = paneCell.getBoundingClientRect();
         const cursorPrice = this.series.coordinateToPrice(event.clientY - paneBounds.top);
         const pivot = Number.isFinite(cursorPrice)
             ? Math.max(range.from, Math.min(range.to, cursorPrice))
             : (range.from + range.to) / 2;
         const deltaPixels = event.deltaMode === 1
             ? event.deltaY * 16
-            : event.deltaMode === 2 ? event.deltaY * priceRowBounds.height : event.deltaY;
+            : event.deltaMode === 2 ? event.deltaY * priceAxisBounds.height : event.deltaY;
         const factor = Math.exp(Math.max(-240, Math.min(240, deltaPixels)) * 0.0015);
         const nextRange = {
             from: pivot - (pivot - range.from) * factor,
@@ -439,6 +438,13 @@ class ChartDrawingController {
         if (!Number.isFinite(nextRange.from) || !Number.isFinite(nextRange.to) || nextRange.to <= nextRange.from) return;
         priceScale.setVisibleRange(nextRange);
         this._scheduleRedraw();
+    }
+
+    _insideBounds(event, bounds) {
+        return event.clientX >= bounds.left
+            && event.clientX <= bounds.right
+            && event.clientY >= bounds.top
+            && event.clientY <= bounds.bottom;
     }
 
     _scheduleRedraw() {

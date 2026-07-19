@@ -9,6 +9,7 @@ let lastChartViewKey = null;
 let lastFocusedSignalTime = null;
 let renderedSignalMarkers = [];
 let drawingController = null;
+let currentChartCandles = [];
 let positionTimer = null;
 let positionStepInFlight = false;
 const POSITION_STEP_DELAY_MS = 700;
@@ -134,6 +135,22 @@ function focusLatestCandles(candles) {
     });
 }
 
+function syncChartResetButton() {
+    const table = document.querySelector('#candle-chart table');
+    const priceAxisCell = table?.rows?.[0]?.cells?.[2];
+    const timeAxisRow = table?.rows?.[1];
+    const button = document.getElementById('chart-reset-view');
+    if (!priceAxisCell || !timeAxisRow || !button) return;
+    button.style.width = `${priceAxisCell.getBoundingClientRect().width}px`;
+    button.style.height = `${timeAxisRow.getBoundingClientRect().height}px`;
+}
+
+function resetChartView() {
+    if (!currentChartCandles.length) return;
+    focusLatestCandles(currentChartCandles);
+    drawingController?._scheduleRedraw();
+}
+
 function markerTimeForChart(time, timeframe) {
     const seconds = { '5m': 5 * 60, '15m': 15 * 60, '1h': 60 * 60 }[timeframe];
     return Math.floor(time / seconds) * seconds;
@@ -148,6 +165,7 @@ function render(data) {
     if (isNewSignal) chartTimeframe.value = data.timeframe;
     const timeframe = chartTimeframe.value;
     const candles = data.charts[timeframe] || data.candles;
+    currentChartCandles = candles;
     const chartViewKey = `${data.session_id}:${timeframe}`;
     const shouldFocus = chartViewKey !== lastChartViewKey || (data.state === 'AWAITING_DECISION' && data.signal?.time !== lastFocusedSignalTime);
     candleSeries.setData(candles);
@@ -176,6 +194,8 @@ function render(data) {
     equityChart.priceScale('right').applyOptions({ autoScale: true });
     equityChart.timeScale().fitContent();
     if (shouldFocus) focusLatestCandles(candles);
+    document.getElementById('chart-reset-view').disabled = false;
+    requestAnimationFrame(syncChartResetButton);
     if (data.state === 'POSITION_OPEN') candleChart.timeScale().scrollToPosition(8, false);
     lastChartViewKey = chartViewKey;
     if (data.state === 'AWAITING_DECISION') lastFocusedSignalTime = data.signal?.time ?? null;
@@ -268,6 +288,8 @@ document.getElementById('symbol').addEventListener('change', startReplay);
 document.querySelectorAll('[data-decision]').forEach(button => button.addEventListener('click', async () => { try { render(await request(`/api/manual-replays/${replay.session_id}/decision`, { decision: button.dataset.decision })); } catch (error) { showError(error); } }));
 document.getElementById('continue-btn').addEventListener('click', continueReplay);
 document.getElementById('chart-timeframe').addEventListener('change', () => { if (replay) { lastChartViewKey = null; render(replay); } });
+document.getElementById('chart-reset-view').addEventListener('click', resetChartView);
+new ResizeObserver(syncChartResetButton).observe(document.getElementById('candle-chart'));
 
 function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);

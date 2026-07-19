@@ -151,6 +151,8 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert 'id="chart-drawing-overlay"' in html
     assert 'id="drawing-style-toolbar"' in html
     assert 'id="drawing-style-drag"' in html
+    assert 'id="chart-reset-view"' in html
+    assert 'aria-label="恢复初始视图"' in html
     assert 'data-draw-tool="ray"' in html
     assert 'data-draw-tool="horizontalRay"' in html
     assert '图表由' not in html
@@ -169,11 +171,16 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert "this.tool !== 'select'" in drawing_script
     assert "this._selectTool('select');" in drawing_script
     assert '_plotBounds' in drawing_script
-    assert '_handlePriceWheel' in drawing_script
+    assert '_handleChartWheel' in drawing_script
+    assert 'const priceAxisCell' in drawing_script
+    assert 'if (insidePane) return;' in drawing_script
     assert "this.chart.priceScale('right')" in drawing_script
     assert 'priceScale.getVisibleRange()' in drawing_script
     assert 'priceScale.setVisibleRange(nextRange)' in drawing_script
     assert 'event.stopPropagation()' in drawing_script
+    assert 'resetChartView' in script
+    assert 'currentChartCandles' in script
+    assert 'new ResizeObserver(syncChartResetButton)' in script
     assert "this.chartContainer.addEventListener('pointermove'" in drawing_script
     assert "['wheel', 'dblclick', 'touchmove']" in drawing_script
     assert "type === 'rectangle'" in drawing_script
