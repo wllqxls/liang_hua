@@ -16,6 +16,7 @@ from src.backtest.semi_auto_optimizer import (
     _candidate_metrics,
     _sample_score,
     build_semi_auto_whitelist,
+    explore_2025_parameter_grid,
     is_validation_passed_profile,
     validate_semi_auto_candidate,
     write_semi_auto_validation,
@@ -36,6 +37,7 @@ def test_empty_whitelist_csv_keeps_order_flow_schema(tmp_path) -> None:
         'oi_change_45m_threshold', 'holding_window', 'events',
         'average_gross_return', 'average_round_trip_cost',
         'average_funding_return', 'average_net_return', 'trigger_logic',
+        'net_wins', 'net_losses',
     } <= set(frame.columns)
 
 
@@ -80,6 +82,8 @@ def test_candidate_metrics_use_next_open_fixed_exit_cost_and_real_short_funding(
     assert metrics['average_net_return'] == pytest.approx(
         expected_gross - FIXED_ROUND_TRIP_COST + expected_funding,
     )
+    assert metrics['net_wins'] == 1
+    assert metrics['net_losses'] == 0
     assert metrics['visual_score'] == pytest.approx(0.5)
 
 
@@ -151,6 +155,8 @@ def test_candidate_validation_reads_only_2025_and_applies_net_gate(monkeypatch, 
             'average_gross_return': 0.001,
             'average_funding_return': 0.0,
             'average_net_return': -0.0004,
+            'net_wins': 26,
+            'net_losses': 39,
             'net_win_rate': 0.4,
             'median_net_return': -0.0002,
             'profit_factor': 0.8,
@@ -188,6 +194,8 @@ def test_validation_persistence_controls_exact_replay_profile(tmp_path) -> None:
         average_round_trip_cost=0.0014,
         average_funding_return=0.00004,
         average_net_return=0.00144,
+        net_wins=23,
+        net_losses=31,
         visual_score=0.5,
         sample_score=0.7,
         trigger_logic='fixture',
@@ -204,6 +212,8 @@ def test_validation_persistence_controls_exact_replay_profile(tmp_path) -> None:
         average_round_trip_cost=0.0014,
         average_funding_return=0.00003,
         average_net_return=-0.00047,
+        net_wins=41,
+        net_losses=46,
         net_win_rate=0.4,
         median_net_return=-0.0008,
         profit_factor=0.8,
@@ -228,4 +238,58 @@ def test_validation_persistence_controls_exact_replay_profile(tmp_path) -> None:
         taker_buy_ratio_threshold=0.575,
         oi_change_45m_threshold=0.002,
         holding_window='4h',
+    )
+
+
+def test_2025_grid_exploration_excludes_frozen_profile_and_never_validates(monkeypatch, tmp_path) -> None:
+    index = pd.DatetimeIndex(['2025-01-01 00:00:00+00:00'])
+    five_minute = pd.DataFrame({'close': [100.0]}, index=index)
+    years: list[int] = []
+
+    def fake_order_flow(root, *, symbol, year):
+        years.append(year)
+        return five_minute
+
+    def fake_funding(root, *, symbol, year):
+        years.append(year)
+        return pd.Series([0.0001], index=index)
+
+    monkeypatch.setattr(optimizer, 'load_order_flow_year', fake_order_flow)
+    monkeypatch.setattr(optimizer, 'load_funding_year', fake_funding)
+    monkeypatch.setattr(optimizer, 'aggregate_order_flow_to_15m', lambda frame: frame)
+    monkeypatch.setattr(
+        optimizer,
+        'build_fading_push_candidates',
+        lambda *args, **kwargs: (pd.DataFrame(), 0, 0),
+    )
+    monkeypatch.setattr(
+        optimizer,
+        '_candidate_metrics',
+        lambda **kwargs: {
+            'events': 65,
+            'net_wins': 33,
+            'net_losses': 32,
+            'average_gross_return': 0.002,
+            'average_funding_return': 0.0,
+            'average_net_return': 0.0006,
+            'median_net_return': 0.0001,
+            'profit_factor': 1.1,
+            'visual_score': 0.5,
+        },
+    )
+
+    rows = explore_2025_parameter_grid(
+        tmp_path,
+        symbol='BTC/USDT',
+        excluded_profile=(0.575, 0.002, '4h'),
+    )
+
+    assert years == [2025, 2025]
+    assert len(rows) == 26
+    assert [row.rank for row in rows] == list(range(1, 27))
+    assert all(row.research_status == 'EXPLORATION_ONLY' for row in rows)
+    assert all(
+        (row.taker_buy_ratio_threshold, row.oi_change_45m_threshold, row.holding_window)
+        != (0.575, 0.002, '4h')
+        for row in rows
     )

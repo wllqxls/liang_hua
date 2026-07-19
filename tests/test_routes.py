@@ -120,7 +120,7 @@ def test_index_renders_signal_mode_names() -> None:
     assert '主动资金退潮（需白名单验证）' in html
     assert '因子候选本身不可回放' in html
     assert 'id="mode-note"' not in html
-    assert '<th>2024净收益</th><th>2025净收益</th><th>状态</th><th>操作</th>' in html
+    assert '<th>2024净收益</th><th>2024胜/败</th><th>2025净收益</th><th>2025胜/败</th><th>状态</th><th>操作</th>' in html
     assert '<th>2024毛收益</th>' not in html
     assert '<th>2024资金费</th>' not in html
     assert '<th>2025毛收益</th>' not in html
@@ -331,7 +331,7 @@ def test_whitelist_validation_endpoint_persists_result(monkeypatch: Any) -> None
         taker_buy_ratio_threshold=0.575, oi_change_45m_threshold=0.002,
         holding_window='4h', events=87, average_gross_return=0.0009,
         average_round_trip_cost=0.0014, average_funding_return=0.00003,
-        average_net_return=-0.00047, net_win_rate=0.4,
+        average_net_return=-0.00047, net_wins=41, net_losses=46, net_win_rate=0.4,
         median_net_return=-0.0008, profit_factor=0.8,
         top_3_net_share=0.9, passed=False, status='FAILED',
     )

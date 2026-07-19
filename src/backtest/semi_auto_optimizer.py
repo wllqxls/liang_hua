@@ -43,6 +43,8 @@ class WhiteListItem:
     average_round_trip_cost: float
     average_funding_return: float
     average_net_return: float
+    net_wins: int
+    net_losses: int
     visual_score: float
     sample_score: float
     trigger_logic: str
@@ -60,12 +62,37 @@ class WhiteListValidation:
     average_round_trip_cost: float
     average_funding_return: float
     average_net_return: float
+    net_wins: int
+    net_losses: int
     net_win_rate: float
     median_net_return: float
     profit_factor: float | None
     top_3_net_share: float | None
     passed: bool
     status: str
+
+
+@dataclass(frozen=True, slots=True)
+class GridExplorationItem:
+    """One explicitly non-validating row from a 2025 parameter-grid scan."""
+
+    rank: int
+    symbol: str
+    exploration_year: int
+    taker_buy_ratio_threshold: float
+    oi_change_45m_threshold: float
+    holding_window: str
+    events: int
+    net_wins: int
+    net_losses: int
+    average_gross_return: float
+    average_round_trip_cost: float
+    average_funding_return: float
+    average_net_return: float
+    median_net_return: float
+    profit_factor: float | None
+    passes_numeric_gate: bool
+    research_status: str
 
 
 def build_semi_auto_whitelist(
@@ -128,6 +155,8 @@ def build_semi_auto_whitelist(
                     average_round_trip_cost=FIXED_ROUND_TRIP_COST,
                     average_funding_return=metrics['average_funding_return'],
                     average_net_return=metrics['average_net_return'],
+                    net_wins=int(metrics['net_wins']),
+                    net_losses=int(metrics['net_losses']),
                     visual_score=metrics['visual_score'],
                     sample_score=_sample_score(int(metrics['events'])),
                     trigger_logic=(
@@ -204,6 +233,8 @@ def validate_semi_auto_candidate(
         average_round_trip_cost=FIXED_ROUND_TRIP_COST,
         average_funding_return=float(metrics['average_funding_return']),
         average_net_return=float(metrics['average_net_return']),
+        net_wins=int(metrics['net_wins']),
+        net_losses=int(metrics['net_losses']),
         net_win_rate=float(metrics['net_win_rate']),
         median_net_return=float(metrics['median_net_return']),
         profit_factor=metrics['profit_factor'],
@@ -220,7 +251,7 @@ def write_semi_auto_whitelist(items: list[WhiteListItem], destination: Path) -> 
         'rank', 'symbol', 'mode', 'timeframe', 'design_year',
         'taker_buy_ratio_threshold', 'oi_change_45m_threshold', 'holding_window',
         'events', 'average_gross_return', 'average_round_trip_cost',
-        'average_funding_return', 'average_net_return', 'visual_score',
+        'average_funding_return', 'average_net_return', 'net_wins', 'net_losses', 'visual_score',
         'sample_score', 'trigger_logic',
     ]
     pd.DataFrame([asdict(item) for item in items], columns=columns).to_csv(
@@ -296,6 +327,87 @@ def is_validation_passed_profile(
     return int(match.sum()) == 1
 
 
+def explore_2025_parameter_grid(
+    data_root: Path,
+    *,
+    symbol: str,
+    excluded_profile: tuple[float, float, str] | None = None,
+) -> list[GridExplorationItem]:
+    """Scan 2025 as an exploration set; rows must never become validations."""
+    if symbol not in SUPPORTED_SYMBOLS:
+        raise ValueError('order-flow exploration only supports BTC/USDT and ETH/USDT')
+    archive_symbol = symbol.replace('/', '')
+    order_flow_root = Path(data_root) / ORDER_FLOW_ROOT
+    five_minute = load_order_flow_year(order_flow_root, symbol=archive_symbol, year=2025)
+    funding_rates = _normalize_funding_rates(
+        load_funding_year(order_flow_root, symbol=archive_symbol, year=2025),
+    )
+    if funding_rates.empty:
+        raise FileNotFoundError(f'{archive_symbol} 2025 fundingRate is empty')
+    fifteen_minute = aggregate_order_flow_to_15m(five_minute)
+    rows: list[GridExplorationItem] = []
+    for taker_threshold in TAKER_BUY_RATIO_THRESHOLDS:
+        for oi_threshold in OI_CHANGE_THRESHOLDS:
+            events, _, _ = build_fading_push_candidates(
+                fifteen_minute,
+                funding_rate=funding_rates,
+                taker_buy_ratio_threshold=taker_threshold,
+                oi_change_threshold=oi_threshold,
+                event_cooldown_bars=EVENT_COOLDOWN_BARS,
+            )
+            for holding_window, holding_bars in HOLDING_WINDOWS.items():
+                profile = (taker_threshold, oi_threshold, holding_window)
+                if excluded_profile is not None and profile == excluded_profile:
+                    continue
+                metrics = _candidate_metrics(
+                    fifteen_minute=fifteen_minute,
+                    five_minute=five_minute,
+                    funding_rates=funding_rates,
+                    events=events,
+                    holding_bars=holding_bars,
+                )
+                passes_gate = bool(
+                    MINIMUM_EVENTS <= metrics['events'] <= MAXIMUM_EVENTS
+                    and metrics['average_gross_return'] > 0
+                    and metrics['average_net_return'] > 0
+                )
+                rows.append(GridExplorationItem(
+                    rank=0,
+                    symbol=symbol,
+                    exploration_year=2025,
+                    taker_buy_ratio_threshold=taker_threshold,
+                    oi_change_45m_threshold=oi_threshold,
+                    holding_window=holding_window,
+                    events=int(metrics['events']),
+                    net_wins=int(metrics['net_wins']),
+                    net_losses=int(metrics['net_losses']),
+                    average_gross_return=float(metrics['average_gross_return']),
+                    average_round_trip_cost=FIXED_ROUND_TRIP_COST,
+                    average_funding_return=float(metrics['average_funding_return']),
+                    average_net_return=float(metrics['average_net_return']),
+                    median_net_return=float(metrics['median_net_return']),
+                    profit_factor=metrics['profit_factor'],
+                    passes_numeric_gate=passes_gate,
+                    research_status='EXPLORATION_ONLY',
+                ))
+    rows.sort(key=lambda item: item.average_net_return, reverse=True)
+    return [replace(item, rank=index) for index, item in enumerate(rows, start=1)]
+
+
+def write_grid_exploration(
+    items: list[GridExplorationItem],
+    destination: Path,
+) -> None:
+    """Write an exploration-only grid without touching whitelist validation state."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([asdict(item) for item in items]).to_csv(
+        destination,
+        index=False,
+        encoding='utf-8-sig',
+        lineterminator='\n',
+    )
+
+
 def _candidate_metrics(
     *,
     fifteen_minute: pd.DataFrame,
@@ -338,6 +450,8 @@ def _candidate_metrics(
         visual_scores.append(_visual_score(event))
     count = len(gross_returns)
     net_array = np.asarray(net_returns, dtype=float)
+    net_wins = int((net_array > 0).sum()) if count else 0
+    net_losses = count - net_wins
     gains = float(net_array[net_array > 0].sum()) if count else 0.0
     losses = float(-net_array[net_array < 0].sum()) if count else 0.0
     profit_factor = gains / losses if losses > 0 else None
@@ -353,6 +467,8 @@ def _candidate_metrics(
         'average_funding_return': float(np.mean(funding_returns)) if count else 0.0,
         'average_net_return': float(np.mean(net_returns)) if count else 0.0,
         'visual_score': float(np.mean(visual_scores)) if count else 0.0,
+        'net_wins': net_wins,
+        'net_losses': net_losses,
         'net_win_rate': float((net_array > 0).mean()) if count else 0.0,
         'median_net_return': float(np.median(net_array)) if count else 0.0,
         'profit_factor': profit_factor,

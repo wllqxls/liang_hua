@@ -573,6 +573,10 @@ function metricPercent(value, digits = 3) {
     return value == null ? '—' : `${(Number(value) * 100).toFixed(digits)}%`;
 }
 
+function winLoss(wins, losses) {
+    return wins == null || losses == null ? '—' : `${wins}胜 / ${losses}败`;
+}
+
 function renderWhitelistRows() {
     const rows = whitelistItems.map((item, index) => {
         const key = whitelistKey(item);
@@ -587,9 +591,9 @@ function renderWhitelistRows() {
                     ? '<button type="button" disabled>策略已生成</button>'
                     : `<button type="button" class="primary" data-create-strategy="${index}">生成策略预设</button>`
                 : '<button type="button" disabled>禁止生成策略</button>';
-        return `<tr><td>${item.rank}</td><td>${escapeHtml(item.trigger_logic)}</td><td>${metricPercent(item.average_net_return)}</td><td>${metricPercent(validation?.average_net_return)}</td><td class="${statusClass}">${status}</td><td>${action}</td></tr>`;
+        return `<tr><td>${item.rank}</td><td>${escapeHtml(item.trigger_logic)}</td><td>${metricPercent(item.average_net_return)}</td><td>${winLoss(item.net_wins, item.net_losses)}</td><td>${metricPercent(validation?.average_net_return)}</td><td>${winLoss(validation?.net_wins, validation?.net_losses)}</td><td class="${statusClass}">${status}</td><td>${action}</td></tr>`;
     }).join('');
-    document.getElementById('whitelist-table').innerHTML = rows || '<tr><td colspan="6">2024 年没有同时满足 30–100 次、毛收益与成本后净收益均大于 0 的候选</td></tr>';
+    document.getElementById('whitelist-table').innerHTML = rows || '<tr><td colspan="8">2024 年没有同时满足 30–100 次、毛收益与成本后净收益均大于 0 的候选</td></tr>';
 }
 
 async function validateWhitelist(index) {
