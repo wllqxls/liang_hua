@@ -90,8 +90,8 @@ MODE_GROUPS = [
         'options': [
             {
                 'value': 'ORDER_FLOW_FADING_15M',
-                'label': '主动资金退潮（15m 实验）',
-                'description': '主动买入占优、OI 增长但价格走弱；仅 BTC/ETH 2024–2025',
+                'label': '主动资金退潮（需白名单验证）',
+                'description': '因子候选本身不可回放；须在下方通过2025验证并生成策略预设',
             },
             {
                 'value': 'ETH_RSI_WHITELIST_5M',
@@ -227,7 +227,7 @@ def create_manual_replay(req: ManualReplayRequest) -> dict[str, object]:
         raise HTTPException(status_code=422, detail='开仓金额不能大于账户资金')
     profile = req.whitelist_profile
     if req.mode is ManualSignalMode.ORDER_FLOW_FADING_15M and profile is None:
-        raise HTTPException(status_code=422, detail='请先生成白名单并载入通过2025独立验证的参数')
+        raise HTTPException(status_code=422, detail='请先把通过2025独立验证的白名单候选生成策略预设')
     if profile is not None:
         if req.mode is not ManualSignalMode.ORDER_FLOW_FADING_15M:
             raise HTTPException(status_code=422, detail='白名单参数只能用于主动资金退潮回放')
