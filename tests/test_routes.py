@@ -119,6 +119,11 @@ def test_index_renders_signal_mode_names() -> None:
     assert '<option value="ORDER_FLOW_FADING_15M"' in html
     assert '主动资金退潮（需白名单验证）' in html
     assert '因子候选本身不可回放' in html
+    assert 'id="mode-note"' not in html
+    assert '<th>2024净收益</th><th>2025净收益</th><th>状态</th><th>操作</th>' in html
+    assert '<th>2024毛收益</th>' not in html
+    assert '<th>2024资金费</th>' not in html
+    assert '<th>2025毛收益</th>' not in html
     assert '<optgroup label="历史失败基线">' in html
     assert '<option value="KEY_LEVEL"' in html
     assert '>关键位（失败基线）</option>' in html
@@ -161,7 +166,8 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert '完整（USD-M 永续）' in script
     assert '先用 2024 搜索，再由你逐条触发 2025 独立验证' in html
     assert '才能生成策略预设并进入人工回放' in html
-    assert 'average_funding_return' in script
+    assert 'average_funding_return' not in script
+    assert 'average_gross_return' not in script
     assert 'average_net_return' in script
     assert '2024 订单流搜索完成，白名单为空' in script
     assert "document.getElementById('start-btn').disabled = isOrderFlow && !activeWhitelistProfile" in script

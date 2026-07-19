@@ -103,11 +103,6 @@ function syncModeInputs() {
         timeframe.value = '5m';
     }
     timeframe.disabled = isOrderFlow || isEthRsi;
-    const baseNote = modeSelect.selectedOptions[0]?.dataset.description || '';
-    const profileNote = activeWhitelistProfile
-        ? `已选择验证通过策略：Taker≥${(activeWhitelistProfile.taker_buy_ratio_threshold * 100).toFixed(1)}%，OI≥${(activeWhitelistProfile.oi_change_45m_threshold * 100).toFixed(1)}%，最长持有 ${activeWhitelistProfile.holding_window}。`
-        : '';
-    document.getElementById('mode-note').textContent = profileNote || baseNote;
     document.getElementById('start-btn').disabled = isOrderFlow && !activeWhitelistProfile;
 }
 
@@ -578,10 +573,6 @@ function metricPercent(value, digits = 3) {
     return value == null ? '—' : `${(Number(value) * 100).toFixed(digits)}%`;
 }
 
-function metricNumber(value, digits = 2) {
-    return value == null ? '—' : Number(value).toFixed(digits);
-}
-
 function renderWhitelistRows() {
     const rows = whitelistItems.map((item, index) => {
         const key = whitelistKey(item);
@@ -596,9 +587,9 @@ function renderWhitelistRows() {
                     ? '<button type="button" disabled>策略已生成</button>'
                     : `<button type="button" class="primary" data-create-strategy="${index}">生成策略预设</button>`
                 : '<button type="button" disabled>禁止生成策略</button>';
-        return `<tr><td>${item.rank}</td><td>${escapeHtml(item.trigger_logic)}</td><td>${item.events}</td><td>${metricPercent(item.average_gross_return)}</td><td>${metricPercent(item.average_funding_return, 4)}</td><td>${metricPercent(item.average_net_return)}</td><td>${validation?.events ?? '—'}</td><td>${metricPercent(validation?.average_gross_return)}</td><td>${metricPercent(validation?.average_net_return)}</td><td>${metricPercent(validation?.net_win_rate, 2)}</td><td>${metricNumber(validation?.profit_factor)}</td><td>${metricPercent(validation?.median_net_return)}</td><td>${metricPercent(validation?.top_3_net_share, 1)}</td><td class="${statusClass}">${status}</td><td>${action}</td></tr>`;
+        return `<tr><td>${item.rank}</td><td>${escapeHtml(item.trigger_logic)}</td><td>${metricPercent(item.average_net_return)}</td><td>${metricPercent(validation?.average_net_return)}</td><td class="${statusClass}">${status}</td><td>${action}</td></tr>`;
     }).join('');
-    document.getElementById('whitelist-table').innerHTML = rows || '<tr><td colspan="15">2024 年没有同时满足 30–100 次、毛收益与成本后净收益均大于 0 的候选</td></tr>';
+    document.getElementById('whitelist-table').innerHTML = rows || '<tr><td colspan="6">2024 年没有同时满足 30–100 次、毛收益与成本后净收益均大于 0 的候选</td></tr>';
 }
 
 async function validateWhitelist(index) {
