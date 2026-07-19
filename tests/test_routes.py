@@ -165,6 +165,15 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert "liquidation_fee_rate: number('liquidation-fee-rate')" in script
     assert 'item.exit_reason_label' in script
     assert "LIQUIDATION: '本笔已强平'" in script
+    assert 'data.signal.stop_price.toFixed(2)' in script
+    assert 'data.signal.target_price.toFixed(2)' in script
+    assert 'data.signal.estimated_liquidation_price.toFixed(2)' in script
+    assert 'item.fill_price.toFixed(2)' in script
+    assert 'item.exit_price.toFixed(2)' in script
+    assert '资金费收支' in html
+    assert 'item.funding.toFixed(4)' in script
+    assert 'id="cost-model-note"' in html
+    assert '不按杠杆倍数线性变化' in html
     assert 'id="drawing-toggle"' in html
     assert 'id="chart-drawing-overlay"' in html
     assert 'id="drawing-style-toolbar"' in html

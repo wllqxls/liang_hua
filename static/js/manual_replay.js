@@ -239,7 +239,7 @@ function render(data) {
     if (data.signal) {
         document.getElementById('signal-summary').textContent = data.signal.summary;
         document.getElementById('signal-reason').textContent = data.signal.reason;
-        document.getElementById('signal-levels').textContent = `参考止损 ${data.signal.stop_price.toFixed(4)} · 参考止盈 ${data.signal.target_price.toFixed(4)} · ${data.signal.margin_mode_label}估算强平 ${data.signal.estimated_liquidation_price.toFixed(4)}`;
+        document.getElementById('signal-levels').textContent = `参考止损 ${data.signal.stop_price.toFixed(2)} · 参考止盈 ${data.signal.target_price.toFixed(2)} · ${data.signal.margin_mode_label}估算强平 ${data.signal.estimated_liquidation_price.toFixed(2)}`;
         const signalWarning = document.getElementById('signal-risk-warning');
         signalWarning.textContent = data.signal.risk_warning || '';
         signalWarning.classList.toggle('hidden', !data.signal.risk_warning);
@@ -247,12 +247,15 @@ function render(data) {
         const trade = data.trades[data.trades.length - 1];
         const exitLabels = { TARGET: '本笔已止盈', STOP: '本笔已止损', LIQUIDATION: '本笔已强平', FINALIZE: '本笔已按期末价格平仓' };
         document.getElementById('signal-summary').textContent = exitLabels[trade.exit_reason] || '本笔已平仓';
-        document.getElementById('signal-reason').textContent = `本笔盈亏 ${trade.pnl.toFixed(2)} · 当前权益 ${trade.equity.toFixed(2)}`;
+        document.getElementById('signal-reason').textContent = `本笔盈亏 ${trade.pnl.toFixed(2)} · 资金费收支 ${trade.funding >= 0 ? '+' : ''}${trade.funding.toFixed(4)} · 当前权益 ${trade.equity.toFixed(2)}`;
         document.getElementById('signal-levels').textContent = '点击继续，快速寻找下一个候选信号。';
         document.getElementById('signal-risk-warning').classList.add('hidden');
     }
-    const rows = data.trades.map(item => `<tr><td>${item.side === 'BUY' ? '多' : '空'}</td><td>${item.fill_price.toFixed(4)}</td><td>${item.exit_price.toFixed(4)}</td><td>${item.exit_reason_label}</td><td>${item.pnl.toFixed(2)}</td><td>${item.equity.toFixed(2)}</td></tr>`).join('');
-    document.getElementById('trade-table').innerHTML = rows || '<tr><td colspan="6">尚未接受任何交易</td></tr>';
+    const rows = data.trades.map(item => `<tr><td>${item.side === 'BUY' ? '多' : '空'}</td><td>${item.fill_price.toFixed(2)}</td><td>${item.exit_price.toFixed(2)}</td><td>${item.exit_reason_label}</td><td>${item.funding >= 0 ? '+' : ''}${item.funding.toFixed(4)}</td><td>${item.pnl.toFixed(2)}</td><td>${item.equity.toFixed(2)}</td></tr>`).join('');
+    document.getElementById('trade-table').innerHTML = rows || '<tr><td colspan="7">尚未接受任何交易</td></tr>';
+    document.getElementById('cost-model-note').textContent = data.funding_available
+        ? '手续费、滑点、维持保证金、强平费和本地历史资金费率均已生效。资金费以最近已收盘 5m 价格代替历史标记价格，强平使用普通 K 线，因此两者均为估算。'
+        : '手续费、滑点、维持保证金和强平费已生效；当前币种/年份缺少本地资金费率，资金费未计入。强平使用普通 K 线，因此强平价为估算。';
     if (data.state === 'RUNNING') positionTimer = setTimeout(advance, 250);
     if (data.state === 'POSITION_OPEN') positionTimer = setTimeout(stepPosition, POSITION_STEP_DELAY_MS);
 }

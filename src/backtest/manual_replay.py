@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
 import pandas as pd
 
 from src.backtest.engine import BacktestEngine
+from src.backtest.signal_simulator import funding_cash_flow
 from src.research.order_flow_events import load_funding_year, load_order_flow_year
 from src.research.order_flow_failed_push import aggregate_order_flow_to_15m
 from src.research.order_flow_fading_push import build_fading_push_candidates
@@ -70,6 +71,7 @@ class ManualTrade:
     exit_price: float
     exit_reason: ExitReason
     liquidation_fee: float
+    funding: float
     pnl: float
     equity: float
 
@@ -88,6 +90,8 @@ class ActivePosition:
     risk_warning: str | None
     quantity: float
     entry_fee: float
+    funding: float
+    funding_cursor: pd.Timestamp
 
 
 @dataclass(slots=True)
@@ -117,6 +121,7 @@ class ManualReplay:
     trades: list[ManualTrade] = field(default_factory=list)
     equity_points: list[tuple[pd.Timestamp, float]] = field(default_factory=list)
     candidate_features: pd.DataFrame | None = None
+    funding_rates: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
 
     @classmethod
     def create(
@@ -178,23 +183,28 @@ class ManualReplay:
             chart_frames[chart_timeframe] = frame.loc[
                 (frame.index >= start) & (frame.index < end)
             ]
-        candidate_features = None
-        if mode is ManualSignalMode.ORDER_FLOW_FADING_15M:
-            order_flow_root = data_dir.parent / 'order_flow' / 'binance_um'
-            order_flow_symbol = symbol.replace('/', '')
-            five_minute = load_order_flow_year(
+        order_flow_root = data_dir.parent / 'order_flow' / 'binance_um'
+        order_flow_symbol = symbol.replace('/', '')
+        try:
+            funding_rates = _normalize_funding_rates(load_funding_year(
                 order_flow_root,
                 symbol=order_flow_symbol,
                 year=year,
-            )
-            funding = load_funding_year(
+            ))
+        except FileNotFoundError:
+            funding_rates = pd.Series(dtype=float, name='funding_rate')
+        candidate_features = None
+        if mode is ManualSignalMode.ORDER_FLOW_FADING_15M:
+            if funding_rates.empty:
+                raise FileNotFoundError('manual replay requires local historical funding rates')
+            five_minute = load_order_flow_year(
                 order_flow_root,
                 symbol=order_flow_symbol,
                 year=year,
             )
             candidate_features, _, _ = build_fading_push_candidates(
                 aggregate_order_flow_to_15m(five_minute),
-                funding_rate=funding,
+                funding_rate=funding_rates,
             )
         return cls(
             session_id=session_id,
@@ -214,6 +224,7 @@ class ManualReplay:
             liquidation_fee_rate=float(liquidation_fee_rate),
             equity_points=[(snapshots.index[0], float(cash))],
             candidate_features=candidate_features,
+            funding_rates=funding_rates,
         )
 
     def advance(self, *, max_bars: int = 40) -> None:
@@ -280,12 +291,78 @@ class ManualReplay:
             return
         candle = self.snapshots.iloc[next_index]
         self.cursor = next_index
-        exit_price: float | None = None
+        self._settle_funding_until(candle.opened_at)
+        position = self.active_position
+        if position is None:
+            raise ValueError('replay lost its open position')
         exit_price, exit_reason = _candle_exit(position, candle)
+        if exit_price is None:
+            self._settle_funding_until(candle.closed_at)
+            position = self.active_position
+            if position is None:
+                raise ValueError('replay lost its open position')
+            if _close_crossed_liquidation(position, candle.close):
+                exit_price, exit_reason = candle.close, 'LIQUIDATION'
         if exit_price is None and next_index >= len(self.snapshots) - 1:
             exit_price, exit_reason = candle.close, 'FINALIZE'
         if exit_price is not None and exit_reason is not None:
             self._close_position(exit_price, exit_reason, next_index)
+
+    def _settle_funding_until(self, end: pd.Timestamp) -> None:
+        """Apply each local historical funding settlement once while a position is open."""
+        position = self.active_position
+        if position is None or end <= position.funding_cursor:
+            return
+        funding = 0.0
+        if not self.funding_rates.empty:
+            due = self.funding_rates.loc[
+                (self.funding_rates.index > position.funding_cursor)
+                & (self.funding_rates.index <= end)
+            ]
+            for settlement_time, rate in due.items():
+                reference_price = self._funding_reference_price(settlement_time)
+                funding += funding_cash_flow(
+                    position.side,
+                    position.quantity * reference_price,
+                    float(rate),
+                )
+        self.cash += funding
+        liquidation_price = position.liquidation_price
+        if position.margin_mode is MarginMode.CROSS:
+            liquidation_price = _liquidation_price(
+                side=position.side,
+                fill_price=position.fill_price,
+                quantity=position.quantity,
+                opening_amount=self.opening_amount,
+                cash_after_entry_fee=self.cash,
+                margin_mode=position.margin_mode,
+                maintenance_margin_rate=self.maintenance_margin_rate,
+            )
+        self.active_position = replace(
+            position,
+            liquidation_price=liquidation_price,
+            risk_warning=_liquidation_warning(
+                position.side,
+                position.stop_price,
+                liquidation_price,
+            ),
+            funding=position.funding + funding,
+            funding_cursor=end,
+        )
+
+    def _funding_reference_price(self, settlement_time: pd.Timestamp) -> float:
+        """Use the latest completed local 5m close as the unavailable mark-price proxy."""
+        frame = self.chart_frames['5m']
+        completed = frame.loc[
+            (frame.index + pd.Timedelta(minutes=5)) <= settlement_time,
+            'Close',
+        ]
+        if not completed.empty:
+            return float(completed.iloc[-1])
+        position = self.active_position
+        if position is None:
+            raise ValueError('replay has no position for funding settlement')
+        return position.fill_price
 
     def continue_after_exit(self) -> None:
         """Leave the exit pause and allow the fast signal scan to resume."""
@@ -321,6 +398,7 @@ class ManualReplay:
             ],
             'cursor_time': cursor_time.isoformat(),
             'decisions': len(self.decisions),
+            'funding_available': not self.funding_rates.empty,
         }
 
     def _pending_signal_payload(self) -> dict[str, object]:
@@ -397,6 +475,8 @@ class ManualReplay:
             risk_warning=_liquidation_warning(decision, stop_price, liquidation_price),
             quantity=quantity,
             entry_fee=entry_fee,
+            funding=0.0,
+            funding_cursor=entry.opened_at,
         )
         self.state = 'POSITION_OPEN'
 
@@ -433,7 +513,8 @@ class ManualReplay:
             exit_price=exit_price,
             exit_reason=exit_reason,
             liquidation_fee=exit_fee if exit_reason == 'LIQUIDATION' else 0.0,
-            pnl=gross - position.entry_fee - exit_fee,
+            funding=position.funding,
+            pnl=gross - position.entry_fee - exit_fee + position.funding,
             equity=self.cash,
         )
         self.trades.append(trade)
@@ -459,6 +540,7 @@ class ManualReplay:
                 'margin_mode_label': MARGIN_MODE_LABELS[position.margin_mode],
                 'risk_warning': position.risk_warning,
                 'leverage': self.leverage,
+                'funding': position.funding,
             }
         if self.state == 'AWAITING_CONTINUE' and self.trades:
             trade = self.trades[-1]
@@ -477,6 +559,7 @@ class ManualReplay:
                 'exit_reason': trade.exit_reason,
                 'exit_reason_label': EXIT_REASON_LABELS[trade.exit_reason],
                 'leverage': self.leverage,
+                'funding': trade.funding,
             }
         return None
 
@@ -516,6 +599,14 @@ def _liquidation_warning(
     return '当前止损位在估算强平价之外，价格会先触发强平；请降低杠杆或缩短止损距离'
 
 
+def _close_crossed_liquidation(position: ActivePosition, close: float) -> bool:
+    if position.margin_mode is not MarginMode.CROSS:
+        return False
+    if position.side == 'BUY':
+        return close <= position.liquidation_price
+    return close >= position.liquidation_price
+
+
 def _candle_exit(
     position: ActivePosition,
     candle: MarketSnapshot,
@@ -545,6 +636,21 @@ def _candle_exit(
 
 def _adverse_fill(side: Literal['BUY', 'SELL'], price: float, slippage: float) -> float:
     return price * (1 + slippage if side == 'BUY' else 1 - slippage)
+
+
+def _normalize_funding_rates(rates: pd.Series) -> pd.Series:
+    """Align exchange millisecond jitter to the actual settlement minute."""
+    if not isinstance(rates.index, pd.DatetimeIndex):
+        raise ValueError('funding rate index must be a DatetimeIndex')
+    normalized = rates.copy()
+    if normalized.index.tz is None:
+        normalized.index = normalized.index.tz_localize('UTC')
+    else:
+        normalized.index = normalized.index.tz_convert('UTC')
+    normalized.index = normalized.index.floor('min')
+    if normalized.index.has_duplicates:
+        normalized = normalized.groupby(level=0).last()
+    return normalized.sort_index().astype(float)
 
 
 def _candle_payload(snapshot: object) -> dict[str, object]:
@@ -615,6 +721,7 @@ def _trade_payload(trade: ManualTrade) -> dict[str, object]:
         'exit_reason': trade.exit_reason,
         'exit_reason_label': EXIT_REASON_LABELS[trade.exit_reason],
         'liquidation_fee': trade.liquidation_fee,
+        'funding': trade.funding,
         'pnl': trade.pnl,
         'equity': trade.equity,
     }
