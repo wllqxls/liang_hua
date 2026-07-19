@@ -5,6 +5,7 @@ class ChartDrawingController {
         this.styleToolbar = options.styleToolbar;
         this.styleDragHandle = options.styleDragHandle;
         this.chartWrap = options.chartWrap;
+        this.chartContainer = options.chartContainer;
         this.toggle = options.toggle;
         this.colorInput = options.colorInput;
         this.widthInput = options.widthInput;
@@ -20,15 +21,29 @@ class ChartDrawingController {
         this.drag = null;
         this.styleDrag = null;
         this.risk = null;
-        this.priceLines = [];
+        this.renderRoot = null;
+        this.redrawFrame = null;
+        this.chartInteractionActive = false;
+        this.clipId = `drawing-clip-${Math.random().toString(16).slice(2)}`;
         this._bindControls();
     }
 
     attach(chart, series) {
         this.chart = chart;
         this.series = series;
-        chart.timeScale().subscribeVisibleLogicalRangeChange(() => this.redraw());
-        window.addEventListener('resize', () => this.redraw());
+        chart.timeScale().subscribeVisibleLogicalRangeChange(() => this._scheduleRedraw());
+        this.chartContainer.addEventListener('pointerdown', () => { this.chartInteractionActive = true; }, { passive: true });
+        this.chartContainer.addEventListener('pointermove', () => {
+            if (this.chartInteractionActive) this._scheduleRedraw();
+        }, { passive: true });
+        ['wheel', 'dblclick', 'touchmove'].forEach(eventName => {
+            this.chartContainer.addEventListener(eventName, () => this._scheduleRedraw(), { passive: true });
+        });
+        window.addEventListener('pointerup', () => {
+            if (this.chartInteractionActive) this._scheduleRedraw();
+            this.chartInteractionActive = false;
+        }, { passive: true });
+        window.addEventListener('resize', () => this._scheduleRedraw());
         this.redraw();
     }
 
@@ -55,7 +70,6 @@ class ChartDrawingController {
 
     setRisk(risk) {
         this.risk = risk || null;
-        this._syncPriceLines();
         this.redraw();
     }
 
@@ -79,9 +93,24 @@ class ChartDrawingController {
         if (!width || !height) return;
         this.overlay.setAttribute('viewBox', `0 0 ${width} ${height}`);
         this.overlay.replaceChildren();
-        this._renderRisk(width);
-        this.drawings.forEach(drawing => this._renderDrawing(drawing, width, height));
+        this.renderRoot = null;
+        const bounds = this._plotBounds(width, height);
+        const definitions = this._svg('defs', {}, this.overlay);
+        const clipPath = this._svg('clipPath', { id: this.clipId }, definitions);
+        this._svg('rect', bounds, clipPath);
+        if (!this.toolbar.classList.contains('hidden')) {
+            this._svg('rect', {
+                ...bounds,
+                fill: 'transparent',
+                style: 'pointer-events:all',
+                'data-drawing-capture': 'true',
+            }, this.overlay);
+        }
+        this.renderRoot = this._svg('g', { 'clip-path': `url(#${this.clipId})` }, this.overlay);
+        this._renderRisk(bounds);
+        this.drawings.forEach(drawing => this._renderDrawing(drawing, bounds));
         if (this.pendingPoint) this._renderPendingPoint(this.pendingPoint);
+        this.renderRoot = null;
     }
 
     _bindControls() {
@@ -250,9 +279,11 @@ class ChartDrawingController {
         return x == null || y == null ? null : { x, y };
     }
 
-    _renderDrawing(drawing, width, height) {
+    _renderDrawing(drawing, bounds) {
         const points = drawing.points.map(point => this._coordinates(point));
         if (points.some(point => point == null)) return;
+        const right = bounds.x + bounds.width;
+        const bottom = bounds.y + bounds.height;
         const selected = drawing.id === this.selectedId;
         const common = {
             stroke: drawing.color,
@@ -263,14 +294,14 @@ class ChartDrawingController {
             style: 'pointer-events:stroke;cursor:move',
         };
         if (drawing.type === 'ray') {
-            const end = this._rayEnd(points[0], points[1], width, height);
+            const end = this._rayEnd(points[0], points[1], bounds);
             this._svg('line', { ...common, x1: points[0].x, y1: points[0].y, x2: end.x, y2: end.y });
         } else if (drawing.type === 'horizontal') {
-            this._svg('line', { ...common, x1: 0, y1: points[0].y, x2: width, y2: points[0].y });
+            this._svg('line', { ...common, x1: bounds.x, y1: points[0].y, x2: right, y2: points[0].y });
         } else if (drawing.type === 'horizontalRay') {
-            this._svg('line', { ...common, x1: points[0].x, y1: points[0].y, x2: width, y2: points[0].y });
+            this._svg('line', { ...common, x1: points[0].x, y1: points[0].y, x2: right, y2: points[0].y });
         } else if (drawing.type === 'vertical') {
-            this._svg('line', { ...common, x1: points[0].x, y1: 0, x2: points[0].x, y2: height });
+            this._svg('line', { ...common, x1: points[0].x, y1: bounds.y, x2: points[0].x, y2: bottom });
         } else if (drawing.type === 'rectangle') {
             this._svg('rect', {
                 ...common,
@@ -291,7 +322,7 @@ class ChartDrawingController {
         this._svg('circle', { cx: coordinate.x, cy: coordinate.y, r: 5, fill: this.colorInput.value });
     }
 
-    _renderRisk(width) {
+    _renderRisk(bounds) {
         if (!this.risk) return;
         const startX = this.chart.timeScale().timeToCoordinate(this.risk.entry_time);
         const rawEndX = this.chart.timeScale().timeToCoordinate(this.risk.end_time);
@@ -299,7 +330,7 @@ class ChartDrawingController {
         const targetY = this.series.priceToCoordinate(this.risk.target_price);
         const stopY = this.series.priceToCoordinate(this.risk.stop_price);
         if ([startX, rawEndX, entryY, targetY, stopY].some(value => value == null)) return;
-        const endX = Math.min(width, Math.max(startX + 12, rawEndX + 8));
+        const endX = Math.min(bounds.x + bounds.width, Math.max(startX + 12, rawEndX + 8));
         const boxWidth = Math.max(12, endX - startX);
         this._riskRect(startX, Math.min(entryY, targetY), boxWidth, Math.abs(targetY - entryY), '#21c58b', 'rgba(33,197,139,.20)');
         this._riskRect(startX, Math.min(entryY, stopY), boxWidth, Math.abs(stopY - entryY), '#ff5f91', 'rgba(255,95,145,.22)');
@@ -319,23 +350,10 @@ class ChartDrawingController {
         node.textContent = text;
     }
 
-    _syncPriceLines() {
-        if (!this.series) return;
-        this.priceLines.forEach(line => this.series.removePriceLine(line));
-        this.priceLines = [];
-        if (!this.risk) return;
-        const side = this.risk.side === 'BUY' ? '开多' : '开空';
-        this.priceLines = [
-            this.series.createPriceLine({ price: this.risk.fill_price, color: '#4b9cff', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: `${side} x${this.risk.leverage}` }),
-            this.series.createPriceLine({ price: this.risk.target_price, color: '#21c58b', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '止盈' }),
-            this.series.createPriceLine({ price: this.risk.stop_price, color: '#ff5f91', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '止损' }),
-        ];
-    }
-
-    _svg(name, attributes) {
+    _svg(name, attributes, parent = this.renderRoot || this.overlay) {
         const node = document.createElementNS('http://www.w3.org/2000/svg', name);
         Object.entries(attributes).forEach(([key, value]) => node.setAttribute(key, String(value)));
-        this.overlay.appendChild(node);
+        parent.appendChild(node);
         return node;
     }
 
@@ -345,17 +363,41 @@ class ChartDrawingController {
         return '';
     }
 
-    _rayEnd(start, direction, width, height) {
+    _rayEnd(start, direction, bounds) {
         const dx = direction.x - start.x;
         const dy = direction.y - start.y;
+        const right = bounds.x + bounds.width;
+        const bottom = bounds.y + bounds.height;
         const candidates = [];
-        if (dx > 0) candidates.push((width - start.x) / dx);
-        if (dx < 0) candidates.push((0 - start.x) / dx);
-        if (dy > 0) candidates.push((height - start.y) / dy);
-        if (dy < 0) candidates.push((0 - start.y) / dy);
+        if (dx > 0) candidates.push((right - start.x) / dx);
+        if (dx < 0) candidates.push((bounds.x - start.x) / dx);
+        if (dy > 0) candidates.push((bottom - start.y) / dy);
+        if (dy < 0) candidates.push((bounds.y - start.y) / dy);
         const scale = Math.min(...candidates.filter(value => value >= 1));
         if (!Number.isFinite(scale)) return direction;
         return { x: start.x + dx * scale, y: start.y + dy * scale };
+    }
+
+    _plotBounds(fallbackWidth, fallbackHeight) {
+        const firstRow = this.chartContainer.querySelector('table')?.rows?.[0];
+        const paneCell = firstRow?.cells?.[1];
+        if (!paneCell) return { x: 0, y: 0, width: fallbackWidth, height: fallbackHeight };
+        const overlayBounds = this.overlay.getBoundingClientRect();
+        const paneBounds = paneCell.getBoundingClientRect();
+        return {
+            x: paneBounds.left - overlayBounds.left,
+            y: paneBounds.top - overlayBounds.top,
+            width: paneBounds.width,
+            height: paneBounds.height,
+        };
+    }
+
+    _scheduleRedraw() {
+        if (this.redrawFrame !== null) cancelAnimationFrame(this.redrawFrame);
+        this.redrawFrame = requestAnimationFrame(() => {
+            this.redrawFrame = null;
+            this.redraw();
+        });
     }
 
     _syncStyleToolbarVisibility() {

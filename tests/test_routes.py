@@ -164,6 +164,11 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert "drawing.type === 'ray'" in drawing_script
     assert '_rayEnd' in drawing_script
     assert '_startStyleDrag' in drawing_script
+    assert 'createPriceLine' not in drawing_script
+    assert 'data-drawing-capture' in drawing_script
+    assert '_plotBounds' in drawing_script
+    assert "this.chartContainer.addEventListener('pointermove'" in drawing_script
+    assert "['wheel', 'dblclick', 'touchmove']" in drawing_script
     assert "type === 'rectangle'" in drawing_script
     assert "manual-chart-drawings:v1" in drawing_script
     assert "rgba(33,197,139,.20)" in drawing_script

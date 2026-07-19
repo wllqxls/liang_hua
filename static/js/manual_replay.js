@@ -96,6 +96,7 @@ function setupCharts() {
             styleToolbar: document.getElementById('drawing-style-toolbar'),
             styleDragHandle: document.getElementById('drawing-style-drag'),
             chartWrap: document.querySelector('.chart-wrap'),
+            chartContainer: document.getElementById('candle-chart'),
             toggle: document.getElementById('drawing-toggle'),
             colorInput: document.getElementById('draw-color'),
             widthInput: document.getElementById('draw-width'),
