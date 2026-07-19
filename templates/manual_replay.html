@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>半自动交易回放</title>
-    <link rel="stylesheet" href="/static/css/manual_replay.css?v=20260719-4">
+    <link rel="stylesheet" href="/static/css/manual_replay.css?v=20260719-5">
     <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -19,19 +19,41 @@
 
         <section id="local-data-panel" class="panel local-data-panel hidden">
             <div class="local-data-heading">
-                <div><h2>本地基础 K 线</h2><p>查看或拉取全年 5m、15m、1h、4h 数据。</p></div>
+                <div><h2>本地数据</h2><p>基础行情和增强订单流数据分开管理。</p></div>
                 <button id="local-data-close" class="icon-button" type="button" aria-label="关闭本地数据">×</button>
             </div>
-            <div class="local-data-actions">
-                <label>拉取币种
-                    <select id="data-fetch-symbol">{% for s in symbols %}<option value="{{ s }}" {% if s == 'BTC/USDT' %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
-                </label>
+            <div class="local-data-toolbar">
                 <label>数据年份 <input id="data-fetch-year" type="number" min="2017" max="2100" value="2025"></label>
-                <button id="fetch-data-btn" class="primary" type="button">拉取全年全部周期</button>
-                <button id="refresh-data-btn" type="button">刷新状态</button>
+                <div class="local-data-tabs" role="tablist" aria-label="本地数据类型">
+                    <button id="market-data-tab" class="local-data-tab active" type="button" role="tab" aria-selected="true" aria-controls="market-data-page">基础行情</button>
+                    <button id="order-flow-data-tab" class="local-data-tab" type="button" role="tab" aria-selected="false" aria-controls="order-flow-data-page">增强 K 线</button>
+                </div>
             </div>
-            <p id="data-status-text" class="levels">展开后自动读取本地数据状态。</p>
-            <div class="table-wrap"><table><thead><tr><th>交易对象</th><th>5m</th><th>15m</th><th>1h</th><th>4h</th><th>状态</th></tr></thead><tbody id="data-status-table"><tr><td colspan="6">尚未读取</td></tr></tbody></table></div>
+            <section id="market-data-page" class="local-data-page" role="tabpanel" aria-hidden="false">
+                <p class="local-data-description">查看或拉取所选币种全年 5m、15m、1h、4h 基础 K 线。</p>
+                <div class="local-data-actions">
+                    <label>拉取币种
+                        <select id="data-fetch-symbol">{% for s in symbols %}<option value="{{ s }}" {% if s == 'BTC/USDT' %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+                    </label>
+                    <button id="fetch-data-btn" class="primary" type="button">拉取全年全部周期</button>
+                    <button id="refresh-data-btn" type="button">刷新状态</button>
+                </div>
+                <p id="data-status-text" class="levels">展开后自动读取本地数据状态。</p>
+                <div class="table-wrap"><table><thead><tr><th>交易对象</th><th>5m</th><th>15m</th><th>1h</th><th>4h</th><th>状态</th></tr></thead><tbody id="data-status-table"><tr><td colspan="6">尚未读取</td></tr></tbody></table></div>
+            </section>
+            <section id="order-flow-data-page" class="local-data-page hidden" role="tabpanel" aria-hidden="true">
+                <p class="local-data-description">年度增强包一次拉取 BTC + ETH 的增强 5m K 线、5m OI 指标和资金费率；不会下载全年逐笔成交、盘口深度或爆仓数据。</p>
+                <div class="local-data-actions order-flow-actions">
+                    <button id="order-flow-fetch-btn" class="primary" type="button">拉取 BTC + ETH 年度增强数据</button>
+                    <button id="order-flow-refresh-btn" type="button">刷新状态</button>
+                </div>
+                <p id="order-flow-status-text" class="levels">切换到本页后自动读取增强数据状态。</p>
+                <div id="order-flow-progress-wrap" class="order-flow-progress-wrap hidden">
+                    <progress id="order-flow-progress" value="0" max="1"></progress>
+                    <span id="order-flow-progress-text" class="levels"></span>
+                </div>
+                <div class="table-wrap"><table><thead><tr><th>交易对象</th><th>年度 5m</th><th>K 线缺口</th><th>OI 缺口</th><th>资金费率</th><th>体积</th><th>状态</th></tr></thead><tbody id="order-flow-status-table"><tr><td colspan="7">尚未读取</td></tr></tbody></table></div>
+            </section>
         </section>
 
         <section class="panel controls">
@@ -189,6 +211,6 @@
         <p id="error" class="error hidden"></p>
     </main>
     <script src="/static/js/chart_drawings.js?v=20260719-8"></script>
-    <script src="/static/js/manual_replay.js?v=20260719-9"></script>
+    <script src="/static/js/manual_replay.js?v=20260719-10"></script>
 </body>
 </html>

@@ -12,6 +12,8 @@ let drawingController = null;
 let currentChartCandles = [];
 let positionTimer = null;
 let positionStepInFlight = false;
+let orderFlowRunning = false;
+let orderFlowStatusLoaded = false;
 const POSITION_STEP_DELAY_MS = 700;
 
 const exchangeClock = new Intl.DateTimeFormat('en-CA', {
@@ -389,6 +391,125 @@ async function fetchLocalData() {
     }
 }
 
+function showLocalDataPage(page) {
+    const isOrderFlow = page === 'orderflow';
+    document.getElementById('market-data-page').classList.toggle('hidden', isOrderFlow);
+    document.getElementById('order-flow-data-page').classList.toggle('hidden', !isOrderFlow);
+    document.getElementById('market-data-page').setAttribute('aria-hidden', String(isOrderFlow));
+    document.getElementById('order-flow-data-page').setAttribute('aria-hidden', String(!isOrderFlow));
+    document.getElementById('market-data-tab').classList.toggle('active', !isOrderFlow);
+    document.getElementById('order-flow-data-tab').classList.toggle('active', isOrderFlow);
+    document.getElementById('market-data-tab').setAttribute('aria-selected', String(!isOrderFlow));
+    document.getElementById('order-flow-data-tab').setAttribute('aria-selected', String(isOrderFlow));
+    document.getElementById('local-data-panel').dataset.activeDataPage = isOrderFlow ? 'orderflow' : 'market';
+    if (isOrderFlow && !orderFlowStatusLoaded) loadOrderFlowStatus();
+    if (!isOrderFlow) loadLocalDataStatus();
+}
+
+function formatOrderFlowSize(kilobytes) {
+    if (kilobytes == null || !Number.isFinite(Number(kilobytes))) return '--';
+    const value = Number(kilobytes);
+    return value >= 1024 ? `${(value / 1024).toFixed(1)} MB` : `${value.toFixed(1)} KB`;
+}
+
+function renderOrderFlowStatus(items) {
+    const labels = {
+        complete: '完整', usable: '可研究（OI 有缺口）', partial: '不完整',
+        missing: '未下载', invalid: '审计失败',
+    };
+    const rows = (items || []).map(item => {
+        const usable = item.state === 'complete' || item.state === 'usable';
+        const annualRows = item.rows == null ? '--' : `${Number(item.rows).toLocaleString('zh-CN')} / ${Number(item.expected_rows).toLocaleString('zh-CN')}`;
+        const klineMissing = item.missing_rows == null ? '--' : Number(item.missing_rows).toLocaleString('zh-CN');
+        const metricsMissing = item.metrics_missing_rows == null ? '--' : `${Number(item.metrics_missing_rows).toLocaleString('zh-CN')}（${Number(item.metrics_coverage_pct || 0).toFixed(2)}% 覆盖）`;
+        const funding = item.funding_rows == null ? '--' : `${Number(item.funding_rows).toLocaleString('zh-CN')} 条`;
+        return `<tr><td>${escapeHtml(item.symbol || '--')}</td><td>${annualRows}</td><td class="${item.missing_rows === 0 ? 'data-present' : 'data-missing'}">${klineMissing}</td><td class="${item.metrics_missing_rows === 0 ? 'data-present' : 'data-missing'}">${metricsMissing}</td><td>${funding}</td><td>${formatOrderFlowSize(item.file_size_kb)}</td><td class="${usable ? 'data-present' : 'data-missing'}">${escapeHtml(labels[item.state] || item.state || '--')}</td></tr>`;
+    }).join('');
+    document.getElementById('order-flow-status-table').innerHTML = rows || '<tr><td colspan="7">暂无增强年度数据</td></tr>';
+}
+
+async function loadOrderFlowStatus(successMessage = '') {
+    const year = number('data-fetch-year');
+    const status = document.getElementById('order-flow-status-text');
+    const button = document.getElementById('order-flow-refresh-btn');
+    if (!Number.isInteger(year) || year < 2017 || year > 2100) {
+        status.textContent = '请输入 2017–2100 之间的年份';
+        return;
+    }
+    button.disabled = true;
+    status.textContent = `正在读取 ${year} 年增强数据状态…`;
+    try {
+        const response = await fetch(`/api/order-flow/status?year=${encodeURIComponent(year)}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || '读取失败');
+        renderOrderFlowStatus(data);
+        orderFlowStatusLoaded = true;
+        status.textContent = successMessage || (year === 2026 ? '2026 是未使用保留期，当前不开放拉取' : `${year} 年增强数据状态已更新`);
+    } catch (error) {
+        status.textContent = `增强数据状态读取失败：${error.message}`;
+        renderOrderFlowStatus([]);
+    } finally {
+        if (!orderFlowRunning) button.disabled = false;
+    }
+}
+
+async function fetchOrderFlowYear() {
+    if (orderFlowRunning) return;
+    const year = number('data-fetch-year');
+    const yearInput = document.getElementById('data-fetch-year');
+    const fetchButton = document.getElementById('order-flow-fetch-btn');
+    const refreshButton = document.getElementById('order-flow-refresh-btn');
+    const status = document.getElementById('order-flow-status-text');
+    const progressWrap = document.getElementById('order-flow-progress-wrap');
+    const progress = document.getElementById('order-flow-progress');
+    const progressText = document.getElementById('order-flow-progress-text');
+    if (![2024, 2025].includes(year)) {
+        status.textContent = year === 2026 ? '2026 是未使用保留期，当前禁止拉取' : '增强订单流基础研究只开放 2024/2025';
+        return;
+    }
+    orderFlowRunning = true;
+    fetchButton.disabled = true;
+    refreshButton.disabled = true;
+    yearInput.disabled = true;
+    progress.value = 0;
+    progress.max = 1;
+    progressWrap.classList.remove('hidden');
+    progressText.textContent = '准备年度归档…';
+    status.textContent = '后台拉取中；关闭本地数据面板不会中断任务';
+    try {
+        const createdResponse = await fetch('/api/order-flow/jobs', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year }),
+        });
+        const created = await createdResponse.json();
+        if (!createdResponse.ok || !created.success || !created.job_id) throw new Error(created.detail || created.error || '任务启动失败');
+        while (true) {
+            const jobResponse = await fetch(`/api/order-flow/jobs/${created.job_id}`);
+            const job = await jobResponse.json();
+            if (!jobResponse.ok) throw new Error(job.detail || '任务状态读取失败');
+            const completed = Number(job.completed_count || 0);
+            const total = Math.max(1, Number(job.total_count || 1));
+            progress.max = total;
+            progress.value = Math.min(completed, total);
+            progressText.textContent = `${job.stage || '拉取中'}：${completed} / ${total}，已用 ${Number(job.elapsed_seconds || 0).toFixed(1)} 秒`;
+            if (job.state === 'completed') {
+                renderOrderFlowStatus(job.items || []);
+                await loadOrderFlowStatus(`BTC + ETH ${year} 年增强数据已生成并完成年度审计`);
+                break;
+            }
+            if (job.state === 'failed' || !job.success) throw new Error(job.error || '增强年度数据拉取失败');
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+    } catch (error) {
+        status.textContent = `增强数据拉取失败：${error.message}`;
+        progressText.textContent = '任务失败，可直接重试；已校验的归档会自动跳过';
+    } finally {
+        orderFlowRunning = false;
+        fetchButton.disabled = false;
+        refreshButton.disabled = false;
+        yearInput.disabled = false;
+    }
+}
+
 function setLocalDataPanel(open) {
     const panel = document.getElementById('local-data-panel');
     document.getElementById('local-data-toggle').setAttribute('aria-expanded', String(open));
@@ -396,7 +517,9 @@ function setLocalDataPanel(open) {
     if (open) {
         document.getElementById('data-fetch-symbol').value = document.getElementById('symbol').value;
         document.getElementById('data-fetch-year').value = document.getElementById('data-year').value;
-        loadLocalDataStatus();
+        const activePage = panel.dataset.activeDataPage || 'market';
+        if (activePage === 'orderflow') loadOrderFlowStatus();
+        else loadLocalDataStatus();
     }
 }
 
@@ -404,7 +527,16 @@ document.getElementById('local-data-toggle').addEventListener('click', () => set
 document.getElementById('local-data-close').addEventListener('click', () => setLocalDataPanel(false));
 document.getElementById('refresh-data-btn').addEventListener('click', () => loadLocalDataStatus());
 document.getElementById('fetch-data-btn').addEventListener('click', fetchLocalData);
-document.getElementById('data-fetch-year').addEventListener('change', () => loadLocalDataStatus());
+document.getElementById('market-data-tab').addEventListener('click', () => showLocalDataPage('market'));
+document.getElementById('order-flow-data-tab').addEventListener('click', () => showLocalDataPage('orderflow'));
+document.getElementById('order-flow-refresh-btn').addEventListener('click', () => loadOrderFlowStatus());
+document.getElementById('order-flow-fetch-btn').addEventListener('click', fetchOrderFlowYear);
+document.getElementById('data-fetch-year').addEventListener('change', () => {
+    orderFlowStatusLoaded = false;
+    const activePage = document.getElementById('local-data-panel').dataset.activeDataPage || 'market';
+    if (activePage === 'orderflow') loadOrderFlowStatus();
+    else loadLocalDataStatus();
+});
 
 document.getElementById('whitelist-btn').addEventListener('click', async () => {
     const button = document.getElementById('whitelist-btn'); button.disabled = true;

@@ -152,6 +152,16 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert 'tickMarkFormatter: exchangeTickFormatter' in script
     assert 'id="local-data-toggle"' in html
     assert 'id="fetch-data-btn"' in html
+    assert 'id="market-data-tab"' in html
+    assert 'id="order-flow-data-tab"' in html
+    assert '>增强 K 线</button>' in html
+    assert 'id="order-flow-fetch-btn"' in html
+    assert 'id="order-flow-progress"' in html
+    assert 'id="order-flow-status-table"' in html
+    assert "showLocalDataPage('orderflow')" in script
+    assert "fetch('/api/order-flow/jobs'" in script
+    assert "fetch(`/api/order-flow/status?year=" in script
+    assert "fetch(`/api/order-flow/jobs/${created.job_id}`)" in script
     assert "shape: 'circle'" in script
     assert "shape: side === 'BUY' ? 'arrowUp' : 'arrowDown'" in script
     assert 'id="taker-fee"' in html
