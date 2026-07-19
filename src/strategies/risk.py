@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 
 FRACTIONAL_UNIT = 1 / 100e6
@@ -90,6 +90,30 @@ def estimate_liquidation_price(
     if side == "short":
         return entry_price * (1 + (1 / max(leverage, 1)) - maintenance_margin_rate)
     return entry_price * (1 - (1 / max(leverage, 1)) + maintenance_margin_rate)
+
+
+def estimate_position_liquidation_price(
+    *,
+    side: Literal['BUY', 'SELL'],
+    entry_price: float,
+    quantity: float,
+    collateral: float,
+    maintenance_margin_rate: float,
+) -> float:
+    """Estimate one-position liquidation from the collateral backing that position."""
+    if entry_price <= 0 or quantity <= 0 or collateral < 0:
+        raise ValueError('liquidation inputs must be positive')
+    if not 0 <= maintenance_margin_rate < 1:
+        raise ValueError('maintenance margin rate must be between 0 and 1')
+    notional_at_entry = quantity * entry_price
+    if side == 'BUY':
+        liquidation = (notional_at_entry - collateral) / (
+            quantity * (1 - maintenance_margin_rate)
+        )
+        return max(0.0, liquidation)
+    return (notional_at_entry + collateral) / (
+        quantity * (1 + maintenance_margin_rate)
+    )
 
 
 def context_allows_side(data: object, side: str, price: float) -> bool:

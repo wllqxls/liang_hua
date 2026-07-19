@@ -51,6 +51,9 @@
             </label>
             <label>初始资金 <input id="cash" type="number" min="10" value="100"></label>
             <label>单笔保证金 <input id="opening-amount" type="number" min="1" value="10"></label>
+            <label>保证金模式
+                <select id="margin-mode"><option value="ISOLATED" selected>逐仓</option><option value="CROSS">全仓</option></select>
+            </label>
             <label>杠杆
                 <select id="leverage">
                     <option value="1" selected>x1</option>
@@ -80,8 +83,16 @@
                     <input id="slippage-rate" type="number" value="0.0002" min="0" max="0.1" step="0.0001">
                     <span class="field-note">买入价上浮、卖出价下调，开平仓都会应用。</span>
                 </label>
+                <label>维持保证金率
+                    <input id="maintenance-margin-rate" type="number" value="0.005" min="0" max="0.9999" step="0.0001">
+                    <span class="field-note">用于逐仓/全仓强平价估算；默认 0.5%。</span>
+                </label>
+                <label>强平手续费率
+                    <input id="liquidation-fee-rate" type="number" value="0.005" min="0" max="0.1" step="0.0001">
+                    <span class="field-note">只有触发强平时扣除；默认 0.5%。</span>
+                </label>
             </div>
-            <p class="advanced-note">Maker、资金费率和维持保证金尚未接入当前人工成交模型，因此不显示为无效参数。</p>
+            <p class="advanced-note">手续费、滑点、维持保证金和强平费已生效；资金费率尚未计入。普通 K 线代替标记价格，因此强平价是保守估算。</p>
         </details>
 
         <section class="panel chart-panel">
@@ -149,6 +160,7 @@
                 <h2 id="signal-summary">候选信号</h2>
                 <p id="signal-reason"></p>
                 <p id="signal-levels" class="levels"></p>
+                <p id="signal-risk-warning" class="risk-warning hidden"></p>
             </div>
             <div class="decision-actions">
                 <button class="short" data-decision="SELL" type="button">🔴 开空</button>
@@ -157,6 +169,7 @@
                 <button id="continue-btn" class="continue hidden" type="button">▶ 继续</button>
             </div>
         </section>
+        <p id="position-risk-warning" class="risk-warning hidden"></p>
 
         <section class="panel result-panel">
             <h2>人工筛选后的权益曲线</h2>
@@ -175,7 +188,7 @@
         </section>
         <p id="error" class="error hidden"></p>
     </main>
-    <script src="/static/js/chart_drawings.js?v=20260719-7"></script>
-    <script src="/static/js/manual_replay.js?v=20260719-7"></script>
+    <script src="/static/js/chart_drawings.js?v=20260719-8"></script>
+    <script src="/static/js/manual_replay.js?v=20260719-8"></script>
 </body>
 </html>

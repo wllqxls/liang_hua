@@ -1,11 +1,14 @@
 ﻿from __future__ import annotations
 
+import pytest
+
 from src.backtest.optimizer import build_stage_one_candidates
 from src.strategies.risk import (
     build_long_risk_prices,
     build_risk_prices,
     calculate_fractional_order_size,
     estimate_liquidation_price,
+    estimate_position_liquidation_price,
     strong_context_trend_allows_side,
 )
 from src.strategies.signal_models import (
@@ -73,6 +76,24 @@ def test_manual_api_defaults_to_15m_order_flow_experiment() -> None:
 
     assert request.mode.value == 'ORDER_FLOW_FADING_15M'
     assert request.timeframe == '15m'
+    assert request.margin_mode is MarginMode.ISOLATED
+    assert request.maintenance_margin_rate == pytest.approx(0.005)
+    assert request.liquidation_fee_rate == pytest.approx(0.005)
+
+
+def test_position_liquidation_uses_selected_collateral_scope() -> None:
+    isolated = estimate_position_liquidation_price(
+        side='BUY', entry_price=100.0, quantity=10.0, collateral=10.0,
+        maintenance_margin_rate=0.005,
+    )
+    cross = estimate_position_liquidation_price(
+        side='BUY', entry_price=100.0, quantity=10.0, collateral=100.0,
+        maintenance_margin_rate=0.005,
+    )
+
+    assert isolated == pytest.approx(990.0 / 9.95)
+    assert cross == pytest.approx(900.0 / 9.95)
+    assert cross < isolated
 
 
 def test_optimizer_candidates_cover_only_stable_signal_modes() -> None:

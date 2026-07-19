@@ -128,6 +128,9 @@ def test_index_renders_signal_mode_names() -> None:
     assert '半自动交易回放' in html
     assert '<select id="strategy">' not in html
     assert '<select id="leverage">' in html
+    assert '<select id="margin-mode">' in html
+    assert '<option value="ISOLATED" selected>逐仓</option>' in html
+    assert '<option value="CROSS">全仓</option>' in html
     assert '<input id="leverage"' not in html
     assert all(f'<option value="{value}"' in html for value in (1, 2, 3, 5, 10, 20, 50, 100, 125, 150))
 
@@ -153,8 +156,15 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert "shape: side === 'BUY' ? 'arrowUp' : 'arrowDown'" in script
     assert 'id="taker-fee"' in html
     assert 'id="slippage-rate"' in html
+    assert 'id="maintenance-margin-rate"' in html
+    assert 'id="liquidation-fee-rate"' in html
     assert "taker_fee: number('taker-fee')" in script
     assert "slippage_rate: number('slippage-rate')" in script
+    assert "margin_mode: document.getElementById('margin-mode').value" in script
+    assert "maintenance_margin_rate: number('maintenance-margin-rate')" in script
+    assert "liquidation_fee_rate: number('liquidation-fee-rate')" in script
+    assert 'item.exit_reason_label' in script
+    assert "LIQUIDATION: '本笔已强平'" in script
     assert 'id="drawing-toggle"' in html
     assert 'id="chart-drawing-overlay"' in html
     assert 'id="drawing-style-toolbar"' in html
@@ -200,6 +210,8 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert "'5m': 300, '15m': 900, '1h': 3600" in drawing_script
     assert "rgba(33,197,139,.20)" in drawing_script
     assert "rgba(255,95,145,.22)" in drawing_script
+    assert "stroke: '#ff9f43'" in drawing_script
+    assert 'this.risk.liquidation_price' in drawing_script
     assert '止盈 ${profitPct}%' not in drawing_script
     assert '止损 ${stopPct}%' not in drawing_script
 

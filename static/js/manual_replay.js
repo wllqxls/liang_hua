@@ -74,7 +74,7 @@ function chart(container) {
 }
 
 function number(id) { return Number(document.getElementById(id).value); }
-function payload() { return { symbol: document.getElementById('symbol').value, data_year: number('data-year'), timeframe: document.getElementById('signal-timeframe').value, mode: document.getElementById('mode').value, cash: number('cash'), opening_amount: number('opening-amount'), leverage: number('leverage'), taker_fee: number('taker-fee'), slippage_rate: number('slippage-rate') }; }
+function payload() { return { symbol: document.getElementById('symbol').value, data_year: number('data-year'), timeframe: document.getElementById('signal-timeframe').value, mode: document.getElementById('mode').value, cash: number('cash'), opening_amount: number('opening-amount'), margin_mode: document.getElementById('margin-mode').value, leverage: number('leverage'), taker_fee: number('taker-fee'), slippage_rate: number('slippage-rate'), maintenance_margin_rate: number('maintenance-margin-rate'), liquidation_fee_rate: number('liquidation-fee-rate') }; }
 
 function syncModeInputs() {
     const modeSelect = document.getElementById('mode');
@@ -232,18 +232,26 @@ function render(data) {
     };
     document.getElementById('replay-state').textContent = stateLabels[data.state] || '回放中';
     document.getElementById('replay-state').classList.toggle('state-awaiting', awaitingDecision || awaitingContinue);
+    const positionWarning = document.getElementById('position-risk-warning');
+    const activeRiskWarning = data.state === 'POSITION_OPEN' ? data.position_overlay?.risk_warning : null;
+    positionWarning.textContent = activeRiskWarning || '';
+    positionWarning.classList.toggle('hidden', !activeRiskWarning);
     if (data.signal) {
         document.getElementById('signal-summary').textContent = data.signal.summary;
         document.getElementById('signal-reason').textContent = data.signal.reason;
-        document.getElementById('signal-levels').textContent = `参考止损 ${data.signal.stop_price.toFixed(4)} · 参考止盈 ${data.signal.target_price.toFixed(4)}`;
+        document.getElementById('signal-levels').textContent = `参考止损 ${data.signal.stop_price.toFixed(4)} · 参考止盈 ${data.signal.target_price.toFixed(4)} · ${data.signal.margin_mode_label}估算强平 ${data.signal.estimated_liquidation_price.toFixed(4)}`;
+        const signalWarning = document.getElementById('signal-risk-warning');
+        signalWarning.textContent = data.signal.risk_warning || '';
+        signalWarning.classList.toggle('hidden', !data.signal.risk_warning);
     } else if (awaitingContinue && data.trades.length) {
         const trade = data.trades[data.trades.length - 1];
-        const exitLabels = { TARGET: '本笔已止盈', STOP: '本笔已止损', FINALIZE: '本笔已按期末价格平仓' };
+        const exitLabels = { TARGET: '本笔已止盈', STOP: '本笔已止损', LIQUIDATION: '本笔已强平', FINALIZE: '本笔已按期末价格平仓' };
         document.getElementById('signal-summary').textContent = exitLabels[trade.exit_reason] || '本笔已平仓';
         document.getElementById('signal-reason').textContent = `本笔盈亏 ${trade.pnl.toFixed(2)} · 当前权益 ${trade.equity.toFixed(2)}`;
         document.getElementById('signal-levels').textContent = '点击继续，快速寻找下一个候选信号。';
+        document.getElementById('signal-risk-warning').classList.add('hidden');
     }
-    const rows = data.trades.map(item => `<tr><td>${item.side === 'BUY' ? '多' : '空'}</td><td>${item.fill_price.toFixed(4)}</td><td>${item.exit_price.toFixed(4)}</td><td>${item.exit_reason}</td><td>${item.pnl.toFixed(2)}</td><td>${item.equity.toFixed(2)}</td></tr>`).join('');
+    const rows = data.trades.map(item => `<tr><td>${item.side === 'BUY' ? '多' : '空'}</td><td>${item.fill_price.toFixed(4)}</td><td>${item.exit_price.toFixed(4)}</td><td>${item.exit_reason_label}</td><td>${item.pnl.toFixed(2)}</td><td>${item.equity.toFixed(2)}</td></tr>`).join('');
     document.getElementById('trade-table').innerHTML = rows || '<tr><td colspan="6">尚未接受任何交易</td></tr>';
     if (data.state === 'RUNNING') positionTimer = setTimeout(advance, 250);
     if (data.state === 'POSITION_OPEN') positionTimer = setTimeout(stepPosition, POSITION_STEP_DELAY_MS);

@@ -58,6 +58,7 @@ button { cursor: pointer; font-weight: 700; } button:disabled { opacity: .55; cu
 .table-wrap { width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
 table { width: 100%; border-collapse: collapse; } th, td { text-align: left; padding: 9px; border-top: 1px solid var(--border); } th { color: var(--muted); }
 .error { color: #ff9fa9; }
+.risk-warning { margin: 10px 0 0; color: #ffb347; font-weight: 700; }
 @media (max-width: 700px) {
     .app-header, .decision-panel { align-items: stretch; flex-direction: column; }
     .chart-toolbar { align-items: start; flex-direction: column; gap: 4px; }

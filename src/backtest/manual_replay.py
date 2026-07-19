@@ -18,7 +18,14 @@ from src.strategies.manual_candidates import (
     validate_manual_candidate_scope,
 )
 from src.strategies.signal_dispatcher import dispatch_signal
-from src.strategies.signal_models import ManualSignalMode, MarketSnapshot, Signal, SignalMode
+from src.strategies.risk import estimate_position_liquidation_price
+from src.strategies.signal_models import (
+    ManualSignalMode,
+    MarginMode,
+    MarketSnapshot,
+    Signal,
+    SignalMode,
+)
 
 
 ReplayState = Literal[
@@ -29,7 +36,18 @@ ReplayState = Literal[
     'FINISHED',
 ]
 Decision = Literal['BUY', 'SELL', 'SKIP']
+ExitReason = Literal['STOP', 'TARGET', 'LIQUIDATION', 'FINALIZE']
 SIGNAL_TIMEFRAME_SECONDS = {'5m': 5 * 60, '15m': 15 * 60}
+EXIT_REASON_LABELS = {
+    'STOP': '止损',
+    'TARGET': '止盈',
+    'LIQUIDATION': '强平',
+    'FINALIZE': '期末平仓',
+}
+MARGIN_MODE_LABELS = {
+    MarginMode.ISOLATED: '逐仓',
+    MarginMode.CROSS: '全仓',
+}
 DISPLAY_REASONS = {
     'False break below the previous 20-candle low': '跌破前 20 根 K 线低点后重新收回，可能是假跌破',
     'False break above the previous 20-candle high': '突破前 20 根 K 线高点后重新跌回，可能是假突破',
@@ -46,9 +64,12 @@ class ManualTrade:
     fill_price: float
     stop_price: float
     target_price: float
+    liquidation_price: float
+    margin_mode: MarginMode
     exit_time: pd.Timestamp
     exit_price: float
-    exit_reason: Literal['STOP', 'TARGET', 'FINALIZE']
+    exit_reason: ExitReason
+    liquidation_fee: float
     pnl: float
     equity: float
 
@@ -62,6 +83,9 @@ class ActivePosition:
     fill_price: float
     stop_price: float
     target_price: float
+    liquidation_price: float
+    margin_mode: MarginMode
+    risk_warning: str | None
     quantity: float
     entry_fee: float
 
@@ -82,6 +106,9 @@ class ManualReplay:
     leverage: float
     taker_fee: float
     slippage_rate: float
+    margin_mode: MarginMode = MarginMode.ISOLATED
+    maintenance_margin_rate: float = 0.005
+    liquidation_fee_rate: float = 0.005
     cursor: int = 0
     state: ReplayState = 'RUNNING'
     pending_signal: Signal | None = None
@@ -106,11 +133,16 @@ class ManualReplay:
         leverage: float,
         taker_fee: float,
         slippage_rate: float,
+        margin_mode: MarginMode,
+        maintenance_margin_rate: float,
+        liquidation_fee_rate: float,
     ) -> 'ManualReplay':
         if timeframe not in {'5m', '15m'}:
             raise ValueError('manual replay signal timeframe must be 5m or 15m')
         if opening_amount > cash:
             raise ValueError('opening amount must not exceed cash')
+        if opening_amount * leverage * taker_fee >= cash:
+            raise ValueError('账户资金不足以支付开仓手续费')
         validate_manual_candidate_scope(
             mode=mode,
             symbol=symbol,
@@ -177,6 +209,9 @@ class ManualReplay:
             leverage=float(leverage),
             taker_fee=float(taker_fee),
             slippage_rate=float(slippage_rate),
+            margin_mode=margin_mode,
+            maintenance_margin_rate=float(maintenance_margin_rate),
+            liquidation_fee_rate=float(liquidation_fee_rate),
             equity_points=[(snapshots.index[0], float(cash))],
             candidate_features=candidate_features,
         )
@@ -246,17 +281,7 @@ class ManualReplay:
         candle = self.snapshots.iloc[next_index]
         self.cursor = next_index
         exit_price: float | None = None
-        exit_reason: Literal['STOP', 'TARGET', 'FINALIZE'] | None = None
-        if position.side == 'BUY':
-            if candle.low <= position.stop_price:
-                exit_price, exit_reason = position.stop_price, 'STOP'
-            elif candle.high >= position.target_price:
-                exit_price, exit_reason = position.target_price, 'TARGET'
-        else:
-            if candle.high >= position.stop_price:
-                exit_price, exit_reason = position.stop_price, 'STOP'
-            elif candle.low <= position.target_price:
-                exit_price, exit_reason = position.target_price, 'TARGET'
+        exit_price, exit_reason = _candle_exit(position, candle)
         if exit_price is None and next_index >= len(self.snapshots) - 1:
             exit_price, exit_reason = candle.close, 'FINALIZE'
         if exit_price is not None and exit_reason is not None:
@@ -274,7 +299,7 @@ class ManualReplay:
         start = max(0, visible_end - 500)
         visible = self.snapshots.iloc[start:visible_end]
         cursor_time = visible.index[-1]
-        signal_payload = _signal_payload(self.pending_signal, self.timeframe) if self.pending_signal else None
+        signal_payload = self._pending_signal_payload() if self.pending_signal else None
         return {
             'session_id': self.session_id,
             'state': self.state,
@@ -297,6 +322,33 @@ class ManualReplay:
             'cursor_time': cursor_time.isoformat(),
             'decisions': len(self.decisions),
         }
+
+    def _pending_signal_payload(self) -> dict[str, object]:
+        signal = self.pending_signal
+        if signal is None:
+            raise ValueError('replay has no pending signal')
+        fill_price = _adverse_fill(signal.side, signal.signal_close, self.slippage_rate)
+        quantity = self.opening_amount * self.leverage / fill_price
+        entry_fee = self.opening_amount * self.leverage * self.taker_fee
+        liquidation_price = _liquidation_price(
+            side=signal.side,
+            fill_price=fill_price,
+            quantity=quantity,
+            opening_amount=self.opening_amount,
+            cash_after_entry_fee=self.cash - entry_fee,
+            margin_mode=self.margin_mode,
+            maintenance_margin_rate=self.maintenance_margin_rate,
+        )
+        direction = 1 if signal.side == 'BUY' else -1
+        stop_price = fill_price - direction * signal.stop_distance
+        payload = _signal_payload(signal, self.timeframe)
+        payload.update({
+            'estimated_liquidation_price': liquidation_price,
+            'margin_mode': self.margin_mode.value,
+            'margin_mode_label': MARGIN_MODE_LABELS[self.margin_mode],
+            'risk_warning': _liquidation_warning(signal.side, stop_price, liquidation_price),
+        })
+        return payload
 
     def persist(self, root: Path) -> Path:
         """Persist only decisions and completed trades as a reproducible local artifact."""
@@ -323,6 +375,15 @@ class ManualReplay:
         quantity = self.opening_amount * self.leverage / fill_price
         entry_fee = self.opening_amount * self.leverage * self.taker_fee
         self.cash -= entry_fee
+        liquidation_price = _liquidation_price(
+            side=decision,
+            fill_price=fill_price,
+            quantity=quantity,
+            opening_amount=self.opening_amount,
+            cash_after_entry_fee=self.cash,
+            margin_mode=self.margin_mode,
+            maintenance_margin_rate=self.maintenance_margin_rate,
+        )
         self.active_position = ActivePosition(
             signal_time=signal.signal_time,
             side=decision,
@@ -331,6 +392,9 @@ class ManualReplay:
             fill_price=fill_price,
             stop_price=stop_price,
             target_price=target_price,
+            liquidation_price=liquidation_price,
+            margin_mode=self.margin_mode,
+            risk_warning=_liquidation_warning(decision, stop_price, liquidation_price),
             quantity=quantity,
             entry_fee=entry_fee,
         )
@@ -339,7 +403,7 @@ class ManualReplay:
     def _close_position(
         self,
         exit_price: float,
-        exit_reason: Literal['STOP', 'TARGET', 'FINALIZE'],
+        exit_reason: ExitReason,
         exit_index: int,
     ) -> None:
         position = self.active_position
@@ -352,7 +416,8 @@ class ManualReplay:
         )
         direction = 1 if position.side == 'BUY' else -1
         gross = position.quantity * (exit_price - position.fill_price) * direction
-        exit_fee = position.quantity * exit_price * self.taker_fee
+        exit_fee_rate = self.liquidation_fee_rate if exit_reason == 'LIQUIDATION' else self.taker_fee
+        exit_fee = position.quantity * exit_price * exit_fee_rate
         self.cash += gross - exit_fee
         exit_snapshot = self.snapshots.iloc[exit_index]
         trade = ManualTrade(
@@ -362,9 +427,12 @@ class ManualReplay:
             fill_price=position.fill_price,
             stop_price=position.stop_price,
             target_price=position.target_price,
+            liquidation_price=position.liquidation_price,
+            margin_mode=position.margin_mode,
             exit_time=exit_snapshot.closed_at,
             exit_price=exit_price,
             exit_reason=exit_reason,
+            liquidation_fee=exit_fee if exit_reason == 'LIQUIDATION' else 0.0,
             pnl=gross - position.entry_fee - exit_fee,
             equity=self.cash,
         )
@@ -386,6 +454,10 @@ class ManualReplay:
                 'fill_price': position.fill_price,
                 'stop_price': position.stop_price,
                 'target_price': position.target_price,
+                'liquidation_price': position.liquidation_price,
+                'margin_mode': position.margin_mode.value,
+                'margin_mode_label': MARGIN_MODE_LABELS[position.margin_mode],
+                'risk_warning': position.risk_warning,
                 'leverage': self.leverage,
             }
         if self.state == 'AWAITING_CONTINUE' and self.trades:
@@ -398,11 +470,77 @@ class ManualReplay:
                 'fill_price': trade.fill_price,
                 'stop_price': trade.stop_price,
                 'target_price': trade.target_price,
+                'liquidation_price': trade.liquidation_price,
+                'margin_mode': trade.margin_mode.value,
+                'margin_mode_label': MARGIN_MODE_LABELS[trade.margin_mode],
                 'exit_price': trade.exit_price,
                 'exit_reason': trade.exit_reason,
+                'exit_reason_label': EXIT_REASON_LABELS[trade.exit_reason],
                 'leverage': self.leverage,
             }
         return None
+
+
+def _liquidation_price(
+    *,
+    side: Literal['BUY', 'SELL'],
+    fill_price: float,
+    quantity: float,
+    opening_amount: float,
+    cash_after_entry_fee: float,
+    margin_mode: MarginMode,
+    maintenance_margin_rate: float,
+) -> float:
+    collateral = opening_amount if margin_mode is MarginMode.ISOLATED else max(0.0, cash_after_entry_fee)
+    return estimate_position_liquidation_price(
+        side=side,
+        entry_price=fill_price,
+        quantity=quantity,
+        collateral=collateral,
+        maintenance_margin_rate=maintenance_margin_rate,
+    )
+
+
+def _liquidation_warning(
+    side: Literal['BUY', 'SELL'],
+    stop_price: float,
+    liquidation_price: float,
+) -> str | None:
+    stop_beyond_liquidation = (
+        side == 'BUY' and stop_price <= liquidation_price
+    ) or (
+        side == 'SELL' and stop_price >= liquidation_price
+    )
+    if not stop_beyond_liquidation:
+        return None
+    return '当前止损位在估算强平价之外，价格会先触发强平；请降低杠杆或缩短止损距离'
+
+
+def _candle_exit(
+    position: ActivePosition,
+    candle: MarketSnapshot,
+) -> tuple[float | None, ExitReason | None]:
+    if position.side == 'BUY':
+        if candle.open <= position.liquidation_price:
+            return candle.open, 'LIQUIDATION'
+        if position.stop_price > position.liquidation_price:
+            if candle.low <= position.stop_price:
+                return position.stop_price, 'STOP'
+        elif candle.low <= position.liquidation_price:
+            return position.liquidation_price, 'LIQUIDATION'
+        if candle.high >= position.target_price:
+            return position.target_price, 'TARGET'
+        return None, None
+    if candle.open >= position.liquidation_price:
+        return candle.open, 'LIQUIDATION'
+    if position.stop_price < position.liquidation_price:
+        if candle.high >= position.stop_price:
+            return position.stop_price, 'STOP'
+    elif candle.high >= position.liquidation_price:
+        return position.liquidation_price, 'LIQUIDATION'
+    if candle.low <= position.target_price:
+        return position.target_price, 'TARGET'
+    return None, None
 
 
 def _adverse_fill(side: Literal['BUY', 'SELL'], price: float, slippage: float) -> float:
@@ -469,9 +607,14 @@ def _trade_payload(trade: ManualTrade) -> dict[str, object]:
         'fill_price': trade.fill_price,
         'stop_price': trade.stop_price,
         'target_price': trade.target_price,
+        'liquidation_price': trade.liquidation_price,
+        'margin_mode': trade.margin_mode.value,
+        'margin_mode_label': MARGIN_MODE_LABELS[trade.margin_mode],
         'exit_time': trade.exit_time.isoformat(),
         'exit_price': trade.exit_price,
         'exit_reason': trade.exit_reason,
+        'exit_reason_label': EXIT_REASON_LABELS[trade.exit_reason],
+        'liquidation_fee': trade.liquidation_fee,
         'pnl': trade.pnl,
         'equity': trade.equity,
     }

@@ -308,9 +308,12 @@ class ManualReplayRequest(BaseModel):
     mode: ManualSignalMode = Field(default=ManualSignalMode.ORDER_FLOW_FADING_15M)
     cash: float = Field(default=100, gt=0)
     opening_amount: float = Field(default=10, gt=0)
+    margin_mode: MarginMode = Field(default=MarginMode.ISOLATED)
     leverage: float = Field(default=1, ge=1, le=150)
     taker_fee: float = Field(default=0.0005, ge=0, le=0.1)
     slippage_rate: float = Field(default=0.0002, ge=0, le=0.1)
+    maintenance_margin_rate: float = Field(default=0.005, ge=0, lt=1)
+    liquidation_fee_rate: float = Field(default=0.005, ge=0, le=0.1)
 
 
 class ManualDecisionRequest(BaseModel):

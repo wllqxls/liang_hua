@@ -228,9 +228,12 @@ def create_manual_replay(req: ManualReplayRequest) -> dict[str, object]:
             mode=ManualSignalMode(req.mode.value),
             cash=req.cash,
             opening_amount=req.opening_amount,
+            margin_mode=req.margin_mode,
             leverage=req.leverage,
             taker_fee=req.taker_fee,
             slippage_rate=req.slippage_rate,
+            maintenance_margin_rate=req.maintenance_margin_rate,
+            liquidation_fee_rate=req.liquidation_fee_rate,
         )
         replay.advance(max_bars=200)
     except FileNotFoundError:

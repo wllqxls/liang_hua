@@ -8,6 +8,7 @@ from src.strategies.manual_candidates import validate_manual_candidate_scope
 from src.strategies.signal_models import (
     FilterLabel,
     ManualSignalMode,
+    MarginMode,
     MarketSnapshot,
     Signal,
     SignalMode,
@@ -118,6 +119,8 @@ def test_open_position_advances_one_candle_at_a_time_then_waits_to_continue() ->
     open_overlay = replay.visible_payload()['position_overlay']
     assert open_overlay['status'] == 'OPEN'
     assert open_overlay['entry_time'] == int(snapshots.iloc[1].opened_at.timestamp())
+    assert open_overlay['liquidation_price'] >= 0
+    assert open_overlay['margin_mode_label'] == '逐仓'
     assert len(replay.visible_payload()['candles']) == 2
 
     replay.step_position()
@@ -198,3 +201,44 @@ def test_manual_experimental_scopes_are_frozen() -> None:
             timeframe='5m',
             year=2025,
         )
+
+
+def test_high_leverage_isolated_position_liquidates_before_invalid_stop() -> None:
+    replay = _replay()
+    replay.leverage = 100.0
+    replay.margin_mode = MarginMode.ISOLATED
+    replay.maintenance_margin_rate = 0.005
+    replay.liquidation_fee_rate = 0.005
+    replay.state = 'AWAITING_DECISION'
+    replay.pending_signal = _signal(replay.snapshots.iloc[0])
+
+    replay.decide('BUY')
+
+    trade = replay.trades[0]
+    assert trade.exit_reason == 'LIQUIDATION'
+    assert trade.liquidation_price > trade.stop_price
+    assert trade.exit_price == pytest.approx(trade.liquidation_price)
+    assert trade.liquidation_fee == pytest.approx(
+        replay.opening_amount * replay.leverage / trade.fill_price
+        * trade.exit_price * replay.liquidation_fee_rate
+    )
+    payload = replay.visible_payload()
+    assert payload['trades'][0]['exit_reason_label'] == '强平'
+    assert payload['position_overlay']['exit_reason_label'] == '强平'
+
+
+def test_cross_margin_uses_account_cash_and_reaches_stop_before_liquidation() -> None:
+    replay = _replay()
+    replay.leverage = 100.0
+    replay.margin_mode = MarginMode.CROSS
+    replay.maintenance_margin_rate = 0.005
+    replay.state = 'AWAITING_DECISION'
+    replay.pending_signal = _signal(replay.snapshots.iloc[0])
+
+    replay.decide('BUY')
+
+    trade = replay.trades[0]
+    assert trade.exit_reason == 'STOP'
+    assert trade.liquidation_price < trade.stop_price
+    assert trade.margin_mode is MarginMode.CROSS
+    assert trade.liquidation_fee == 0

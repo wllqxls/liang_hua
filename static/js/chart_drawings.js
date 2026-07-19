@@ -342,12 +342,14 @@ class ChartDrawingController {
         const entryY = this.series.priceToCoordinate(this.risk.fill_price);
         const targetY = this.series.priceToCoordinate(this.risk.target_price);
         const stopY = this.series.priceToCoordinate(this.risk.stop_price);
-        if ([startX, rawEndX, entryY, targetY, stopY].some(value => value == null)) return;
+        const liquidationY = this.series.priceToCoordinate(this.risk.liquidation_price);
+        if ([startX, rawEndX, entryY, targetY, stopY, liquidationY].some(value => value == null)) return;
         const endX = Math.min(bounds.x + bounds.width, Math.max(startX + 12, rawEndX + 8));
         const boxWidth = Math.max(12, endX - startX);
         this._riskRect(startX, Math.min(entryY, targetY), boxWidth, Math.abs(targetY - entryY), '#21c58b', 'rgba(33,197,139,.20)');
         this._riskRect(startX, Math.min(entryY, stopY), boxWidth, Math.abs(stopY - entryY), '#ff5f91', 'rgba(255,95,145,.22)');
         this._svg('line', { x1: startX, y1: entryY, x2: endX, y2: entryY, stroke: '#4b9cff', 'stroke-width': 1.5, 'stroke-dasharray': '5 4', style: 'pointer-events:none' });
+        this._svg('line', { x1: startX, y1: liquidationY, x2: endX, y2: liquidationY, stroke: '#ff9f43', 'stroke-width': 2, style: 'pointer-events:none' });
     }
 
     _riskRect(x, y, width, height, stroke, fill) {
