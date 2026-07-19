@@ -166,7 +166,14 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert '_startStyleDrag' in drawing_script
     assert 'createPriceLine' not in drawing_script
     assert 'data-drawing-capture' in drawing_script
+    assert "this.tool !== 'select'" in drawing_script
+    assert "this._selectTool('select');" in drawing_script
     assert '_plotBounds' in drawing_script
+    assert '_handlePriceWheel' in drawing_script
+    assert "this.chart.priceScale('right')" in drawing_script
+    assert 'priceScale.getVisibleRange()' in drawing_script
+    assert 'priceScale.setVisibleRange(nextRange)' in drawing_script
+    assert 'event.stopPropagation()' in drawing_script
     assert "this.chartContainer.addEventListener('pointermove'" in drawing_script
     assert "['wheel', 'dblclick', 'touchmove']" in drawing_script
     assert "type === 'rectangle'" in drawing_script

@@ -40,6 +40,10 @@ class ChartDrawingController {
         ['wheel', 'dblclick', 'touchmove'].forEach(eventName => {
             this.chartContainer.addEventListener(eventName, () => this._scheduleRedraw(), { passive: true });
         });
+        this.chartWrap.addEventListener('wheel', event => this._handlePriceWheel(event), {
+            capture: true,
+            passive: false,
+        });
         window.addEventListener('pointerup', () => {
             if (this.chartInteractionActive) this._scheduleRedraw();
             this.chartInteractionActive = false;
@@ -104,7 +108,7 @@ class ChartDrawingController {
         const definitions = this._svg('defs', {}, this.overlay);
         const clipPath = this._svg('clipPath', { id: this.clipId }, definitions);
         this._svg('rect', bounds, clipPath);
-        if (!this.toolbar.classList.contains('hidden')) {
+        if (!this.toolbar.classList.contains('hidden') && this.tool !== 'select') {
             this._svg('rect', {
                 ...bounds,
                 fill: 'transparent',
@@ -190,9 +194,11 @@ class ChartDrawingController {
         }
         if (['horizontal', 'horizontalRay', 'vertical'].includes(this.tool)) {
             this._pushHistory();
-            this.drawings.push(this._newDrawing(this.tool, [point]));
+            const drawing = this._newDrawing(this.tool, [point]);
+            this.drawings.push(drawing);
+            this.selectedId = drawing.id;
             this._save();
-            this.redraw();
+            this._selectTool('select');
             return;
         }
         if (!this.pendingPoint) {
@@ -201,10 +207,11 @@ class ChartDrawingController {
             return;
         }
         this._pushHistory();
-        this.drawings.push(this._newDrawing(this.tool, [this.pendingPoint, point]));
-        this.pendingPoint = null;
+        const drawing = this._newDrawing(this.tool, [this.pendingPoint, point]);
+        this.drawings.push(drawing);
+        this.selectedId = drawing.id;
         this._save();
-        this.redraw();
+        this._selectTool('select');
     }
 
     _startDrag(event, drawingId, endpoint) {
@@ -396,6 +403,42 @@ class ChartDrawingController {
             width: paneBounds.width,
             height: paneBounds.height,
         };
+    }
+
+    _handlePriceWheel(event) {
+        if (!this.chart || !this.series || event.deltaY === 0) return;
+        const firstRow = this.chartContainer.querySelector('table')?.rows?.[0];
+        const paneCell = firstRow?.cells?.[1];
+        if (!firstRow || !paneCell) return;
+        const priceRowBounds = firstRow.getBoundingClientRect();
+        const chartBounds = this.chartContainer.getBoundingClientRect();
+        const insidePriceRow = event.clientX >= chartBounds.left
+            && event.clientX <= chartBounds.right
+            && event.clientY >= priceRowBounds.top
+            && event.clientY <= priceRowBounds.bottom;
+        if (!insidePriceRow) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        const priceScale = this.chart.priceScale('right');
+        const range = priceScale.getVisibleRange();
+        if (!range || !Number.isFinite(range.from) || !Number.isFinite(range.to) || range.to <= range.from) return;
+        const paneBounds = paneCell.getBoundingClientRect();
+        const cursorPrice = this.series.coordinateToPrice(event.clientY - paneBounds.top);
+        const pivot = Number.isFinite(cursorPrice)
+            ? Math.max(range.from, Math.min(range.to, cursorPrice))
+            : (range.from + range.to) / 2;
+        const deltaPixels = event.deltaMode === 1
+            ? event.deltaY * 16
+            : event.deltaMode === 2 ? event.deltaY * priceRowBounds.height : event.deltaY;
+        const factor = Math.exp(Math.max(-240, Math.min(240, deltaPixels)) * 0.0015);
+        const nextRange = {
+            from: pivot - (pivot - range.from) * factor,
+            to: pivot + (range.to - pivot) * factor,
+        };
+        if (!Number.isFinite(nextRange.from) || !Number.isFinite(nextRange.to) || nextRange.to <= nextRange.from) return;
+        priceScale.setVisibleRange(nextRange);
+        this._scheduleRedraw();
     }
 
     _scheduleRedraw() {
