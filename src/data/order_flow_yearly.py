@@ -24,7 +24,7 @@ from src.data.order_flow import (
 )
 
 
-ORDER_FLOW_RESEARCH_YEARS = (2024, 2025)
+ORDER_FLOW_RESEARCH_YEARS = (2023, 2024, 2025)
 _KLINE_COLUMNS = (
     'open_time', 'open', 'high', 'low', 'close', 'volume', 'close_time',
     'quote_volume', 'count', 'taker_buy_volume', 'taker_buy_quote_volume', 'ignore',
@@ -419,7 +419,7 @@ def _expected_rows(year: int) -> int:
 
 def _validate_year(year: int) -> None:
     if year not in ORDER_FLOW_RESEARCH_YEARS:
-        raise ValueError('订单流年度下载只开放 2024/2025，2026 为保留期')
+        raise ValueError('订单流年度下载只开放 2023/2024/2025，2026 为未结束年度')
 
 
 def _validate_symbol_year(symbol: str, year: int, *, allow_holdout: bool) -> None:

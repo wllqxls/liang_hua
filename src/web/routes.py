@@ -27,11 +27,13 @@ from src.backtest.engine import BacktestEngine
 from src.backtest.manual_replay import ManualReplay
 from src.backtest.semi_auto_optimizer import (
     HOLDING_WINDOWS,
-    build_semi_auto_whitelist,
-    is_validation_passed_profile,
     validate_semi_auto_candidate,
     write_semi_auto_validation,
-    write_semi_auto_whitelist,
+)
+from src.backtest.semi_auto_factors import (
+    build_semi_auto_factors,
+    is_persisted_experimental_factor,
+    write_semi_auto_factors,
 )
 from src.backtest.optimizer import (
     STAGE_ONE_BUDGET,
@@ -89,9 +91,9 @@ MODE_GROUPS = [
         'label': '半自动实验候选',
         'options': [
             {
-                'value': 'ORDER_FLOW_FADING_15M',
-                'label': '主动资金退潮（需因子筛选）',
-                'description': '因子候选本身不可回放；须在下方完成2024–2025联合筛选并生成策略',
+                'value': 'ORDER_FLOW_ABSORPTION_15M',
+                'label': '相对吸收（需生成因子）',
+                'description': '先生成 BTC/ETH 三年度因子，再作为半自动实验策略回放',
             },
             {
                 'value': 'ETH_RSI_WHITELIST_5M',
@@ -226,19 +228,18 @@ def create_manual_replay(req: ManualReplayRequest) -> dict[str, object]:
     if req.opening_amount > req.cash:
         raise HTTPException(status_code=422, detail='开仓金额不能大于账户资金')
     profile = req.whitelist_profile
-    if req.mode is ManualSignalMode.ORDER_FLOW_FADING_15M and profile is None:
-        raise HTTPException(status_code=422, detail='请先把两年联合筛选合格的订单流因子生成策略')
+    if req.mode is ManualSignalMode.ORDER_FLOW_ABSORPTION_15M and profile is None:
+        raise HTTPException(status_code=422, detail='请先生成订单流因子，再将对应币种生成实验策略')
     if profile is not None:
-        if req.mode is not ManualSignalMode.ORDER_FLOW_FADING_15M:
-            raise HTTPException(status_code=422, detail='白名单参数只能用于主动资金退潮回放')
-        if not is_validation_passed_profile(
+        if req.mode is not ManualSignalMode.ORDER_FLOW_ABSORPTION_15M:
+            raise HTTPException(status_code=422, detail='该因子参数只能用于相对吸收实验回放')
+        if not is_persisted_experimental_factor(
             PROJECT_ROOT / 'results' / 'semi_auto_factor_whitelist.csv',
             symbol=req.symbol,
-            taker_buy_ratio_threshold=profile.taker_buy_ratio_threshold,
-            oi_change_45m_threshold=profile.oi_change_45m_threshold,
+            factor_id=profile.factor_id,
             holding_window=profile.holding_window,
         ):
-            raise HTTPException(status_code=422, detail='该订单流因子未通过两年联合筛选')
+            raise HTTPException(status_code=422, detail='该实验因子未在本地因子目录中生成')
     session_id = uuid.uuid4().hex
     try:
         replay = ManualReplay.create(
@@ -256,22 +257,20 @@ def create_manual_replay(req: ManualReplayRequest) -> dict[str, object]:
             slippage_rate=req.slippage_rate,
             maintenance_margin_rate=req.maintenance_margin_rate,
             liquidation_fee_rate=req.liquidation_fee_rate,
-            order_flow_taker_threshold=(
-                profile.taker_buy_ratio_threshold if profile is not None else 0.55
-            ),
-            order_flow_oi_threshold=(
-                profile.oi_change_45m_threshold if profile is not None else 0.002
-            ),
             maximum_holding_bars=(
                 HOLDING_WINDOWS[profile.holding_window] if profile is not None else None
             ),
             whitelist_profile=(profile.model_dump() if profile is not None else None),
         )
         replay.advance(max_bars=200)
+        replay.persist(MANUAL_REPLAY_RESULTS_ROOT)
     except FileNotFoundError:
         detail = (
             '缺少本地增强 5m、OI 或资金费率数据，请先在“本地数据”中拉取订单流年度包'
-            if req.mode is ManualSignalMode.ORDER_FLOW_FADING_15M
+            if req.mode in {
+                ManualSignalMode.ORDER_FLOW_FADING_15M,
+                ManualSignalMode.ORDER_FLOW_ABSORPTION_15M,
+            }
             else '缺少本地 5m/15m、1h 或 4h 数据'
         )
         raise HTTPException(status_code=404, detail=detail) from None
@@ -343,38 +342,18 @@ def continue_manual_replay(session_id: str) -> dict[str, object]:
 
 @router.post('/api/semi-auto-whitelist')
 def create_semi_auto_whitelist(req: SemiAutoWhitelistRequest) -> dict[str, object]:
-    """Generate 2024 candidates and evaluate each one on 2025 in one request."""
-    if req.symbol not in {'BTC/USDT', 'ETH/USDT'}:
-        raise HTTPException(status_code=422, detail='订单流白名单只支持 BTC/USDT 和 ETH/USDT')
+    """Generate the BTC/ETH three-year experimental factor catalog."""
     try:
-        items = build_semi_auto_whitelist(DATA_ROOT, symbol=req.symbol)
+        items = build_semi_auto_factors(DATA_ROOT)
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail='订单流因子需要该币种 2024–2025 年增强 5m、OI 与资金费率数据') from None
+        raise HTTPException(status_code=404, detail='订单流因子需要 BTC/ETH 的 2023–2025 年增强 5m、OI 与资金费率数据') from None
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f'订单流白名单数据无效: {exc}') from None
+        raise HTTPException(status_code=422, detail=f'订单流因子数据无效: {exc}') from None
     destination = PROJECT_ROOT / 'results' / 'semi_auto_factor_whitelist.csv'
-    validations = []
-    try:
-        for item in items:
-            validation = validate_semi_auto_candidate(
-                DATA_ROOT,
-                symbol=item.symbol,
-                taker_buy_ratio_threshold=item.taker_buy_ratio_threshold,
-                oi_change_45m_threshold=item.oi_change_45m_threshold,
-                holding_window=item.holding_window,
-            )
-            validations.append(validation)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail='订单流因子需要该币种 2025 年增强 5m、OI 与资金费率数据') from None
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f'2025 联合筛选失败: {exc}') from None
-    write_semi_auto_whitelist(items, destination)
-    for validation in validations:
-        write_semi_auto_validation(validation, destination)
+    write_semi_auto_factors(items, destination)
     return {
         'success': True,
         'items': [asdict(item) for item in items],
-        'validations': [asdict(item) for item in validations],
         'path': str(destination),
     }
 

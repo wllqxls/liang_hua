@@ -15,6 +15,7 @@ from src.data.yearly import MARKET_SOURCE, yearly_data_source
 from src.research.order_flow_events import load_funding_year, load_order_flow_year
 from src.research.order_flow_failed_push import aggregate_order_flow_to_15m
 from src.research.order_flow_fading_push import build_fading_push_candidates
+from src.research.order_flow_relative_absorption import build_relative_absorption_candidates
 from src.strategies.manual_candidates import (
     evaluate_manual_candidate,
     validate_manual_candidate_scope,
@@ -206,7 +207,10 @@ class ManualReplay:
         except FileNotFoundError:
             funding_rates = pd.Series(dtype=float, name='funding_rate')
         candidate_features = None
-        if mode is ManualSignalMode.ORDER_FLOW_FADING_15M:
+        if mode in {
+            ManualSignalMode.ORDER_FLOW_FADING_15M,
+            ManualSignalMode.ORDER_FLOW_ABSORPTION_15M,
+        }:
             if funding_rates.empty:
                 raise FileNotFoundError('manual replay requires local historical funding rates')
             five_minute = load_order_flow_year(
@@ -214,14 +218,21 @@ class ManualReplay:
                 symbol=order_flow_symbol,
                 year=year,
             )
-            candidate_features, _, _ = build_fading_push_candidates(
-                aggregate_order_flow_to_15m(five_minute),
-                funding_rate=funding_rates,
-                taker_buy_ratio_threshold=order_flow_taker_threshold,
-                oi_change_threshold=order_flow_oi_threshold,
-            )
-            candidate_features['taker_buy_ratio_threshold'] = order_flow_taker_threshold
-            candidate_features['oi_change_threshold'] = order_flow_oi_threshold
+            fifteen_minute = aggregate_order_flow_to_15m(five_minute)
+            if mode is ManualSignalMode.ORDER_FLOW_ABSORPTION_15M:
+                candidate_features, _, _ = build_relative_absorption_candidates(
+                    fifteen_minute,
+                    funding_rate=funding_rates,
+                )
+            else:
+                candidate_features, _, _ = build_fading_push_candidates(
+                    fifteen_minute,
+                    funding_rate=funding_rates,
+                    taker_buy_ratio_threshold=order_flow_taker_threshold,
+                    oi_change_threshold=order_flow_oi_threshold,
+                )
+                candidate_features['taker_buy_ratio_threshold'] = order_flow_taker_threshold
+                candidate_features['oi_change_threshold'] = order_flow_oi_threshold
         return cls(
             session_id=session_id,
             symbol=symbol,
@@ -422,8 +433,35 @@ class ManualReplay:
             ],
             'cursor_time': cursor_time.isoformat(),
             'decisions': len(self.decisions),
+            'replay_stats': self._replay_stats(),
             'funding_available': not self.funding_rates.empty,
             'whitelist_profile': self.whitelist_profile,
+        }
+
+    def _replay_stats(self) -> dict[str, object]:
+        """Return durable human-review progress and realized results."""
+        total_candidates = (
+            int(len(self.candidate_features))
+            if self.candidate_features is not None
+            else None
+        )
+        tested = len(self.decisions)
+        opened = sum(item['decision'] != 'SKIP' for item in self.decisions)
+        skipped = tested - opened
+        wins = sum(trade.pnl > 0 for trade in self.trades)
+        losses = sum(trade.pnl <= 0 for trade in self.trades)
+        completed = wins + losses
+        cumulative_pnl = sum(trade.pnl for trade in self.trades)
+        return {
+            'tested': tested,
+            'total_candidates': total_candidates,
+            'opened': opened,
+            'skipped': skipped,
+            'wins': wins,
+            'losses': losses,
+            'win_rate': wins / completed if completed else None,
+            'cumulative_net_pnl': cumulative_pnl,
+            'current_equity': self.cash,
         }
 
     def _pending_signal_payload(self) -> dict[str, object]:

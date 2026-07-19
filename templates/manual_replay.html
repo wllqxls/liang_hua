@@ -68,7 +68,7 @@
                 <select id="chart-timeframe"><option value="5m">5m</option><option value="15m">15m</option><option value="1h">1h</option></select>
             </label>
             <label>策略选择
-                <select id="mode"><optgroup id="validated-strategy-options" label="合格策略" hidden></optgroup>{% for group in mode_groups %}<optgroup label="{{ group.label }}">{% for mode in group.options %}<option value="{{ mode.value }}" data-description="{{ mode.description }}">{{ mode.label }}</option>{% endfor %}</optgroup>{% endfor %}</select>
+                <select id="mode"><optgroup id="validated-strategy-options" label="半自动实验策略" hidden></optgroup>{% for group in mode_groups %}<optgroup label="{{ group.label }}">{% for mode in group.options %}<option value="{{ mode.value }}" data-description="{{ mode.description }}">{{ mode.label }}</option>{% endfor %}</optgroup>{% endfor %}</select>
             </label>
             <label>初始资金 <input id="cash" type="number" min="10" value="100"></label>
             <label>单笔保证金 <input id="opening-amount" type="number" min="1" value="10"></label>
@@ -194,6 +194,15 @@
 
         <section class="panel result-panel">
             <h2>人工筛选后的权益曲线</h2>
+            <div class="replay-stats" aria-label="人工回放统计">
+                <div><span>已测/总样本</span><strong id="stat-progress">0/—</strong></div>
+                <div><span>开仓</span><strong id="stat-opened">0</strong></div>
+                <div><span>放弃</span><strong id="stat-skipped">0</strong></div>
+                <div><span>胜/败</span><strong id="stat-win-loss">0/0</strong></div>
+                <div><span>胜率</span><strong id="stat-win-rate">—</strong></div>
+                <div><span>累计净盈亏</span><strong id="stat-pnl">0.00</strong></div>
+                <div><span>当前权益</span><strong id="stat-equity">—</strong></div>
+            </div>
             <div id="equity-chart"></div>
             <div class="table-wrap">
                 <table>
@@ -204,11 +213,11 @@
         </section>
         <section class="panel">
             <h2>半自动因子</h2>
-            <div class="table-wrap"><table><thead><tr><th>排名</th><th>触发逻辑</th><th>2024净收益</th><th>2024胜/败</th><th>2025净收益</th><th>2025胜/败</th><th>状态</th><th>操作</th></tr></thead><tbody id="whitelist-table"><tr><td colspan="8">尚未生成</td></tr></tbody></table></div>
+            <div class="table-wrap"><table class="factor-table"><thead><tr><th>币种</th><th>触发逻辑</th><th>2023样本</th><th>2023净收益</th><th>2023胜/败</th><th>2024样本</th><th>2024净收益</th><th>2024胜/败</th><th>2025样本</th><th>2025净收益</th><th>2025胜/败</th><th>操作</th></tr></thead><tbody id="whitelist-table"><tr><td colspan="12">尚未生成</td></tr></tbody></table></div>
         </section>
         <p id="error" class="error hidden"></p>
     </main>
     <script src="/static/js/chart_drawings.js?v=20260719-8"></script>
-    <script src="/static/js/manual_replay.js?v=20260719-17"></script>
+    <script src="/static/js/manual_replay.js?v=20260719-18"></script>
 </body>
 </html>

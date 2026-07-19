@@ -40,6 +40,13 @@ button { cursor: pointer; font-weight: 700; } button:disabled { opacity: .55; cu
 .chart-wrap { position: relative; width: 100%; overflow: hidden; }
 #candle-chart { width: 100%; height: clamp(380px, 62vh, 620px); min-height: 380px; }
 #equity-chart { width: 100%; height: clamp(190px, 28vh, 280px); min-height: 190px; margin-bottom: 16px; }
+.replay-stats { display: grid; grid-template-columns: repeat(7, minmax(92px, 1fr)); gap: 8px; margin: 10px 0 14px; }
+.replay-stats div { padding: 9px 10px; border: 1px solid #31445c; border-radius: 8px; background: #111b29; }
+.replay-stats span { display: block; color: #8fa3ba; font-size: .72rem; }
+.replay-stats strong { display: block; margin-top: 3px; color: #eef5fc; font-size: .94rem; }
+.factor-table { min-width: 1180px; }
+.factor-table .factor-logic { max-width: 155px; white-space: normal; line-height: 1.25; font-size: .75rem; color: #9fb2c7; }
+@media (max-width: 900px) { .replay-stats { grid-template-columns: repeat(3, minmax(90px, 1fr)); } }
 .chart-tooltip { position: absolute; z-index: 4; max-width: 270px; padding: 9px; border: 1px solid #b58f24; border-radius: 7px; background: #111b28; color: var(--text); font-size: 12px; pointer-events: none; }
 .chart-reset-view { position: absolute; z-index: 6; right: 0; bottom: 0; display: grid; width: 70px; height: 29px; min-width: 0; place-items: center; padding: 0; border: 0; border-left: 1px solid #38506c; border-top: 1px solid #38506c; border-radius: 0; background: #172131; color: #93a4b8; }
 .chart-reset-view:hover { color: #e9f0f8; background: #223044; }

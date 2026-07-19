@@ -65,7 +65,7 @@ class OrderFlowFetchRequest(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
 
-    year: int = Field(ge=2024, le=2025, description='订单流研究年份')
+    year: int = Field(ge=2023, le=2025, description='订单流研究年份')
 
 
 class OrderFlowYearStatus(BaseModel):
@@ -299,13 +299,12 @@ class DataFetchResponse(BaseModel):
 
 
 class WhitelistReplayProfile(BaseModel):
-    """One validation-passed order-flow profile loaded into manual replay."""
+    """One generated experimental factor loaded into manual replay."""
 
     model_config = ConfigDict(extra='forbid')
 
-    taker_buy_ratio_threshold: Literal[0.55, 0.575, 0.6]
-    oi_change_45m_threshold: Literal[0.002, 0.005, 0.01]
-    holding_window: Literal['30m', '1h', '4h']
+    factor_id: Literal['RELATIVE_ABSORPTION_V1']
+    holding_window: Literal['4h']
 
 
 class ManualReplayRequest(BaseModel):
@@ -316,7 +315,7 @@ class ManualReplayRequest(BaseModel):
     symbol: str = Field(default='BTC/USDT')
     timeframe: Literal['5m', '15m'] = Field(default='15m')
     data_year: int = Field(ge=2017, le=2100)
-    mode: ManualSignalMode = Field(default=ManualSignalMode.ORDER_FLOW_FADING_15M)
+    mode: ManualSignalMode = Field(default=ManualSignalMode.ORDER_FLOW_ABSORPTION_15M)
     cash: float = Field(default=100, gt=0)
     opening_amount: float = Field(default=10, gt=0)
     margin_mode: MarginMode = Field(default=MarginMode.ISOLATED)
@@ -344,7 +343,12 @@ class SemiAutoWhitelistRequest(BaseModel):
     symbol: str = Field(default='BTC/USDT')
 
 
-class SemiAutoWhitelistValidationRequest(WhitelistReplayProfile):
+class SemiAutoWhitelistValidationRequest(BaseModel):
     """Validate one exact frozen 2024 profile on 2025 data."""
 
+    model_config = ConfigDict(extra='forbid')
+
     symbol: str = Field(default='BTC/USDT')
+    taker_buy_ratio_threshold: Literal[0.55, 0.575, 0.6]
+    oi_change_45m_threshold: Literal[0.002, 0.005, 0.01]
+    holding_window: Literal['30m', '1h', '4h']

@@ -52,7 +52,7 @@ class FakeContextData:
 
 def test_manual_index_exposes_experiments_before_failed_baselines() -> None:
     assert [item['value'] for item in MODE_OPTIONS] == [
-        'ORDER_FLOW_FADING_15M',
+        'ORDER_FLOW_ABSORPTION_15M',
         'ETH_RSI_WHITELIST_5M',
         'KEY_LEVEL',
         'RSI_REVERSAL',
@@ -74,7 +74,7 @@ def test_api_schema_exposes_only_stable_signal_modes() -> None:
 def test_manual_api_defaults_to_15m_order_flow_experiment() -> None:
     request = ManualReplayRequest(data_year=2025)
 
-    assert request.mode.value == 'ORDER_FLOW_FADING_15M'
+    assert request.mode.value == 'ORDER_FLOW_ABSORPTION_15M'
     assert request.timeframe == '15m'
     assert request.margin_mode is MarginMode.ISOLATED
     assert request.maintenance_margin_rate == pytest.approx(0.005)

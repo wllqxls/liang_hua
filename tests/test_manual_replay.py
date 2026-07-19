@@ -98,6 +98,37 @@ def test_skip_does_not_create_trade() -> None:
     assert marker['summary'] == '候选做多'
 
 
+def test_replay_stats_track_review_progress_and_persist(tmp_path) -> None:
+    replay = _replay()
+    replay.candidate_features = pd.DataFrame(
+        {'feature': [1.0, 2.0]},
+        index=pd.DatetimeIndex([
+            replay.snapshots.iloc[0].opened_at,
+            replay.snapshots.iloc[1].opened_at,
+        ]),
+    )
+    replay.state = 'AWAITING_DECISION'
+    replay.pending_signal = _signal(replay.snapshots.iloc[0])
+
+    replay.decide('SKIP')
+    stats = replay.visible_payload()['replay_stats']
+
+    assert stats == {
+        'tested': 1,
+        'total_candidates': 2,
+        'opened': 0,
+        'skipped': 1,
+        'wins': 0,
+        'losses': 0,
+        'win_rate': None,
+        'cumulative_net_pnl': 0,
+        'current_equity': 100.0,
+    }
+    persisted = replay.persist(tmp_path).read_text(encoding='utf-8')
+    assert '"tested": 1' in persisted
+    assert '"total_candidates": 2' in persisted
+
+
 def test_open_position_advances_one_candle_at_a_time_then_waits_to_continue() -> None:
     snapshots = pd.Series(
         [

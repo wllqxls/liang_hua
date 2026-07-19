@@ -34,6 +34,13 @@ def validate_manual_candidate_scope(
     year: int,
 ) -> None:
     """Reject combinations outside the frozen experimental candidate scope."""
+    if mode is ManualSignalMode.ORDER_FLOW_ABSORPTION_15M:
+        if symbol not in {'BTC/USDT', 'ETH/USDT'}:
+            raise ValueError('相对吸收实验只支持 BTC/USDT 和 ETH/USDT')
+        if timeframe != '15m':
+            raise ValueError('相对吸收实验固定使用 15m 信号周期')
+        if year not in {2023, 2024, 2025}:
+            raise ValueError('相对吸收实验只开放 2023、2024 和 2025 年')
     if mode is ManualSignalMode.ORDER_FLOW_FADING_15M:
         if symbol not in {'BTC/USDT', 'ETH/USDT'}:
             raise ValueError('主动资金退潮实验只支持 BTC/USDT 和 ETH/USDT')
@@ -68,6 +75,10 @@ def evaluate_manual_candidate(
         if order_flow_features is None:
             return None
         return _build_order_flow_fading_signal(snapshot, order_flow_features)
+    if mode is ManualSignalMode.ORDER_FLOW_ABSORPTION_15M:
+        if order_flow_features is None:
+            return None
+        return _build_order_flow_absorption_signal(snapshot, order_flow_features)
     raise ValueError(f'Unsupported manual signal mode: {mode!r}')
 
 
@@ -91,6 +102,43 @@ def _build_order_flow_fading_signal(
     return Signal(
         mode=ManualSignalMode.ORDER_FLOW_FADING_15M,
         strategy=ManualSignalMode.ORDER_FLOW_FADING_15M.value,
+        side='SELL',
+        signal_time=snapshot.closed_at,
+        signal_close=snapshot.close,
+        atr_snapshot=snapshot.atr,
+        stop_atr_multiple=ORDER_FLOW_STOP_ATR_MULTIPLE,
+        target_atr_multiple=ORDER_FLOW_TARGET_ATR_MULTIPLE,
+        stop_distance=stop_distance,
+        target_distance=target_distance,
+        estimated_stop_price=snapshot.close + stop_distance,
+        estimated_target_price=snapshot.close - target_distance,
+        environment_side='SELL',
+        filter_label=snapshot.filter_label,
+        reason=reason,
+        score=4,
+    )
+
+
+def _build_order_flow_absorption_signal(
+    snapshot: MarketSnapshot,
+    features: Mapping[str, object],
+) -> Signal:
+    taker_buy_ratio = float(features['taker_buy_ratio'])
+    oi_change = float(features['oi_change_45m'])
+    taker_threshold = float(features['taker_ratio_threshold'])
+    oi_threshold = float(features['oi_change_threshold'])
+    funding_rate = float(features['funding_rate'])
+    stop_distance = snapshot.atr * ORDER_FLOW_STOP_ATR_MULTIPLE
+    target_distance = snapshot.atr * ORDER_FLOW_TARGET_ATR_MULTIPLE
+    funding_text = '暂无已结算值' if pd.isna(funding_rate) else f'{funding_rate * 100:.4f}%'
+    reason = (
+        f'Taker {taker_buy_ratio * 100:.1f}%≥30日阈值 {taker_threshold * 100:.1f}%'
+        f'，OI 45分钟 {oi_change * 100:.2f}%≥阈值 {oi_threshold * 100:.2f}%'
+        f'，价格收弱；资金费率 {funding_text}'
+    )
+    return Signal(
+        mode=ManualSignalMode.ORDER_FLOW_ABSORPTION_15M,
+        strategy=ManualSignalMode.ORDER_FLOW_ABSORPTION_15M.value,
         side='SELL',
         signal_time=snapshot.closed_at,
         signal_close=snapshot.close,

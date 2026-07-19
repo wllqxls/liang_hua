@@ -15,7 +15,6 @@ let positionStepInFlight = false;
 let orderFlowRunning = false;
 let orderFlowStatusLoaded = false;
 let whitelistItems = [];
-let whitelistValidations = new Map();
 let validatedStrategyProfiles = new Map();
 let activeWhitelistProfile = null;
 const POSITION_STEP_DELAY_MS = 700;
@@ -80,7 +79,7 @@ function chart(container) {
 }
 
 function number(id) { return Number(document.getElementById(id).value); }
-function payload() { return { symbol: document.getElementById('symbol').value, data_year: number('data-year'), timeframe: document.getElementById('signal-timeframe').value, mode: activeWhitelistProfile ? 'ORDER_FLOW_FADING_15M' : document.getElementById('mode').value, cash: number('cash'), opening_amount: number('opening-amount'), margin_mode: document.getElementById('margin-mode').value, leverage: number('leverage'), taker_fee: number('taker-fee'), slippage_rate: number('slippage-rate'), maintenance_margin_rate: number('maintenance-margin-rate'), liquidation_fee_rate: number('liquidation-fee-rate'), whitelist_profile: activeWhitelistProfile }; }
+function payload() { return { symbol: document.getElementById('symbol').value, data_year: number('data-year'), timeframe: document.getElementById('signal-timeframe').value, mode: activeWhitelistProfile ? 'ORDER_FLOW_ABSORPTION_15M' : document.getElementById('mode').value, cash: number('cash'), opening_amount: number('opening-amount'), margin_mode: document.getElementById('margin-mode').value, leverage: number('leverage'), taker_fee: number('taker-fee'), slippage_rate: number('slippage-rate'), maintenance_margin_rate: number('maintenance-margin-rate'), liquidation_fee_rate: number('liquidation-fee-rate'), whitelist_profile: activeWhitelistProfile }; }
 
 function syncModeInputs() {
     const modeSelect = document.getElementById('mode');
@@ -91,12 +90,12 @@ function syncModeInputs() {
     const symbol = document.getElementById('symbol');
     const timeframe = document.getElementById('signal-timeframe');
     const year = document.getElementById('data-year');
-    const isOrderFlow = mode === 'ORDER_FLOW_FADING_15M' || Boolean(strategy);
+    const isOrderFlow = mode === 'ORDER_FLOW_ABSORPTION_15M' || Boolean(strategy);
     const isEthRsi = mode === 'ETH_RSI_WHITELIST_5M';
     if (isOrderFlow) {
         if (strategy) symbol.value = strategy.item.symbol;
         if (!['BTC/USDT', 'ETH/USDT'].includes(symbol.value)) symbol.value = 'BTC/USDT';
-        if (![2024, 2025].includes(Number(year.value))) year.value = '2025';
+        if (![2023, 2024, 2025].includes(Number(year.value))) year.value = '2025';
         timeframe.value = '15m';
     } else if (isEthRsi) {
         symbol.value = 'ETH/USDT';
@@ -275,6 +274,7 @@ function render(data) {
     }
     const rows = data.trades.map(item => `<tr><td>${item.side === 'BUY' ? '多' : '空'}</td><td>${item.fill_price.toFixed(2)}</td><td>${item.exit_price.toFixed(2)}</td><td>${item.exit_reason_label}</td><td>${item.funding >= 0 ? '+' : ''}${item.funding.toFixed(4)}</td><td>${item.pnl.toFixed(2)}</td><td>${item.equity.toFixed(2)}</td></tr>`).join('');
     document.getElementById('trade-table').innerHTML = rows || '<tr><td colspan="7">尚未接受任何交易</td></tr>';
+    renderReplayStats(data.replay_stats);
     document.getElementById('cost-model-note').textContent = data.funding_available
         ? '手续费、滑点、维持保证金、强平费和本地历史资金费率均已生效。资金费以最近已收盘 5m 价格代替历史标记价格，强平使用普通 K 线，因此两者均为估算。'
         : '手续费、滑点、维持保证金和强平费已生效；当前币种/年份缺少本地资金费率，资金费未计入。强平使用普通 K 线，因此强平价为估算。';
@@ -308,6 +308,18 @@ async function continueReplay() {
 }
 function showError(error) { const el = document.getElementById('error'); el.textContent = error.message; el.classList.remove('hidden'); }
 
+function renderReplayStats(stats) {
+    if (!stats) return;
+    const total = stats.total_candidates == null ? '—' : stats.total_candidates;
+    document.getElementById('stat-progress').textContent = `${stats.tested}/${total}`;
+    document.getElementById('stat-opened').textContent = stats.opened;
+    document.getElementById('stat-skipped').textContent = stats.skipped;
+    document.getElementById('stat-win-loss').textContent = `${stats.wins}/${stats.losses}`;
+    document.getElementById('stat-win-rate').textContent = stats.win_rate == null ? '—' : `${(stats.win_rate * 100).toFixed(1)}%`;
+    document.getElementById('stat-pnl').textContent = `${stats.cumulative_net_pnl >= 0 ? '+' : ''}${stats.cumulative_net_pnl.toFixed(2)}`;
+    document.getElementById('stat-equity').textContent = stats.current_equity.toFixed(2);
+}
+
 async function startReplay() {
     syncModeInputs();
     const version = ++replayLoadVersion;
@@ -340,7 +352,7 @@ async function startReplay() {
 document.getElementById('start-btn').addEventListener('click', startReplay);
 document.getElementById('symbol').addEventListener('change', () => {
     if (document.getElementById('mode').selectedOptions[0]?.dataset.whitelistKey) {
-        document.getElementById('mode').value = 'ORDER_FLOW_FADING_15M';
+        document.getElementById('mode').value = 'ORDER_FLOW_ABSORPTION_15M';
     }
     syncModeInputs();
 });
@@ -490,8 +502,8 @@ async function fetchOrderFlowYear() {
     const progressWrap = document.getElementById('order-flow-progress-wrap');
     const progress = document.getElementById('order-flow-progress');
     const progressText = document.getElementById('order-flow-progress-text');
-    if (![2024, 2025].includes(year)) {
-        status.textContent = year === 2026 ? '2026 是未使用保留期，当前禁止拉取' : '增强订单流基础研究只开放 2024/2025';
+    if (![2023, 2024, 2025].includes(year)) {
+        status.textContent = year === 2026 ? '2026 尚未结束，当前禁止拉取年度包' : '增强订单流数据只开放 2023/2024/2025';
         return;
     }
     orderFlowRunning = true;
@@ -566,7 +578,7 @@ document.getElementById('data-fetch-year').addEventListener('change', () => {
 });
 
 function whitelistKey(item) {
-    return `${item.symbol}|${item.taker_buy_ratio_threshold}|${item.oi_change_45m_threshold}|${item.holding_window}`;
+    return `${item.symbol}|${item.factor_id}|${item.holding_window}`;
 }
 
 function metricPercent(value, digits = 3) {
@@ -580,27 +592,25 @@ function winLoss(wins, losses) {
 function renderWhitelistRows() {
     const rows = whitelistItems.map((item, index) => {
         const key = whitelistKey(item);
-        const validation = whitelistValidations.get(key);
         const strategyCreated = validatedStrategyProfiles.has(key);
-        const status = validation?.passed ? '合格' : '不合格';
-        const statusClass = validation?.passed ? 'data-present' : 'data-missing';
-        const action = `<button type="button"${validation?.passed && !strategyCreated ? ' class="primary" data-create-strategy="' + index + '"' : ' disabled'}>生成策略</button>`;
-        return `<tr><td>${item.rank}</td><td>${escapeHtml(item.trigger_logic)}</td><td>${metricPercent(item.average_net_return)}</td><td>${winLoss(item.net_wins, item.net_losses)}</td><td>${metricPercent(validation?.average_net_return)}</td><td>${winLoss(validation?.net_wins, validation?.net_losses)}</td><td class="${statusClass}">${status}</td><td>${action}</td></tr>`;
+        const action = `<button type="button"${strategyCreated ? ' disabled' : ' class="primary" data-create-strategy="' + index + '"'}>生成策略</button>`;
+        const metricCells = [item.metrics_2023, item.metrics_2024, item.metrics_2025].map(metrics => (
+            `<td>${metrics.samples}</td><td>${metricPercent(metrics.average_net_return)}</td><td>${winLoss(metrics.net_wins, metrics.net_losses)}</td>`
+        )).join('');
+        return `<tr><td>${escapeHtml(item.symbol.replace('/USDT', ''))}</td><td class="factor-logic">${escapeHtml(item.trigger_logic)}</td>${metricCells}<td>${action}</td></tr>`;
     }).join('');
-    document.getElementById('whitelist-table').innerHTML = rows || '<tr><td colspan="8">2024 年没有同时满足 30–100 次、毛收益与成本后净收益均大于 0 的候选</td></tr>';
+    document.getElementById('whitelist-table').innerHTML = rows || '<tr><td colspan="12">尚未生成</td></tr>';
 }
 
 function strategyPresetName(item) {
     const symbol = item.symbol.replace('/USDT', '');
-    const taker = (item.taker_buy_ratio_threshold * 100).toFixed(1);
-    const oi = (item.oi_change_45m_threshold * 100).toFixed(1);
-    return `主动资金退潮｜${symbol}｜Taker ${taker}%｜OI ${oi}%｜持有${item.holding_window}`;
+    return `[实验] 相对吸收｜${symbol}｜30日80%分位｜${item.holding_window}`;
 }
 
 function clearValidatedStrategyPresets() {
     const mode = document.getElementById('mode');
     const group = document.getElementById('validated-strategy-options');
-    if (mode.selectedOptions[0]?.dataset.whitelistKey) mode.value = 'ORDER_FLOW_FADING_15M';
+    if (mode.selectedOptions[0]?.dataset.whitelistKey) mode.value = 'ORDER_FLOW_ABSORPTION_15M';
     group.replaceChildren();
     group.hidden = true;
     validatedStrategyProfiles = new Map();
@@ -610,11 +620,9 @@ function clearValidatedStrategyPresets() {
 function createValidatedStrategyPreset(index) {
     const item = whitelistItems[index];
     const key = item ? whitelistKey(item) : '';
-    const validation = item ? whitelistValidations.get(key) : null;
-    if (!item || !validation?.passed) return;
+    if (!item) return;
     const profile = {
-        taker_buy_ratio_threshold: item.taker_buy_ratio_threshold,
-        oi_change_45m_threshold: item.oi_change_45m_threshold,
+        factor_id: item.factor_id,
         holding_window: item.holding_window,
     };
     validatedStrategyProfiles.set(key, { item, profile });
@@ -623,7 +631,7 @@ function createValidatedStrategyPreset(index) {
     option.value = `VALIDATED_ORDER_FLOW_${index}`;
     option.textContent = strategyPresetName(item);
     option.dataset.whitelistKey = key;
-    option.dataset.description = '2024–2025 联合筛选合格；信号阈值与最大持有窗口已冻结。';
+    option.dataset.description = 'BTC/ETH 三年度相对吸收因子；供人工筛选实验，不代表自动盈利。';
     group.append(option);
     group.hidden = false;
     document.getElementById('symbol').value = item.symbol;
@@ -646,7 +654,6 @@ document.getElementById('whitelist-btn').addEventListener('click', async () => {
     try {
         const data = await request('/api/semi-auto-whitelist', { symbol: document.getElementById('symbol').value });
         whitelistItems = data.items;
-        whitelistValidations = new Map(data.validations.map(item => [whitelistKey(item), item]));
         clearValidatedStrategyPresets();
         syncModeInputs();
         renderWhitelistRows();

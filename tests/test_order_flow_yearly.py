@@ -147,6 +147,13 @@ def test_holdout_year_can_be_inspected_but_not_downloaded(tmp_path) -> None:
     try:
         yearly.annual_archive_tasks(2026)
     except ValueError as exc:
-        assert '保留期' in str(exc)
+        assert '2026 为未结束年度' in str(exc)
     else:
         raise AssertionError('2026 download must stay locked')
+
+
+def test_2023_enhanced_archive_is_unlocked() -> None:
+    tasks = yearly.annual_archive_tasks(2023)
+
+    assert len(tasks) == 2 * (365 + 12 + 12)
+    assert {item.symbol for item in tasks} == {'BTCUSDT', 'ETHUSDT'}

@@ -9,7 +9,8 @@ from fastapi.testclient import TestClient
 
 from main import app
 from src.backtest.engine import BacktestResult
-from src.backtest.semi_auto_optimizer import WhiteListItem, WhiteListValidation
+from src.backtest.semi_auto_factors import AnnualFactorMetrics, SemiAutoFactorItem
+from src.backtest.semi_auto_optimizer import WhiteListValidation
 from src.web import routes
 from src.data.order_flow_yearly import OrderFlowYearStatus
 
@@ -108,7 +109,7 @@ def test_index_renders_signal_mode_names() -> None:
 
     assert response.status_code == 200
     assert [item['value'] for item in routes.MODE_OPTIONS] == [
-        'ORDER_FLOW_FADING_15M',
+        'ORDER_FLOW_ABSORPTION_15M',
         'ETH_RSI_WHITELIST_5M',
         'KEY_LEVEL',
         'RSI_REVERSAL',
@@ -116,14 +117,18 @@ def test_index_renders_signal_mode_names() -> None:
     ]
     html = response.text
     assert '<optgroup label="半自动实验候选">' in html
-    assert '<option value="ORDER_FLOW_FADING_15M"' in html
-    assert '主动资金退潮（需因子筛选）' in html
-    assert '因子候选本身不可回放' in html
+    assert '<option value="ORDER_FLOW_ABSORPTION_15M"' in html
+    assert '相对吸收（需生成因子）' in html
     assert 'id="mode-note"' not in html
     assert 'id="whitelist-status"' not in html
     assert '<h2>半自动因子</h2>' in html
     assert '>生成订单流因子</button>' in html
-    assert '<th>2024净收益</th><th>2024胜/败</th><th>2025净收益</th><th>2025胜/败</th><th>状态</th><th>操作</th>' in html
+    assert '<th>币种</th><th>触发逻辑</th><th>2023样本</th><th>2023净收益</th><th>2023胜/败</th>' in html
+    assert '<th>2024样本</th><th>2024净收益</th><th>2024胜/败</th>' in html
+    assert '<th>2025样本</th><th>2025净收益</th><th>2025胜/败</th><th>操作</th>' in html
+    assert '<th>排名</th>' not in html
+    factor_section = html.split('<h2>半自动因子</h2>', 1)[1]
+    assert '<th>状态</th>' not in factor_section
     assert '<th>2024毛收益</th>' not in html
     assert '<th>2024资金费</th>' not in html
     assert '<th>2025毛收益</th>' not in html
@@ -172,14 +177,19 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert 'average_gross_return' not in script
     assert 'average_net_return' in script
     assert "button.textContent = '生成订单流因子'" in script
-    assert "new Map(data.validations.map" in script
+    assert "new Map(data.validations.map" not in script
     assert '/api/semi-auto-whitelist/validate' not in script
     assert '验证2025' not in script
     assert "document.getElementById('start-btn').disabled = isOrderFlow && !activeWhitelistProfile" in script
     assert '>生成策略</button>' in script
     assert 'validatedStrategyProfiles' in script
     assert 'createValidatedStrategyPreset' in script
-    assert "mode: activeWhitelistProfile ? 'ORDER_FLOW_FADING_15M'" in script
+    assert "mode: activeWhitelistProfile ? 'ORDER_FLOW_ABSORPTION_15M'" in script
+    assert 'item.metrics_2023' in script
+    assert 'item.metrics_2024' in script
+    assert 'item.metrics_2025' in script
+    assert 'id="stat-progress"' in html
+    assert 'renderReplayStats(data.replay_stats)' in script
     preset_function = script.split('function createValidatedStrategyPreset', 1)[1].split("document.getElementById('whitelist-table')", 1)[0]
     assert 'startReplay()' not in preset_function
     assert 'id="market-data-tab"' in html
@@ -293,8 +303,8 @@ def test_manual_replay_position_step_and_continue_routes(monkeypatch: Any) -> No
     assert calls == ['step', 'persist', 'continue', 'persist']
 
 
-def test_failed_whitelist_profile_cannot_create_manual_replay(monkeypatch: Any) -> None:
-    monkeypatch.setattr(routes, 'is_validation_passed_profile', lambda *args, **kwargs: False)
+def test_unknown_experimental_factor_cannot_create_manual_replay(monkeypatch: Any) -> None:
+    monkeypatch.setattr(routes, 'is_persisted_experimental_factor', lambda *args, **kwargs: False)
 
     response = TestClient(app).post(
         '/api/manual-replays',
@@ -302,78 +312,56 @@ def test_failed_whitelist_profile_cannot_create_manual_replay(monkeypatch: Any) 
             'symbol': 'BTC/USDT',
             'data_year': 2025,
             'timeframe': '15m',
-            'mode': 'ORDER_FLOW_FADING_15M',
+            'mode': 'ORDER_FLOW_ABSORPTION_15M',
             'whitelist_profile': {
-                'taker_buy_ratio_threshold': 0.575,
-                'oi_change_45m_threshold': 0.002,
+                'factor_id': 'RELATIVE_ABSORPTION_V1',
                 'holding_window': '4h',
             },
         },
     )
 
     assert response.status_code == 422
-    assert '未通过两年联合筛选' in response.json()['detail']
+    assert '未在本地因子目录中生成' in response.json()['detail']
 
 
-def test_order_flow_manual_replay_requires_validated_whitelist_profile() -> None:
+def test_order_flow_manual_replay_requires_generated_factor_profile() -> None:
     response = TestClient(app).post(
         '/api/manual-replays',
         json={
             'symbol': 'BTC/USDT',
             'data_year': 2025,
             'timeframe': '15m',
-            'mode': 'ORDER_FLOW_FADING_15M',
+            'mode': 'ORDER_FLOW_ABSORPTION_15M',
         },
     )
 
     assert response.status_code == 422
-    assert '生成策略' in response.json()['detail']
+    assert '生成实验策略' in response.json()['detail']
 
 
-def test_factor_generation_runs_2024_search_and_2025_screen_together(monkeypatch: Any) -> None:
-    item = WhiteListItem(
-        rank=1, symbol='BTC/USDT', mode='ORDER_FLOW_FADING_15M', timeframe='15m',
-        design_year=2024, taker_buy_ratio_threshold=0.575,
-        oi_change_45m_threshold=0.002, holding_window='4h', events=54,
-        average_gross_return=0.0028, average_round_trip_cost=0.0014,
-        average_funding_return=0.00004, average_net_return=0.0014,
-        net_wins=23, net_losses=31, visual_score=0.5, sample_score=0.7,
-        trigger_logic='fixture',
-    )
-    validation = WhiteListValidation(
-        symbol='BTC/USDT', validation_year=2025,
-        taker_buy_ratio_threshold=0.575, oi_change_45m_threshold=0.002,
-        holding_window='4h', events=87, average_gross_return=0.0009,
-        average_round_trip_cost=0.0014, average_funding_return=0.00003,
-        average_net_return=-0.00047, net_wins=41, net_losses=46,
-        net_win_rate=0.4, median_net_return=-0.0008, profit_factor=0.8,
-        top_3_net_share=None, passed=False, status='FAILED',
-    )
-    calls: list[str] = []
-    monkeypatch.setattr(routes, 'build_semi_auto_whitelist', lambda *args, **kwargs: [item])
-    monkeypatch.setattr(
-        routes,
-        'validate_semi_auto_candidate',
-        lambda *args, **kwargs: calls.append('screen-2025') or validation,
-    )
-    monkeypatch.setattr(
-        routes,
-        'write_semi_auto_whitelist',
-        lambda *args, **kwargs: calls.append('write-2024'),
-    )
-    monkeypatch.setattr(
-        routes,
-        'write_semi_auto_validation',
-        lambda *args, **kwargs: calls.append('write-2025'),
-    )
+def test_factor_generation_returns_btc_eth_with_three_year_metrics(monkeypatch: Any) -> None:
+    def annual(year: int) -> AnnualFactorMetrics:
+        return AnnualFactorMetrics(year, 10, 6, 4, .002, .0014, 0, .0006, .0005, 1.2)
+
+    items = [SemiAutoFactorItem(
+        symbol=symbol, factor_id='RELATIVE_ABSORPTION_V1',
+        mode='ORDER_FLOW_ABSORPTION_15M', timeframe='15m', holding_window='4h',
+        rolling_window_bars=2880, relative_quantile=.8, trigger_logic='fixture',
+        metrics_2023=annual(2023), metrics_2024=annual(2024), metrics_2025=annual(2025),
+    ) for symbol in ('BTC/USDT', 'ETH/USDT')]
+    writes: list[tuple[object, Path]] = []
+    monkeypatch.setattr(routes, 'build_semi_auto_factors', lambda *args, **kwargs: items)
+    monkeypatch.setattr(routes, 'write_semi_auto_factors', lambda value, path: writes.append((value, path)))
 
     response = TestClient(app).post('/api/semi-auto-whitelist', json={'symbol': 'BTC/USDT'})
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload['items'][0]['design_year'] == 2024
-    assert payload['validations'][0]['validation_year'] == 2025
-    assert calls == ['screen-2025', 'write-2024', 'write-2025']
+    assert [item['symbol'] for item in payload['items']] == ['BTC/USDT', 'ETH/USDT']
+    assert payload['items'][0]['metrics_2023']['year'] == 2023
+    assert payload['items'][1]['metrics_2025']['samples'] == 10
+    assert 'validations' not in payload
+    assert writes == [(items, routes.PROJECT_ROOT / 'results' / 'semi_auto_factor_whitelist.csv')]
 
 
 def test_whitelist_validation_endpoint_persists_result(monkeypatch: Any) -> None:

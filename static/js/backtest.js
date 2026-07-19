@@ -412,8 +412,8 @@ async function fetchOrderFlowYear() {
         statusText.textContent = err.message;
         return;
     }
-    if (![2024, 2025].includes(year)) {
-        statusText.textContent = year === 2026 ? '2026 是未使用保留期，当前禁止拉取' : '订单流基础研究只开放 2024/2025';
+    if (![2023, 2024, 2025].includes(year)) {
+        statusText.textContent = year === 2026 ? '2026 尚未结束，当前禁止拉取年度包' : '订单流增强数据只开放 2023/2024/2025';
         return;
     }
 
