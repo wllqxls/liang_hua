@@ -185,7 +185,7 @@ def validate_semi_auto_candidate(
     oi_change_45m_threshold: float,
     holding_window: str,
 ) -> WhiteListValidation:
-    """Validate one frozen 2024 candidate on untouched 2025 data."""
+    """Evaluate one frozen 2024 candidate on the 2025 joint-screening year."""
     if symbol not in SUPPORTED_SYMBOLS:
         raise ValueError('order-flow whitelist only supports BTC/USDT and ETH/USDT')
     if taker_buy_ratio_threshold not in TAKER_BUY_RATIO_THRESHOLDS:
@@ -266,7 +266,7 @@ def write_semi_auto_validation(
     validation: WhiteListValidation,
     destination: Path,
 ) -> None:
-    """Persist 2025 validation beside its exact frozen 2024 candidate row."""
+    """Persist the 2025 joint-screen result beside its exact 2024 candidate."""
     if not destination.exists():
         raise FileNotFoundError('semi-auto whitelist CSV does not exist')
     frame = pd.read_csv(destination, encoding='utf-8-sig')
@@ -307,7 +307,7 @@ def is_validation_passed_profile(
     oi_change_45m_threshold: float,
     holding_window: str,
 ) -> bool:
-    """Return whether the exact profile has a persisted passing 2025 audit."""
+    """Return whether the exact profile passed the persisted two-year screen."""
     if not destination.exists():
         return False
     frame = pd.read_csv(destination, encoding='utf-8-sig')

@@ -90,8 +90,8 @@ MODE_GROUPS = [
         'options': [
             {
                 'value': 'ORDER_FLOW_FADING_15M',
-                'label': '主动资金退潮（需白名单验证）',
-                'description': '因子候选本身不可回放；须在下方通过2025验证并生成策略预设',
+                'label': '主动资金退潮（需因子筛选）',
+                'description': '因子候选本身不可回放；须在下方完成2024–2025联合筛选并生成策略',
             },
             {
                 'value': 'ETH_RSI_WHITELIST_5M',
@@ -227,7 +227,7 @@ def create_manual_replay(req: ManualReplayRequest) -> dict[str, object]:
         raise HTTPException(status_code=422, detail='开仓金额不能大于账户资金')
     profile = req.whitelist_profile
     if req.mode is ManualSignalMode.ORDER_FLOW_FADING_15M and profile is None:
-        raise HTTPException(status_code=422, detail='请先把通过2025独立验证的白名单候选生成策略预设')
+        raise HTTPException(status_code=422, detail='请先把两年联合筛选合格的订单流因子生成策略')
     if profile is not None:
         if req.mode is not ManualSignalMode.ORDER_FLOW_FADING_15M:
             raise HTTPException(status_code=422, detail='白名单参数只能用于主动资金退潮回放')
@@ -238,7 +238,7 @@ def create_manual_replay(req: ManualReplayRequest) -> dict[str, object]:
             oi_change_45m_threshold=profile.oi_change_45m_threshold,
             holding_window=profile.holding_window,
         ):
-            raise HTTPException(status_code=422, detail='该白名单参数尚未通过2025独立验证')
+            raise HTTPException(status_code=422, detail='该订单流因子未通过两年联合筛选')
     session_id = uuid.uuid4().hex
     try:
         replay = ManualReplay.create(
@@ -343,25 +343,47 @@ def continue_manual_replay(session_id: str) -> dict[str, object]:
 
 @router.post('/api/semi-auto-whitelist')
 def create_semi_auto_whitelist(req: SemiAutoWhitelistRequest) -> dict[str, object]:
-    """Generate the local 2024 order-flow human-signal whitelist CSV."""
+    """Generate 2024 candidates and evaluate each one on 2025 in one request."""
     if req.symbol not in {'BTC/USDT', 'ETH/USDT'}:
         raise HTTPException(status_code=422, detail='订单流白名单只支持 BTC/USDT 和 ETH/USDT')
     try:
         items = build_semi_auto_whitelist(DATA_ROOT, symbol=req.symbol)
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail='白名单需要该币种 2024 年增强 5m、OI 与资金费率数据') from None
+        raise HTTPException(status_code=404, detail='订单流因子需要该币种 2024–2025 年增强 5m、OI 与资金费率数据') from None
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f'订单流白名单数据无效: {exc}') from None
     destination = PROJECT_ROOT / 'results' / 'semi_auto_factor_whitelist.csv'
+    validations = []
+    try:
+        for item in items:
+            validation = validate_semi_auto_candidate(
+                DATA_ROOT,
+                symbol=item.symbol,
+                taker_buy_ratio_threshold=item.taker_buy_ratio_threshold,
+                oi_change_45m_threshold=item.oi_change_45m_threshold,
+                holding_window=item.holding_window,
+            )
+            validations.append(validation)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail='订单流因子需要该币种 2025 年增强 5m、OI 与资金费率数据') from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f'2025 联合筛选失败: {exc}') from None
     write_semi_auto_whitelist(items, destination)
-    return {'success': True, 'items': [asdict(item) for item in items], 'path': str(destination)}
+    for validation in validations:
+        write_semi_auto_validation(validation, destination)
+    return {
+        'success': True,
+        'items': [asdict(item) for item in items],
+        'validations': [asdict(item) for item in validations],
+        'path': str(destination),
+    }
 
 
 @router.post('/api/semi-auto-whitelist/validate')
 def validate_whitelist_candidate(
     req: SemiAutoWhitelistValidationRequest,
 ) -> dict[str, object]:
-    """Validate one exact 2024 profile on untouched 2025 order-flow data."""
+    """Compatibility endpoint for one exact 2025 joint-screen calculation."""
     destination = PROJECT_ROOT / 'results' / 'semi_auto_factor_whitelist.csv'
     try:
         validation = validate_semi_auto_candidate(
@@ -375,10 +397,10 @@ def validate_whitelist_candidate(
     except FileNotFoundError:
         raise HTTPException(
             status_code=404,
-            detail='验证需要对应的2024白名单以及2025增强5m、OI与资金费率数据',
+            detail='计算需要对应的2024候选以及2025增强5m、OI与资金费率数据',
         ) from None
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f'白名单验证失败: {exc}') from None
+        raise HTTPException(status_code=422, detail=f'因子筛选失败: {exc}') from None
     return {'success': True, 'validation': asdict(validation)}
 
 

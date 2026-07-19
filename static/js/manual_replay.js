@@ -582,38 +582,12 @@ function renderWhitelistRows() {
         const key = whitelistKey(item);
         const validation = whitelistValidations.get(key);
         const strategyCreated = validatedStrategyProfiles.has(key);
-        const status = !validation ? '待验证' : validation.passed ? '验证通过' : '验证失败';
-        const statusClass = validation?.passed ? 'data-present' : validation ? 'data-missing' : '';
-        const action = !validation
-            ? `<button type="button" data-validate-whitelist="${index}">验证2025</button>`
-            : validation.passed
-                ? strategyCreated
-                    ? '<button type="button" disabled>策略已生成</button>'
-                    : `<button type="button" class="primary" data-create-strategy="${index}">生成策略预设</button>`
-                : '<button type="button" disabled>禁止生成策略</button>';
+        const status = validation?.passed ? '合格' : '不合格';
+        const statusClass = validation?.passed ? 'data-present' : 'data-missing';
+        const action = `<button type="button"${validation?.passed && !strategyCreated ? ' class="primary" data-create-strategy="' + index + '"' : ' disabled'}>生成策略</button>`;
         return `<tr><td>${item.rank}</td><td>${escapeHtml(item.trigger_logic)}</td><td>${metricPercent(item.average_net_return)}</td><td>${winLoss(item.net_wins, item.net_losses)}</td><td>${metricPercent(validation?.average_net_return)}</td><td>${winLoss(validation?.net_wins, validation?.net_losses)}</td><td class="${statusClass}">${status}</td><td>${action}</td></tr>`;
     }).join('');
     document.getElementById('whitelist-table').innerHTML = rows || '<tr><td colspan="8">2024 年没有同时满足 30–100 次、毛收益与成本后净收益均大于 0 的候选</td></tr>';
-}
-
-async function validateWhitelist(index) {
-    const item = whitelistItems[index];
-    if (!item) return;
-    const status = document.getElementById('whitelist-status');
-    status.textContent = `正在用冻结参数验证 ${item.symbol} 2025，请稍候…`;
-    try {
-        const data = await request('/api/semi-auto-whitelist/validate', {
-            symbol: item.symbol,
-            taker_buy_ratio_threshold: item.taker_buy_ratio_threshold,
-            oi_change_45m_threshold: item.oi_change_45m_threshold,
-            holding_window: item.holding_window,
-        });
-        whitelistValidations.set(whitelistKey(item), data.validation);
-        renderWhitelistRows();
-        status.textContent = data.validation.passed
-            ? '2025 独立验证通过，可以生成冻结策略预设。'
-            : '2025 独立验证失败：候选已保留审计，但禁止生成策略。';
-    } catch (error) { showError(error); }
 }
 
 function strategyPresetName(item) {
@@ -649,7 +623,7 @@ function createValidatedStrategyPreset(index) {
     option.value = `VALIDATED_ORDER_FLOW_${index}`;
     option.textContent = strategyPresetName(item);
     option.dataset.whitelistKey = key;
-    option.dataset.description = '2025 独立验证通过；信号阈值与最大持有窗口已冻结。';
+    option.dataset.description = '2024–2025 联合筛选合格；信号阈值与最大持有窗口已冻结。';
     group.append(option);
     group.hidden = false;
     document.getElementById('symbol').value = item.symbol;
@@ -658,28 +632,28 @@ function createValidatedStrategyPreset(index) {
     document.getElementById('signal-timeframe').value = '15m';
     syncModeInputs();
     renderWhitelistRows();
-    document.getElementById('whitelist-status').textContent = `策略预设“${strategyPresetName(item)}”已加入上方策略选择；确认资金和杠杆后点击“开始回放”。`;
 }
 
 document.getElementById('whitelist-table').addEventListener('click', event => {
-    const validateButton = event.target.closest('[data-validate-whitelist]');
-    if (validateButton) { validateWhitelist(Number(validateButton.dataset.validateWhitelist)); return; }
     const strategyButton = event.target.closest('[data-create-strategy]');
     if (strategyButton) createValidatedStrategyPreset(Number(strategyButton.dataset.createStrategy));
 });
 
 document.getElementById('whitelist-btn').addEventListener('click', async () => {
-    const button = document.getElementById('whitelist-btn'); button.disabled = true;
-    document.getElementById('whitelist-status').textContent = '正在扫描 2024 年增强 5m、OI 与真实资金费率，请稍候…';
+    const button = document.getElementById('whitelist-btn');
+    button.disabled = true;
+    button.textContent = '生成中…';
     try {
         const data = await request('/api/semi-auto-whitelist', { symbol: document.getElementById('symbol').value });
         whitelistItems = data.items;
-        whitelistValidations = new Map();
+        whitelistValidations = new Map(data.validations.map(item => [whitelistKey(item), item]));
         clearValidatedStrategyPresets();
         syncModeInputs();
         renderWhitelistRows();
-        document.getElementById('whitelist-status').textContent = data.items.length ? `已生成 ${data.items.length} 组 2024 订单流候选；CSV 已保存到 results/semi_auto_factor_whitelist.csv` : '2024 订单流搜索完成，白名单为空。';
-    } catch (error) { showError(error); } finally { button.disabled = false; }
+    } catch (error) { showError(error); } finally {
+        button.disabled = false;
+        button.textContent = '生成订单流因子';
+    }
 });
 
 syncModeInputs();
