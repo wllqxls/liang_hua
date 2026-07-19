@@ -13,6 +13,7 @@ class ChartDrawingController {
         this.chart = null;
         this.series = null;
         this.contextKey = null;
+        this.contextTimeframe = '5m';
         this.drawings = [];
         this.history = [];
         this.selectedId = null;
@@ -48,20 +49,25 @@ class ChartDrawingController {
     }
 
     setContext({ year, symbol, timeframe }) {
-        const key = `manual-chart-drawings:v1:${year}:${symbol}:${timeframe}`;
-        if (key === this.contextKey) return;
+        this.contextTimeframe = timeframe;
+        const key = `manual-chart-drawings:v2:${year}:${symbol}`;
+        if (key === this.contextKey) {
+            this.redraw();
+            return;
+        }
         this._save();
         this.contextKey = key;
         this.selectedId = null;
         this.pendingPoint = null;
         this.history = [];
         try {
-            const stored = JSON.parse(this._storage()?.getItem(key) || '[]');
-            this.drawings = Array.isArray(stored) ? stored.map(drawing => {
-                if (drawing.type === 'trend') return { ...drawing, type: 'ray' };
-                if (drawing.type === 'ray' && drawing.points?.length === 1) return { ...drawing, type: 'horizontalRay' };
-                return drawing;
-            }) : [];
+            const storage = this._storage();
+            const shared = JSON.parse(storage?.getItem(key) || 'null');
+            const stored = Array.isArray(shared)
+                ? shared
+                : this._migrateTimeframeDrawings(storage, year, symbol);
+            this.drawings = stored.map(drawing => this._normalizeStoredDrawing(drawing));
+            if (!Array.isArray(shared) && this.drawings.length) this._save();
         } catch (error) {
             this.drawings = [];
         }
@@ -264,7 +270,7 @@ class ChartDrawingController {
     }
 
     _shiftPoint(point, dx, dy) {
-        const x = this.chart.timeScale().timeToCoordinate(point.time);
+        const x = this._timeToCoordinate(point.time);
         const y = this.series.priceToCoordinate(point.price);
         if (x == null || y == null) return null;
         const time = this.chart.timeScale().coordinateToTime(x + dx);
@@ -274,7 +280,7 @@ class ChartDrawingController {
     }
 
     _coordinates(point) {
-        const x = this.chart.timeScale().timeToCoordinate(point.time);
+        const x = this._timeToCoordinate(point.time);
         const y = this.series.priceToCoordinate(point.price);
         return x == null || y == null ? null : { x, y };
     }
@@ -398,6 +404,35 @@ class ChartDrawingController {
             this.redrawFrame = null;
             this.redraw();
         });
+    }
+
+    _timeToCoordinate(time) {
+        const seconds = { '5m': 300, '15m': 900, '1h': 3600 }[this.contextTimeframe] || 300;
+        return this.chart.timeScale().timeToCoordinate(Math.floor(time / seconds) * seconds);
+    }
+
+    _normalizeStoredDrawing(drawing) {
+        if (drawing.type === 'trend') return { ...drawing, type: 'ray' };
+        if (drawing.type === 'ray' && drawing.points?.length === 1) return { ...drawing, type: 'horizontalRay' };
+        return drawing;
+    }
+
+    _migrateTimeframeDrawings(storage, year, symbol) {
+        if (!storage) return [];
+        const merged = [];
+        const seen = new Set();
+        ['5m', '15m', '1h'].forEach(timeframe => {
+            const legacyKey = `manual-chart-drawings:v1:${year}:${symbol}:${timeframe}`;
+            const legacy = JSON.parse(storage.getItem(legacyKey) || '[]');
+            if (!Array.isArray(legacy)) return;
+            legacy.forEach(drawing => {
+                const identity = drawing.id || JSON.stringify(drawing);
+                if (seen.has(identity)) return;
+                seen.add(identity);
+                merged.push(drawing);
+            });
+        });
+        return merged;
     }
 
     _syncStyleToolbarVisibility() {

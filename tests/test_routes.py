@@ -170,7 +170,10 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert "this.chartContainer.addEventListener('pointermove'" in drawing_script
     assert "['wheel', 'dblclick', 'touchmove']" in drawing_script
     assert "type === 'rectangle'" in drawing_script
-    assert "manual-chart-drawings:v1" in drawing_script
+    assert "manual-chart-drawings:v2:${year}:${symbol}" in drawing_script
+    assert "manual-chart-drawings:v1:${year}:${symbol}:${timeframe}" in drawing_script
+    assert '_timeToCoordinate' in drawing_script
+    assert "'5m': 300, '15m': 900, '1h': 3600" in drawing_script
     assert "rgba(33,197,139,.20)" in drawing_script
     assert "rgba(255,95,145,.22)" in drawing_script
 
