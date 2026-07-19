@@ -181,7 +181,9 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert '_plotBounds' in drawing_script
     assert '_handleChartWheel' in drawing_script
     assert 'const priceAxisCell' in drawing_script
-    assert 'if (insidePane) return;' in drawing_script
+    assert 'timeScale.getVisibleLogicalRange()' in drawing_script
+    assert 'timeScale.coordinateToLogical' in drawing_script
+    assert 'timeScale.setVisibleLogicalRange(nextRange)' in drawing_script
     assert "this.chart.priceScale('right')" in drawing_script
     assert 'priceScale.getVisibleRange()' in drawing_script
     assert 'priceScale.setVisibleRange(nextRange)' in drawing_script
@@ -198,6 +200,8 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert "'5m': 300, '15m': 900, '1h': 3600" in drawing_script
     assert "rgba(33,197,139,.20)" in drawing_script
     assert "rgba(255,95,145,.22)" in drawing_script
+    assert '止盈 ${profitPct}%' not in drawing_script
+    assert '止损 ${stopPct}%' not in drawing_script
 
 
 def test_manual_replay_position_step_and_continue_routes(monkeypatch: Any) -> None:

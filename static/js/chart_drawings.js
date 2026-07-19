@@ -348,19 +348,10 @@ class ChartDrawingController {
         this._riskRect(startX, Math.min(entryY, targetY), boxWidth, Math.abs(targetY - entryY), '#21c58b', 'rgba(33,197,139,.20)');
         this._riskRect(startX, Math.min(entryY, stopY), boxWidth, Math.abs(stopY - entryY), '#ff5f91', 'rgba(255,95,145,.22)');
         this._svg('line', { x1: startX, y1: entryY, x2: endX, y2: entryY, stroke: '#4b9cff', 'stroke-width': 1.5, 'stroke-dasharray': '5 4', style: 'pointer-events:none' });
-        const profitPct = Math.abs((this.risk.target_price / this.risk.fill_price - 1) * 100).toFixed(2);
-        const stopPct = Math.abs((this.risk.stop_price / this.risk.fill_price - 1) * 100).toFixed(2);
-        this._riskLabel(startX + 6, (entryY + targetY) / 2, `止盈 ${profitPct}%`, '#b9ffe4');
-        this._riskLabel(startX + 6, (entryY + stopY) / 2, `止损 ${stopPct}%`, '#ffd0df');
     }
 
     _riskRect(x, y, width, height, stroke, fill) {
         this._svg('rect', { x, y, width, height: Math.max(1, height), fill, stroke, 'stroke-width': 1, style: 'pointer-events:none' });
-    }
-
-    _riskLabel(x, y, text, fill) {
-        const node = this._svg('text', { x, y, fill, 'font-size': 11, 'font-weight': 700, style: 'pointer-events:none' });
-        node.textContent = text;
     }
 
     _svg(name, attributes, parent = this.renderRoot || this.overlay) {
@@ -419,7 +410,27 @@ class ChartDrawingController {
 
         event.preventDefault();
         event.stopPropagation();
-        if (insidePane) return;
+        if (insidePane) {
+            const timeScale = this.chart.timeScale();
+            const range = timeScale.getVisibleLogicalRange();
+            if (!range || !Number.isFinite(range.from) || !Number.isFinite(range.to) || range.to <= range.from) return;
+            const cursorLogical = timeScale.coordinateToLogical(event.clientX - paneBounds.left);
+            const pivot = Number.isFinite(cursorLogical)
+                ? Math.max(range.from, Math.min(range.to, cursorLogical))
+                : (range.from + range.to) / 2;
+            const deltaPixels = event.deltaMode === 1
+                ? event.deltaY * 16
+                : event.deltaMode === 2 ? event.deltaY * paneBounds.height : event.deltaY;
+            const factor = Math.exp(Math.max(-240, Math.min(240, deltaPixels)) * 0.0015);
+            const nextRange = {
+                from: pivot - (pivot - range.from) * factor,
+                to: pivot + (range.to - pivot) * factor,
+            };
+            if (!Number.isFinite(nextRange.from) || !Number.isFinite(nextRange.to) || nextRange.to <= nextRange.from) return;
+            timeScale.setVisibleLogicalRange(nextRange);
+            this._scheduleRedraw();
+            return;
+        }
         const priceScale = this.chart.priceScale('right');
         const range = priceScale.getVisibleRange();
         if (!range || !Number.isFinite(range.from) || !Number.isFinite(range.to) || range.to <= range.from) return;
