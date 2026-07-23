@@ -79,11 +79,9 @@ liang_hua/
 
 ## 当前入口模式
 
-只允许以下信号模式作为 Web、API、优化器和验证脚本的主动入口：
+网页人工回放只允许一个主动策略：`KEY_LEVEL_V2`。其结构区域、出场、成本后收益风险比与人工决策规则以 `CLAUDE.md` 的冻结规范为准。
 
-- `KEY_LEVEL`
-- `RSI_REVERSAL`
-- `KEY_LEVEL_RSI`
+`KEY_LEVEL`、`RSI_REVERSAL`、`KEY_LEVEL_RSI` 仅保留为后端自动回测、优化器和验证脚本的历史基线，不得重新出现在网页主动策略入口。
 
 保证金模式只允许：
 

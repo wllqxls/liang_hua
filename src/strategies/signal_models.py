@@ -93,6 +93,17 @@ class MarketSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class StructuralRisk:
+    entry_zone_lower: float
+    entry_zone_upper: float
+    target_zone_lower: float
+    target_zone_upper: float
+    stop_price: float
+    target_price: float
+    reference_reward_risk: float
+
+
+@dataclass(frozen=True, slots=True)
 class Signal:
     mode: SignalMode | ManualSignalMode
     strategy: str
@@ -110,6 +121,7 @@ class Signal:
     filter_label: FilterLabel
     reason: str
     score: int
+    structural_risk: StructuralRisk | None = None
 
 
 @dataclass(frozen=True, slots=True)

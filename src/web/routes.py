@@ -284,8 +284,8 @@ def decide_manual_replay(session_id: str, req: ManualDecisionRequest) -> dict[st
             raise HTTPException(status_code=404, detail='回放会话不存在')
         try:
             replay.decide(req.decision)
-        except ValueError:
-            raise HTTPException(status_code=409, detail='当前回放不等待人工决策') from None
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc) or '当前回放不等待人工决策') from None
         replay.persist(MANUAL_REPLAY_RESULTS_ROOT)
         return {'success': True, **replay.visible_payload()}
 

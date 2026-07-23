@@ -130,6 +130,8 @@ def test_index_renders_signal_mode_names() -> None:
     assert '<option value="RSI_REVERSAL"' not in html
     assert '<option value="KEY_LEVEL_RSI"' not in html
     assert '<select id="mode" disabled>' in html
+    assert '接受做多' in html
+    assert '接受做空' in html
     assert 'id="signal-timeframe"' in html
     assert '半自动交易回放' in html
     assert '<select id="strategy">' not in html
@@ -148,6 +150,10 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     script = client.get('/static/js/manual_replay.js').text
 
     assert '/static/vendor/lightweight-charts.standalone.production.js' in html
+    assert '/static/css/manual_replay.css?v=20260723-2' in html
+    assert '/static/js/manual_replay.js?v=20260723-2' in html
+    assert 'id="execution-notice"' in html
+    assert 'data.last_execution_notice' in script
     assert 'unpkg.com' not in html
     assert 'autoSize: true' in script
     assert 'setVisibleLogicalRange' in script
@@ -180,7 +186,14 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert 'item.metrics_2024' in script
     assert 'item.metrics_2025' in script
     assert 'id="stat-progress"' in html
+    assert 'id="stat-invalidated"' in html
     assert 'renderReplayStats(data.replay_stats)' in script
+    assert "button.dataset.decision === data.signal?.side" in script
+    assert "data.signal.risk_model === 'STRUCTURAL_ZONE'" in script
+    assert '区域失效止损' in script
+    assert '下一关键区域止盈' in script
+    assert '成本后预估 R:R' in script
+    assert "getElementById('stat-invalidated')" in script
     preset_function = script.split('function createValidatedStrategyPreset', 1)[1].split("document.getElementById('whitelist-table')", 1)[0]
     assert 'startReplay()' not in preset_function
     assert 'id="market-data-tab"' in html

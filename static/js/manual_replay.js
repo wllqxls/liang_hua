@@ -146,8 +146,10 @@ function setupCharts() {
             const tip = document.getElementById('chart-tooltip');
             const signal = renderedSignalMarkers.find(item => item.displayTime === param.time);
             if (!signal || !param.point) { tip.classList.add('hidden'); return; }
-            const decision = signal.decision ? ` · 人工选择：${signal.decision}` : '';
-            tip.textContent = `${signal.summary}：${signal.reason}${decision}`;
+            const decisionLabels = { BUY: '接受做多', SELL: '接受做空', SKIP: '放弃' };
+            const decision = signal.decision ? ` · 人工选择：${decisionLabels[signal.decision] || signal.decision}` : '';
+            const execution = signal.entry_status === 'INVALIDATED_AT_OPEN' ? ' · 开盘失效，未开仓' : '';
+            tip.textContent = `${signal.summary}：${signal.reason}${decision}${execution}`;
             const maxLeft = Math.max(8, tip.parentElement.clientWidth - 282);
             tip.style.left = `${Math.min(param.point.x + 12, maxLeft)}px`; tip.style.top = `${Math.max(param.point.y - 55, 8)}px`; tip.classList.remove('hidden');
         });
@@ -242,7 +244,14 @@ function render(data) {
     const awaitingDecision = data.state === 'AWAITING_DECISION';
     const awaitingContinue = data.state === 'AWAITING_CONTINUE';
     document.getElementById('decision-panel').classList.toggle('hidden', !awaitingDecision && !awaitingContinue);
-    document.querySelectorAll('[data-decision]').forEach(button => button.classList.toggle('hidden', !awaitingDecision));
+    const executionNotice = document.getElementById('execution-notice');
+    const lastNotice = data.last_execution_notice;
+    executionNotice.textContent = lastNotice ? `${lastNotice.summary}：${lastNotice.reason}` : '';
+    executionNotice.classList.toggle('hidden', !lastNotice);
+    document.querySelectorAll('[data-decision]').forEach(button => {
+        const permitted = button.dataset.decision === 'SKIP' || button.dataset.decision === data.signal?.side;
+        button.classList.toggle('hidden', !awaitingDecision || !permitted);
+    });
     document.getElementById('continue-btn').classList.toggle('hidden', !awaitingContinue);
     const stateLabels = {
         AWAITING_DECISION: '等待你的决策', POSITION_OPEN: '持仓逐 K 线回放',
@@ -260,7 +269,10 @@ function render(data) {
     if (data.signal) {
         document.getElementById('signal-summary').textContent = data.signal.summary;
         document.getElementById('signal-reason').textContent = data.signal.reason;
-        document.getElementById('signal-levels').textContent = `参考止损 ${data.signal.stop_price.toFixed(2)} · 参考止盈 ${data.signal.target_price.toFixed(2)} · ${data.signal.margin_mode_label}估算强平 ${data.signal.estimated_liquidation_price.toFixed(2)}`;
+        const levelText = data.signal.risk_model === 'STRUCTURAL_ZONE'
+            ? `区域失效止损 ${data.signal.stop_price.toFixed(2)} · 下一关键区域止盈 ${data.signal.target_price.toFixed(2)} · 成本后预估 R:R ${data.signal.reward_risk.toFixed(2)}`
+            : `参考止损 ${data.signal.stop_price.toFixed(2)} · 参考止盈 ${data.signal.target_price.toFixed(2)}`;
+        document.getElementById('signal-levels').textContent = `${levelText} · ${data.signal.margin_mode_label}估算强平 ${data.signal.estimated_liquidation_price.toFixed(2)}`;
         const signalWarning = document.getElementById('signal-risk-warning');
         signalWarning.textContent = data.signal.risk_warning || '';
         signalWarning.classList.toggle('hidden', !data.signal.risk_warning);
@@ -314,6 +326,7 @@ function renderReplayStats(stats) {
     document.getElementById('stat-progress').textContent = `${stats.tested}/${total}`;
     document.getElementById('stat-opened').textContent = stats.opened;
     document.getElementById('stat-skipped').textContent = stats.skipped;
+    document.getElementById('stat-invalidated').textContent = stats.invalidated;
     document.getElementById('stat-win-loss').textContent = `${stats.wins}/${stats.losses}`;
     document.getElementById('stat-win-rate').textContent = stats.win_rate == null ? '—' : `${(stats.win_rate * 100).toFixed(1)}%`;
     document.getElementById('stat-pnl').textContent = `${stats.cumulative_net_pnl >= 0 ? '+' : ''}${stats.cumulative_net_pnl.toFixed(2)}`;

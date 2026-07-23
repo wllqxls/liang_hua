@@ -16,7 +16,11 @@ from src.research.order_flow_events import load_funding_year, load_order_flow_ye
 from src.research.order_flow_failed_push import aggregate_order_flow_to_15m
 from src.research.order_flow_fading_push import build_fading_push_candidates
 from src.research.order_flow_relative_absorption import build_relative_absorption_candidates
-from src.strategies.key_level_v2 import build_key_level_candidates
+from src.strategies.key_level_v2 import (
+    MIN_REWARD_RISK,
+    build_key_level_candidates,
+    structural_reward_risk,
+)
 from src.strategies.manual_candidates import (
     evaluate_manual_candidate,
     validate_manual_candidate_scope,
@@ -209,7 +213,11 @@ class ManualReplay:
             funding_rates = pd.Series(dtype=float, name='funding_rate')
         candidate_features = None
         if mode is ManualSignalMode.KEY_LEVEL_V2:
-            candidate_features = build_key_level_candidates(chart_frames[timeframe])
+            candidate_features = build_key_level_candidates(
+                chart_frames[timeframe],
+                taker_fee=taker_fee,
+                slippage_rate=slippage_rate,
+            )
         if mode in {
             ManualSignalMode.ORDER_FLOW_FADING_15M,
             ManualSignalMode.ORDER_FLOW_ABSORPTION_15M,
@@ -294,22 +302,91 @@ class ManualReplay:
         if self.state != 'AWAITING_DECISION' or self.pending_signal is None:
             raise ValueError('replay is not waiting for a decision')
         signal = self.pending_signal
-        self.decisions.append({
+        if (
+            signal.structural_risk is not None
+            and decision not in {signal.side, 'SKIP'}
+        ):
+            raise ValueError('关键区域候选只能接受建议方向或放弃')
+        signal_payload = _signal_payload(signal, self.timeframe)
+        if signal_payload is None:
+            raise ValueError('replay lost its pending signal')
+        decision_record: dict[str, object] = {
+            **signal_payload,
             'timestamp': signal.signal_time.isoformat(),
-            'time': _signal_candle_time(signal, self.timeframe),
             'suggested_side': signal.side,
             'decision': decision,
-            'reason': _display_reason(signal.reason),
-            'summary': _signal_summary(signal.side),
-        })
-        self.pending_signal = None
+        }
         if decision == 'SKIP':
+            decision_record['entry_status'] = 'SKIPPED'
+            self.decisions.append(decision_record)
+            self.pending_signal = None
             self.cursor += 1
             self.state = 'RUNNING' if self.cursor < len(self.snapshots) - 1 else 'FINISHED'
             return
-        self._open_position(signal, decision)
+        entry_index = self.cursor + 1
+        if entry_index >= len(self.snapshots):
+            if signal.structural_risk is not None:
+                decision_record['actual_reward_risk'] = None
+            self._record_open_invalidation(
+                decision_record,
+                entry_index=entry_index,
+                reason='候选后没有下一根已收盘 K 线，无法按下一根开盘成交',
+            )
+            return
+        entry = self.snapshots.iloc[entry_index]
+        decision_record['entry_open_price'] = entry.open
+        try:
+            prepared_position = self._prepare_position(signal, decision, entry_index)
+        except ValueError as exc:
+            if signal.structural_risk is not None:
+                decision_record['actual_reward_risk'] = None
+            self._record_open_invalidation(
+                decision_record,
+                entry_index=entry_index,
+                reason=str(exc),
+            )
+            return
+        decision_record['entry_fill_price'] = prepared_position.fill_price
+        decision_record['resolved_stop_price'] = prepared_position.stop_price
+        decision_record['resolved_target_price'] = prepared_position.target_price
+        if signal.structural_risk is not None:
+            actual_reward_risk = structural_reward_risk(
+                side=signal.side,
+                reference_price=entry.open,
+                stop_price=signal.structural_risk.stop_price,
+                target_price=signal.structural_risk.target_price,
+                taker_fee=self.taker_fee,
+                slippage_rate=self.slippage_rate,
+            )
+            decision_record['actual_reward_risk'] = actual_reward_risk
+            if actual_reward_risk is None or actual_reward_risk < MIN_REWARD_RISK:
+                self._record_open_invalidation(
+                    decision_record,
+                    entry_index=entry_index,
+                    reason='下一根开盘后结构价格次序或成本后收益风险比失效，未开仓',
+                )
+                return
+        decision_record['entry_status'] = 'OPENED'
+        self.decisions.append(decision_record)
+        self.pending_signal = None
+        self._open_position(prepared_position)
         if self.state == 'POSITION_OPEN':
             self.step_position()
+
+    def _record_open_invalidation(
+        self,
+        decision_record: dict[str, object],
+        *,
+        entry_index: int,
+        reason: str,
+    ) -> None:
+        """Persist a rejected next-open execution without partially opening a trade."""
+        decision_record['entry_status'] = 'INVALIDATED_AT_OPEN'
+        decision_record['entry_status_reason'] = reason
+        self.decisions.append(decision_record)
+        self.pending_signal = None
+        self.cursor = min(entry_index, len(self.snapshots) - 1)
+        self.state = 'RUNNING' if self.cursor < len(self.snapshots) - 1 else 'FINISHED'
 
     def step_position(self) -> None:
         """Reveal and evaluate exactly one additional candle for an open position."""
@@ -327,7 +404,7 @@ class ManualReplay:
         position = self.active_position
         if position is None:
             raise ValueError('replay lost its open position')
-        exit_price, exit_reason = _candle_exit(position, candle)
+        exit_price, exit_reason, exit_at_open = _candle_exit(position, candle)
         if exit_price is None:
             self._settle_funding_until(candle.closed_at)
             position = self.active_position
@@ -344,7 +421,12 @@ class ManualReplay:
         if exit_price is None and next_index >= len(self.snapshots) - 1:
             exit_price, exit_reason = candle.close, 'FINALIZE'
         if exit_price is not None and exit_reason is not None:
-            self._close_position(exit_price, exit_reason, next_index)
+            self._close_position(
+                exit_price,
+                exit_reason,
+                next_index,
+                exit_at_open=exit_at_open,
+            )
 
     def _settle_funding_until(self, end: pd.Timestamp) -> None:
         """Apply each local historical funding settlement once while a position is open."""
@@ -437,6 +519,7 @@ class ManualReplay:
             'cursor_time': cursor_time.isoformat(),
             'decisions': len(self.decisions),
             'replay_stats': self._replay_stats(),
+            'last_execution_notice': _last_execution_notice(self.decisions),
             'funding_available': not self.funding_rates.empty,
             'whitelist_profile': self.whitelist_profile,
         }
@@ -449,8 +532,12 @@ class ManualReplay:
             else None
         )
         tested = len(self.decisions)
-        opened = sum(item['decision'] != 'SKIP' for item in self.decisions)
-        skipped = tested - opened
+        opened = sum(item.get('entry_status') == 'OPENED' for item in self.decisions)
+        skipped = sum(item.get('entry_status') == 'SKIPPED' for item in self.decisions)
+        invalidated = sum(
+            item.get('entry_status') == 'INVALIDATED_AT_OPEN'
+            for item in self.decisions
+        )
         wins = sum(trade.pnl > 0 for trade in self.trades)
         losses = sum(trade.pnl <= 0 for trade in self.trades)
         completed = wins + losses
@@ -460,6 +547,7 @@ class ManualReplay:
             'total_candidates': total_candidates,
             'opened': opened,
             'skipped': skipped,
+            'invalidated': invalidated,
             'wins': wins,
             'losses': losses,
             'win_rate': wins / completed if completed else None,
@@ -483,8 +571,7 @@ class ManualReplay:
             margin_mode=self.margin_mode,
             maintenance_margin_rate=self.maintenance_margin_rate,
         )
-        direction = 1 if signal.side == 'BUY' else -1
-        stop_price = fill_price - direction * signal.stop_distance
+        stop_price, _ = _resolve_risk_prices(signal, signal.side, fill_price)
         payload = _signal_payload(signal, self.timeframe)
         payload.update({
             'estimated_liquidation_price': liquidation_price,
@@ -503,32 +590,28 @@ class ManualReplay:
         destination.write_text(json.dumps(payload, default=str, ensure_ascii=False, indent=2), encoding='utf-8')
         return destination
 
-    def _open_position(self, signal: Signal, decision: Literal['BUY', 'SELL']) -> None:
-        entry_index = self.cursor + 1
-        if entry_index >= len(self.snapshots):
-            self.cursor = len(self.snapshots) - 1
-            self.state = 'FINISHED'
-            return
+    def _prepare_position(
+        self,
+        signal: Signal,
+        decision: Literal['BUY', 'SELL'],
+        entry_index: int,
+    ) -> ActivePosition:
+        """Build and validate every execution level before replay state is mutated."""
         entry = self.snapshots.iloc[entry_index]
         fill_price = _adverse_fill(decision, entry.open, self.slippage_rate)
-        distance_stop = signal.stop_distance
-        distance_target = signal.target_distance
-        direction = 1 if decision == 'BUY' else -1
-        stop_price = fill_price - direction * distance_stop
-        target_price = fill_price + direction * distance_target
+        stop_price, target_price = _resolve_risk_prices(signal, decision, fill_price)
         quantity = self.opening_amount * self.leverage / fill_price
         entry_fee = self.opening_amount * self.leverage * self.taker_fee
-        self.cash -= entry_fee
         liquidation_price = _liquidation_price(
             side=decision,
             fill_price=fill_price,
             quantity=quantity,
             opening_amount=self.opening_amount,
-            cash_after_entry_fee=self.cash,
+            cash_after_entry_fee=self.cash - entry_fee,
             margin_mode=self.margin_mode,
             maintenance_margin_rate=self.maintenance_margin_rate,
         )
-        self.active_position = ActivePosition(
+        return ActivePosition(
             signal_time=signal.signal_time,
             side=decision,
             entry_index=entry_index,
@@ -544,6 +627,11 @@ class ManualReplay:
             funding=0.0,
             funding_cursor=entry.opened_at,
         )
+
+    def _open_position(self, position: ActivePosition) -> None:
+        """Atomically activate a position whose entry plan has already been validated."""
+        self.cash -= position.entry_fee
+        self.active_position = position
         self.state = 'POSITION_OPEN'
 
     def _close_position(
@@ -551,6 +639,8 @@ class ManualReplay:
         exit_price: float,
         exit_reason: ExitReason,
         exit_index: int,
+        *,
+        exit_at_open: bool = False,
     ) -> None:
         position = self.active_position
         if position is None:
@@ -575,7 +665,11 @@ class ManualReplay:
             target_price=position.target_price,
             liquidation_price=position.liquidation_price,
             margin_mode=position.margin_mode,
-            exit_time=exit_snapshot.closed_at,
+            exit_time=(
+                exit_snapshot.opened_at
+                if exit_at_open
+                else exit_snapshot.closed_at
+            ),
             exit_price=exit_price,
             exit_reason=exit_reason,
             liquidation_fee=exit_fee if exit_reason == 'LIQUIDATION' else 0.0,
@@ -693,32 +787,67 @@ def _close_crossed_liquidation(position: ActivePosition, close: float) -> bool:
 def _candle_exit(
     position: ActivePosition,
     candle: MarketSnapshot,
-) -> tuple[float | None, ExitReason | None]:
+) -> tuple[float | None, ExitReason | None, bool]:
     if position.side == 'BUY':
         if candle.open <= position.liquidation_price:
-            return candle.open, 'LIQUIDATION'
+            return candle.open, 'LIQUIDATION', True
+        if position.stop_price > position.liquidation_price:
+            if candle.open <= position.stop_price:
+                return candle.open, 'STOP', True
+        if candle.open >= position.target_price:
+            return position.target_price, 'TARGET', True
         if position.stop_price > position.liquidation_price:
             if candle.low <= position.stop_price:
-                return position.stop_price, 'STOP'
+                return position.stop_price, 'STOP', False
         elif candle.low <= position.liquidation_price:
-            return position.liquidation_price, 'LIQUIDATION'
+            return position.liquidation_price, 'LIQUIDATION', False
         if candle.high >= position.target_price:
-            return position.target_price, 'TARGET'
-        return None, None
+            return position.target_price, 'TARGET', False
+        return None, None, False
     if candle.open >= position.liquidation_price:
-        return candle.open, 'LIQUIDATION'
+        return candle.open, 'LIQUIDATION', True
+    if position.stop_price < position.liquidation_price:
+        if candle.open >= position.stop_price:
+            return candle.open, 'STOP', True
+    if candle.open <= position.target_price:
+        return position.target_price, 'TARGET', True
     if position.stop_price < position.liquidation_price:
         if candle.high >= position.stop_price:
-            return position.stop_price, 'STOP'
+            return position.stop_price, 'STOP', False
     elif candle.high >= position.liquidation_price:
-        return position.liquidation_price, 'LIQUIDATION'
+        return position.liquidation_price, 'LIQUIDATION', False
     if candle.low <= position.target_price:
-        return position.target_price, 'TARGET'
-    return None, None
+        return position.target_price, 'TARGET', False
+    return None, None, False
 
 
 def _adverse_fill(side: Literal['BUY', 'SELL'], price: float, slippage: float) -> float:
     return price * (1 + slippage if side == 'BUY' else 1 - slippage)
+
+
+def _resolve_risk_prices(
+    signal: Signal,
+    decision: Literal['BUY', 'SELL'],
+    fill_price: float,
+) -> tuple[float, float]:
+    structural = signal.structural_risk
+    if structural is not None:
+        if decision != signal.side:
+            raise ValueError('关键区域候选不能反向使用冻结结构价格')
+        stop_price = structural.stop_price
+        target_price = structural.target_price
+    else:
+        direction = 1 if decision == 'BUY' else -1
+        stop_price = fill_price - direction * signal.stop_distance
+        target_price = fill_price + direction * signal.target_distance
+    correctly_ordered = (
+        stop_price < fill_price < target_price
+        if decision == 'BUY'
+        else target_price < fill_price < stop_price
+    )
+    if not correctly_ordered:
+        raise ValueError('成交价已越过冻结的止损或止盈价格')
+    return stop_price, target_price
 
 
 def _normalize_funding_rates(rates: pd.Series) -> pd.Series:
@@ -765,14 +894,47 @@ def _chart_frame_payload(frame: pd.DataFrame, cursor_time: pd.Timestamp, timefra
 def _signal_payload(signal: Signal | None, timeframe: str) -> dict[str, object] | None:
     if signal is None:
         return None
-    return {
+    payload: dict[str, object] = {
         'time': _signal_candle_time(signal, timeframe),
+        'mode': signal.mode.value,
         'side': signal.side,
         'reason': _display_reason(signal.reason),
         'score': signal.score,
         'summary': _signal_summary(signal.side),
-        'stop_price': signal.estimated_stop_price,
-        'target_price': signal.estimated_target_price,
+    }
+    if signal.structural_risk is not None:
+        payload.update({
+            'risk_model': 'STRUCTURAL_ZONE',
+            'stop_price': signal.structural_risk.stop_price,
+            'target_price': signal.structural_risk.target_price,
+            'entry_zone_lower': signal.structural_risk.entry_zone_lower,
+            'entry_zone_upper': signal.structural_risk.entry_zone_upper,
+            'target_zone_lower': signal.structural_risk.target_zone_lower,
+            'target_zone_upper': signal.structural_risk.target_zone_upper,
+            'reward_risk': signal.structural_risk.reference_reward_risk,
+            'reference_reward_risk': signal.structural_risk.reference_reward_risk,
+        })
+    else:
+        payload['risk_model'] = 'ATR_DISTANCE'
+        payload['stop_price'] = signal.estimated_stop_price
+        payload['target_price'] = signal.estimated_target_price
+        payload['reward_risk'] = signal.target_distance / signal.stop_distance
+    return payload
+
+
+def _last_execution_notice(
+    decisions: list[dict[str, object]],
+) -> dict[str, object] | None:
+    if not decisions:
+        return None
+    latest = decisions[-1]
+    if latest.get('entry_status') != 'INVALIDATED_AT_OPEN':
+        return None
+    return {
+        'status': 'INVALIDATED_AT_OPEN',
+        'summary': '上一候选开盘失效，未开仓',
+        'reason': latest.get('entry_status_reason', '下一根开盘不再满足执行条件'),
+        'time': latest.get('time'),
     }
 
 

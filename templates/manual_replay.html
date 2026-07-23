@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>半自动交易回放</title>
-    <link rel="stylesheet" href="/static/css/manual_replay.css?v=20260719-5">
+    <link rel="stylesheet" href="/static/css/manual_replay.css?v=20260723-2">
     <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -185,12 +185,13 @@
                 <p id="signal-risk-warning" class="risk-warning hidden"></p>
             </div>
             <div class="decision-actions">
-                <button class="short" data-decision="SELL" type="button">🔴 开空</button>
-                <button class="long" data-decision="BUY" type="button">🟢 开多</button>
+                <button class="short" data-decision="SELL" type="button">🔴 接受做空</button>
+                <button class="long" data-decision="BUY" type="button">🟢 接受做多</button>
                 <button class="skip" data-decision="SKIP" type="button">⏹️ 放弃</button>
                 <button id="continue-btn" class="continue hidden" type="button">▶ 继续</button>
             </div>
         </section>
+        <p id="execution-notice" class="execution-notice hidden" role="status"></p>
         <p id="position-risk-warning" class="risk-warning hidden"></p>
 
         <section class="panel result-panel">
@@ -199,6 +200,7 @@
                 <div><span>已测/总样本</span><strong id="stat-progress">0/—</strong></div>
                 <div><span>开仓</span><strong id="stat-opened">0</strong></div>
                 <div><span>放弃</span><strong id="stat-skipped">0</strong></div>
+                <div><span>开盘失效</span><strong id="stat-invalidated">0</strong></div>
                 <div><span>胜/败</span><strong id="stat-win-loss">0/0</strong></div>
                 <div><span>胜率</span><strong id="stat-win-rate">—</strong></div>
                 <div><span>累计净盈亏</span><strong id="stat-pnl">0.00</strong></div>
@@ -219,6 +221,6 @@
         <p id="error" class="error hidden"></p>
     </main>
     <script src="/static/js/chart_drawings.js?v=20260719-8"></script>
-    <script src="/static/js/manual_replay.js?v=20260719-18"></script>
+    <script src="/static/js/manual_replay.js?v=20260723-2"></script>
 </body>
 </html>

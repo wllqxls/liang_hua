@@ -20,6 +20,9 @@ REACTION_BARS = 6
 MIN_REACTION_ATR = 0.80
 MIN_ZONE_SCORE = 5
 SIGNAL_COOLDOWN_BARS = 4
+STOP_BUFFER_ATR_MULTIPLE = 0.15
+TARGET_BUFFER_ATR_MULTIPLE = 0.10
+MIN_REWARD_RISK = 1.50
 
 PivotKind = Literal['HIGH', 'LOW']
 SignalSide = Literal['BUY', 'SELL']
@@ -43,7 +46,23 @@ class ConfirmedPivot:
         return self.price + self.atr * ZONE_HALF_ATR_MULTIPLE
 
 
-def build_key_level_candidates(frame: pd.DataFrame) -> pd.DataFrame:
+@dataclass(frozen=True, slots=True)
+class QualifiedZone:
+    lower: float
+    upper: float
+    kind: PivotKind
+    touch_count: int
+    reaction_atr: float
+    role_flip: bool
+    score: int
+
+
+def build_key_level_candidates(
+    frame: pd.DataFrame,
+    *,
+    taker_fee: float = 0.0005,
+    slippage_rate: float = 0.0002,
+) -> pd.DataFrame:
     """Build closed-bar KEY_LEVEL_V2 candidates without future leakage."""
     required = {'Open', 'High', 'Low', 'Close'}
     missing = sorted(required.difference(frame.columns))
@@ -51,6 +70,12 @@ def build_key_level_candidates(frame: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f'key level data is missing columns: {", ".join(missing)}')
     if not isinstance(frame.index, pd.DatetimeIndex):
         raise ValueError('key level data must use a DatetimeIndex')
+    if not frame.index.is_monotonic_increasing or frame.index.has_duplicates:
+        raise ValueError('key level data index must be strictly increasing and unique')
+    if not 0 <= taker_fee <= 0.1:
+        raise ValueError('key level taker fee must be between 0 and 0.1')
+    if not 0 <= slippage_rate <= 0.1:
+        raise ValueError('key level slippage rate must be between 0 and 0.1')
 
     prices = frame.loc[:, ['Open', 'High', 'Low', 'Close']].astype(float)
     if not np.isfinite(prices.to_numpy()).all():
@@ -70,7 +95,7 @@ def build_key_level_candidates(frame: pd.DataFrame) -> pd.DataFrame:
     for bar_index in range(len(frame)):
         for pivot in pivots_by_confirmation.get(bar_index, ()):
             active_pivots.append(pivot)
-        minimum_pivot_index = bar_index - LOOKBACK_BARS
+        minimum_pivot_index = bar_index - LOOKBACK_BARS + 1
         while active_pivots and active_pivots[0].pivot_index < minimum_pivot_index:
             active_pivots.popleft()
         if not np.isfinite(atr[bar_index]) or atr[bar_index] <= 0:
@@ -85,6 +110,8 @@ def build_key_level_candidates(frame: pd.DataFrame) -> pd.DataFrame:
             closes=closes,
             atr=atr,
             last_signal_index=last_signal_index,
+            taker_fee=taker_fee,
+            slippage_rate=slippage_rate,
         )
         if best is None:
             continue
@@ -99,13 +126,64 @@ def build_key_level_candidates(frame: pd.DataFrame) -> pd.DataFrame:
         'side',
         'zone_lower',
         'zone_upper',
+        'target_zone_lower',
+        'target_zone_upper',
+        'target_touch_count',
+        'target_score',
+        'stop_price',
+        'target_price',
+        'reward_risk',
         'touch_count',
         'reaction_atr',
         'role_flip',
         'trigger',
         'score',
     ]
-    return pd.DataFrame(rows, index=pd.DatetimeIndex(row_index, name=frame.index.name), columns=columns)
+    candidate_index = (
+        pd.DatetimeIndex(row_index, name=frame.index.name)
+        if row_index
+        else pd.DatetimeIndex([], dtype=frame.index.dtype, name=frame.index.name)
+    )
+    return pd.DataFrame(rows, index=candidate_index, columns=columns)
+
+
+def structural_reward_risk(
+    *,
+    side: SignalSide,
+    reference_price: float,
+    stop_price: float,
+    target_price: float,
+    taker_fee: float,
+    slippage_rate: float,
+) -> float | None:
+    """Return cost-adjusted reward/risk using only the available reference price."""
+    if side not in {'BUY', 'SELL'}:
+        return None
+    values = (reference_price, stop_price, target_price, taker_fee, slippage_rate)
+    if not all(np.isfinite(value) for value in values):
+        return None
+    if reference_price <= 0 or stop_price <= 0 or target_price <= 0:
+        return None
+    if not 0 <= taker_fee <= 0.1 or not 0 <= slippage_rate <= 0.1:
+        return None
+    direction = 1 if side == 'BUY' else -1
+    entry_fill = reference_price * (1 + direction * slippage_rate)
+    correctly_ordered = (
+        stop_price < reference_price < target_price
+        and stop_price < entry_fill < target_price
+        if side == 'BUY'
+        else target_price < reference_price < stop_price
+        and target_price < entry_fill < stop_price
+    )
+    if not correctly_ordered:
+        return None
+    target_fill = target_price * (1 - direction * slippage_rate)
+    stop_fill = stop_price * (1 - direction * slippage_rate)
+    reward = direction * (target_fill - entry_fill) - taker_fee * (entry_fill + target_fill)
+    risk = direction * (entry_fill - stop_fill) + taker_fee * (entry_fill + stop_fill)
+    if reward <= 0 or risk <= 0:
+        return None
+    return float(reward / risk)
 
 
 def _confirmed_pivots(
@@ -163,6 +241,7 @@ def _independent_pivots(pivots: list[ConfirmedPivot], kind: PivotKind) -> list[C
 def _reaction_strength(
     pivot: ConfirmedPivot,
     *,
+    zone_midpoint: float,
     bar_index: int,
     highs: np.ndarray,
     lows: np.ndarray,
@@ -171,10 +250,103 @@ def _reaction_strength(
     if end <= pivot.pivot_index + 1:
         return 0.0
     if pivot.kind == 'LOW':
-        movement = highs[pivot.pivot_index + 1:end].max() - pivot.price
+        movement = highs[pivot.pivot_index + 1:end].max() - zone_midpoint
     else:
-        movement = pivot.price - lows[pivot.pivot_index + 1:end].min()
+        movement = zone_midpoint - lows[pivot.pivot_index + 1:end].min()
     return max(0.0, float(movement / pivot.atr))
+
+
+def _qualify_zone(
+    *,
+    zone_lower: float,
+    zone_upper: float,
+    members: list[ConfirmedPivot],
+    kind: PivotKind,
+    bar_index: int,
+    current_atr: float,
+    highs: np.ndarray,
+    lows: np.ndarray,
+) -> QualifiedZone | None:
+    if zone_upper - zone_lower > current_atr * MAX_ZONE_WIDTH_ATR:
+        return None
+    touches = _independent_pivots(members, kind)
+    if len(touches) < 2:
+        return None
+    zone_midpoint = (zone_lower + zone_upper) / 2
+    reactions = [
+        _reaction_strength(
+            pivot,
+            zone_midpoint=zone_midpoint,
+            bar_index=bar_index,
+            highs=highs,
+            lows=lows,
+        )
+        for pivot in touches
+    ]
+    median_reaction = float(np.median(reactions))
+    if median_reaction < MIN_REACTION_ATR:
+        return None
+    role_flip = any(item.kind == 'LOW' for item in members) and any(
+        item.kind == 'HIGH' for item in members
+    )
+    score = min(len(touches), MAX_TOUCH_SCORE) + 1 + 1 + int(role_flip)
+    if score < MIN_ZONE_SCORE:
+        return None
+    return QualifiedZone(
+        lower=float(zone_lower),
+        upper=float(zone_upper),
+        kind=kind,
+        touch_count=len(touches),
+        reaction_atr=median_reaction,
+        role_flip=role_flip,
+        score=score,
+    )
+
+
+def _nearest_target_zone(
+    *,
+    side: SignalSide,
+    entry_zone_lower: float,
+    entry_zone_upper: float,
+    zones: list[tuple[float, float, list[ConfirmedPivot]]],
+    bar_index: int,
+    current_atr: float,
+    highs: np.ndarray,
+    lows: np.ndarray,
+) -> QualifiedZone | None:
+    if side == 'BUY':
+        eligible = sorted(
+            (
+                zone for zone in zones
+                if zone[0] > entry_zone_upper and zone[0] > highs[bar_index]
+            ),
+            key=lambda zone: zone[0],
+        )
+        target_kind: PivotKind = 'HIGH'
+    else:
+        eligible = sorted(
+            (
+                zone for zone in zones
+                if zone[1] < entry_zone_lower and zone[1] < lows[bar_index]
+            ),
+            key=lambda zone: zone[1],
+            reverse=True,
+        )
+        target_kind = 'LOW'
+    for zone_lower, zone_upper, members in eligible:
+        qualified = _qualify_zone(
+            zone_lower=zone_lower,
+            zone_upper=zone_upper,
+            members=members,
+            kind=target_kind,
+            bar_index=bar_index,
+            current_atr=current_atr,
+            highs=highs,
+            lows=lows,
+        )
+        if qualified is not None:
+            return qualified
+    return None
 
 
 def _trigger(
@@ -223,35 +395,34 @@ def _best_candidate(
     closes: np.ndarray,
     atr: np.ndarray,
     last_signal_index: dict[SignalSide, int],
+    taker_fee: float,
+    slippage_rate: float,
 ) -> dict[str, object] | None:
     candidates: list[dict[str, object]] = []
-    for zone_lower, zone_upper, members in _merged_zones(pivots):
-        if zone_upper - zone_lower > atr[bar_index] * MAX_ZONE_WIDTH_ATR:
-            continue
+    zones = _merged_zones(pivots)
+    for zone_lower, zone_upper, members in zones:
         if highs[bar_index] < zone_lower or lows[bar_index] > zone_upper:
             continue
-        role_flip = any(item.kind == 'LOW' for item in members) and any(item.kind == 'HIGH' for item in members)
         for side, kind in (('BUY', 'LOW'), ('SELL', 'HIGH')):
             typed_side = cast(SignalSide, side)
             typed_kind = cast(PivotKind, kind)
             if bar_index - last_signal_index[typed_side] < SIGNAL_COOLDOWN_BARS:
                 continue
-            touches = _independent_pivots(members, typed_kind)
-            if len(touches) < 2:
-                continue
-            reactions = [
-                _reaction_strength(pivot, bar_index=bar_index, highs=highs, lows=lows)
-                for pivot in touches
-            ]
-            median_reaction = float(np.median(reactions))
-            if median_reaction < MIN_REACTION_ATR:
-                continue
-            score = min(len(touches), MAX_TOUCH_SCORE) + 1 + 1 + int(role_flip)
-            if score < MIN_ZONE_SCORE:
+            entry_zone = _qualify_zone(
+                zone_lower=zone_lower,
+                zone_upper=zone_upper,
+                members=members,
+                kind=typed_kind,
+                bar_index=bar_index,
+                current_atr=atr[bar_index],
+                highs=highs,
+                lows=lows,
+            )
+            if entry_zone is None:
                 continue
             trigger = _trigger(
                 side=typed_side,
-                role_flip=role_flip,
+                role_flip=entry_zone.role_flip,
                 zone_lower=zone_lower,
                 zone_upper=zone_upper,
                 bar_index=bar_index,
@@ -262,19 +433,61 @@ def _best_candidate(
             )
             if trigger is None:
                 continue
+            target_zone = _nearest_target_zone(
+                side=typed_side,
+                entry_zone_lower=zone_lower,
+                entry_zone_upper=zone_upper,
+                zones=zones,
+                bar_index=bar_index,
+                current_atr=atr[bar_index],
+                highs=highs,
+                lows=lows,
+            )
+            if target_zone is None:
+                continue
+            if typed_side == 'BUY':
+                stop_anchor = min(zone_lower, lows[bar_index])
+                stop_price = stop_anchor - atr[bar_index] * STOP_BUFFER_ATR_MULTIPLE
+                target_price = target_zone.lower - atr[bar_index] * TARGET_BUFFER_ATR_MULTIPLE
+            else:
+                stop_anchor = max(zone_upper, highs[bar_index])
+                stop_price = stop_anchor + atr[bar_index] * STOP_BUFFER_ATR_MULTIPLE
+                target_price = target_zone.upper + atr[bar_index] * TARGET_BUFFER_ATR_MULTIPLE
+            reward_risk = structural_reward_risk(
+                side=typed_side,
+                reference_price=closes[bar_index],
+                stop_price=stop_price,
+                target_price=target_price,
+                taker_fee=taker_fee,
+                slippage_rate=slippage_rate,
+            )
+            if reward_risk is None or reward_risk < MIN_REWARD_RISK:
+                continue
             candidates.append({
                 'side': typed_side,
                 'zone_lower': float(zone_lower),
                 'zone_upper': float(zone_upper),
-                'touch_count': len(touches),
-                'reaction_atr': median_reaction,
-                'role_flip': role_flip,
+                'target_zone_lower': target_zone.lower,
+                'target_zone_upper': target_zone.upper,
+                'target_touch_count': target_zone.touch_count,
+                'target_score': target_zone.score,
+                'stop_price': float(stop_price),
+                'target_price': float(target_price),
+                'reward_risk': reward_risk,
+                'touch_count': entry_zone.touch_count,
+                'reaction_atr': entry_zone.reaction_atr,
+                'role_flip': entry_zone.role_flip,
                 'trigger': trigger,
-                'score': score,
+                'score': entry_zone.score,
             })
     if not candidates:
         return None
     return max(
         candidates,
-        key=lambda item: (int(item['score']), float(item['reaction_atr']), int(item['touch_count'])),
+        key=lambda item: (
+            int(item['score']),
+            float(item['reaction_atr']),
+            int(item['touch_count']),
+            float(item['reward_risk']),
+        ),
     )

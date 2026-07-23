@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pandas as pd
@@ -14,13 +15,21 @@ from src.strategies.signal_models import (
     MarketSnapshot,
     Signal,
     SignalMode,
+    StructuralRisk,
 )
 
 
-def _snapshot(index: int, *, close: float = 100.0, high: float = 101.0, low: float = 99.0) -> MarketSnapshot:
+def _snapshot(
+    index: int,
+    *,
+    open_price: float = 100.0,
+    close: float = 100.0,
+    high: float = 101.0,
+    low: float = 99.0,
+) -> MarketSnapshot:
     opened = pd.Timestamp('2025-01-01', tz='UTC') + pd.Timedelta(minutes=5 * index)
     return MarketSnapshot(
-        opened_at=opened, closed_at=opened + pd.Timedelta(minutes=5), open=100.0,
+        opened_at=opened, closed_at=opened + pd.Timedelta(minutes=5), open=open_price,
         high=high, low=low, close=close, atr=1.0, rsi=50.0,
         bollinger_upper=110.0, bollinger_lower=90.0, previous_high_20=105.0,
         previous_low_20=95.0, environment_side='BUY', filter_label=FilterLabel.NEUTRAL,
@@ -35,6 +44,28 @@ def _signal(snapshot: MarketSnapshot, *, reason: str = 'fixture') -> Signal:
         target_atr_multiple=1.0, stop_distance=1.0, target_distance=1.0,
         estimated_stop_price=99.0, estimated_target_price=101.0,
         environment_side='BUY', filter_label=FilterLabel.NEUTRAL, reason=reason, score=1,
+    )
+
+
+def _structural_signal(snapshot: MarketSnapshot) -> Signal:
+    return replace(
+        _signal(snapshot),
+        mode=ManualSignalMode.KEY_LEVEL_V2,
+        strategy='KEY_LEVEL_V2',
+        signal_close=99.0,
+        stop_distance=2.0,
+        target_distance=6.0,
+        estimated_stop_price=97.0,
+        estimated_target_price=105.0,
+        structural_risk=StructuralRisk(
+            entry_zone_lower=97.5,
+            entry_zone_upper=98.5,
+            target_zone_lower=105.2,
+            target_zone_upper=105.8,
+            stop_price=97.0,
+            target_price=105.0,
+            reference_reward_risk=3.0,
+        ),
     )
 
 
@@ -84,6 +115,212 @@ def test_manual_trade_applies_configured_taker_fee_and_slippage_on_both_sides() 
     assert trade.equity == pytest.approx(100.0 + expected_pnl)
 
 
+def test_key_level_v2_keeps_frozen_structural_prices_after_next_open() -> None:
+    replay = _replay()
+    replay.snapshots.iloc[0] = _snapshot(0, close=99.0)
+    replay.snapshots.iloc[1] = _snapshot(1, open_price=100.0, high=101.0, low=99.0)
+    replay.state = 'AWAITING_DECISION'
+    replay.pending_signal = replace(
+        _structural_signal(replay.snapshots.iloc[0]),
+        estimated_stop_price=1.0,
+        estimated_target_price=999.0,
+    )
+
+    pending = replay.visible_payload()['signal']
+    assert pending['risk_model'] == 'STRUCTURAL_ZONE'
+    assert pending['stop_price'] == 97.0
+    assert pending['target_price'] == 105.0
+    assert pending['reward_risk'] == 3.0
+
+    replay.decide('BUY')
+
+    assert replay.state == 'POSITION_OPEN'
+    assert replay.active_position is not None
+    assert replay.active_position.fill_price == 100.0
+    assert replay.active_position.stop_price == 97.0
+    assert replay.active_position.target_price == 105.0
+    decision = replay.decisions[0]
+    assert decision['entry_zone_lower'] == 97.5
+    assert decision['entry_zone_upper'] == 98.5
+    assert decision['target_zone_lower'] == 105.2
+    assert decision['target_zone_upper'] == 105.8
+    assert decision['stop_price'] == 97.0
+    assert decision['target_price'] == 105.0
+    assert decision['reference_reward_risk'] == 3.0
+    assert decision['actual_reward_risk'] == pytest.approx(5 / 3)
+    assert decision['reason'] == 'fixture'
+    payload = replay.visible_payload()['position_overlay']
+    assert payload['stop_price'] == 97.0
+    assert payload['target_price'] == 105.0
+
+
+def test_key_level_v2_rejects_reverse_decision_without_mutating_replay() -> None:
+    replay = _replay()
+    replay.state = 'AWAITING_DECISION'
+    replay.pending_signal = _structural_signal(replay.snapshots.iloc[0])
+
+    with pytest.raises(ValueError, match='建议方向'):
+        replay.decide('SELL')
+
+    assert replay.state == 'AWAITING_DECISION'
+    assert replay.pending_signal is not None
+    assert not replay.decisions
+
+
+def test_key_level_v2_marks_low_reward_open_as_invalidated_without_trade() -> None:
+    replay = _replay()
+    replay.snapshots.iloc[1] = _snapshot(
+        1,
+        open_price=104.0,
+        close=104.0,
+        high=104.5,
+        low=103.5,
+    )
+    replay.state = 'AWAITING_DECISION'
+    replay.pending_signal = _structural_signal(replay.snapshots.iloc[0])
+
+    replay.decide('BUY')
+
+    assert replay.pending_signal is None
+    assert replay.active_position is None
+    assert replay.state == 'RUNNING'
+    assert replay.cursor == 1
+    assert replay.decisions[0]['entry_status'] == 'INVALIDATED_AT_OPEN'
+    assert replay.decisions[0]['reason'] == 'fixture'
+    assert '收益风险比失效' in replay.decisions[0]['entry_status_reason']
+    notice = replay.visible_payload()['last_execution_notice']
+    assert notice['status'] == 'INVALIDATED_AT_OPEN'
+    assert '未开仓' in notice['summary']
+    stats = replay.visible_payload()['replay_stats']
+    assert stats['tested'] == 1
+    assert stats['opened'] == 0
+    assert stats['invalidated'] == 1
+
+
+def test_key_level_v2_stop_cross_masked_by_fees_invalidates_atomically(
+    tmp_path,
+) -> None:
+    replay = _replay()
+    replay.snapshots.iloc[1] = _snapshot(
+        1,
+        open_price=96.95,
+        close=96.95,
+        high=97.2,
+        low=96.5,
+    )
+    replay.taker_fee = 0.0005
+    replay.slippage_rate = 0.0002
+    replay.state = 'AWAITING_DECISION'
+    replay.pending_signal = _structural_signal(replay.snapshots.iloc[0])
+    starting_cash = replay.cash
+
+    replay.decide('BUY')
+
+    assert replay.pending_signal is None
+    assert replay.active_position is None
+    assert replay.cash == starting_cash
+    assert not replay.trades
+    assert replay.decisions[0]['entry_status'] == 'INVALIDATED_AT_OPEN'
+    assert replay.decisions[0]['actual_reward_risk'] is None
+    assert replay.decisions[0]['entry_zone_lower'] == 97.5
+    assert replay.decisions[0]['target_zone_upper'] == 105.8
+    persisted = json.loads(replay.persist(tmp_path).read_text(encoding='utf-8'))
+    marker = persisted['signal_markers'][0]
+    assert marker['reason'] == 'fixture'
+    assert marker['entry_status'] == 'INVALIDATED_AT_OPEN'
+    assert marker['stop_price'] == 97.0
+    assert marker['target_price'] == 105.0
+    assert marker['reference_reward_risk'] == 3.0
+
+
+def test_last_candle_acceptance_is_invalidated_instead_of_counted_as_open() -> None:
+    replay = _replay()
+    replay.snapshots = pd.Series(
+        [_snapshot(0)],
+        index=pd.date_range('2025-01-01 00:05', periods=1, freq='5min', tz='UTC'),
+    )
+    replay.state = 'AWAITING_DECISION'
+    replay.pending_signal = _signal(replay.snapshots.iloc[0])
+    starting_cash = replay.cash
+
+    replay.decide('BUY')
+
+    assert replay.state == 'FINISHED'
+    assert replay.active_position is None
+    assert replay.cash == starting_cash
+    assert replay.decisions[0]['entry_status'] == 'INVALIDATED_AT_OPEN'
+    assert replay.visible_payload()['replay_stats']['opened'] == 0
+    assert replay.visible_payload()['replay_stats']['invalidated'] == 1
+
+
+def test_manual_stop_gap_uses_worse_open_price() -> None:
+    replay = _replay()
+    replay.snapshots = pd.Series(
+        [
+            _snapshot(0),
+            _snapshot(1, high=100.5, low=99.5),
+            _snapshot(2, open_price=97.0, close=97.0, high=98.0, low=96.0),
+        ],
+        index=pd.date_range('2025-01-01 00:05', periods=3, freq='5min', tz='UTC'),
+    )
+    replay.state = 'AWAITING_DECISION'
+    replay.pending_signal = _signal(replay.snapshots.iloc[0])
+
+    replay.decide('BUY')
+    replay.step_position()
+
+    assert replay.trades[0].exit_reason == 'STOP'
+    assert replay.trades[0].exit_price == 97.0
+    assert replay.trades[0].exit_time == replay.snapshots.iloc[2].opened_at
+
+
+def test_manual_long_target_gap_wins_before_same_candle_stop_reversal() -> None:
+    replay = _replay()
+    replay.snapshots = pd.Series(
+        [
+            _snapshot(0),
+            _snapshot(1, high=100.5, low=99.5),
+            _snapshot(2, open_price=102.0, close=100.0, high=103.0, low=98.0),
+        ],
+        index=pd.date_range('2025-01-01 00:05', periods=3, freq='5min', tz='UTC'),
+    )
+    replay.state = 'AWAITING_DECISION'
+    replay.pending_signal = _signal(replay.snapshots.iloc[0])
+
+    replay.decide('BUY')
+    replay.step_position()
+
+    assert replay.trades[0].exit_reason == 'TARGET'
+    assert replay.trades[0].exit_price == 101.0
+    assert replay.trades[0].exit_time == replay.snapshots.iloc[2].opened_at
+
+
+def test_manual_short_target_gap_wins_before_same_candle_stop_reversal() -> None:
+    replay = _replay()
+    replay.snapshots = pd.Series(
+        [
+            _snapshot(0),
+            _snapshot(1, high=100.5, low=99.5),
+            _snapshot(2, open_price=98.0, close=100.0, high=102.0, low=97.0),
+        ],
+        index=pd.date_range('2025-01-01 00:05', periods=3, freq='5min', tz='UTC'),
+    )
+    replay.state = 'AWAITING_DECISION'
+    replay.pending_signal = replace(
+        _signal(replay.snapshots.iloc[0]),
+        side='SELL',
+        estimated_stop_price=101.0,
+        estimated_target_price=99.0,
+    )
+
+    replay.decide('SELL')
+    replay.step_position()
+
+    assert replay.trades[0].exit_reason == 'TARGET'
+    assert replay.trades[0].exit_price == 99.0
+    assert replay.trades[0].exit_time == replay.snapshots.iloc[2].opened_at
+
+
 def test_skip_does_not_create_trade() -> None:
     replay = _replay()
     replay.state = 'AWAITING_DECISION'
@@ -118,6 +355,7 @@ def test_replay_stats_track_review_progress_and_persist(tmp_path) -> None:
         'total_candidates': 2,
         'opened': 0,
         'skipped': 1,
+        'invalidated': 0,
         'wins': 0,
         'losses': 0,
         'win_rate': None,
