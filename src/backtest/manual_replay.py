@@ -73,10 +73,6 @@ class ManualTrade:
     fill_price: float
     stop_price: float
     target_price: float
-    entry_zone_lower: float | None
-    entry_zone_upper: float | None
-    target_zone_lower: float | None
-    target_zone_upper: float | None
     liquidation_price: float
     margin_mode: MarginMode
     exit_time: pd.Timestamp
@@ -97,10 +93,6 @@ class ActivePosition:
     fill_price: float
     stop_price: float
     target_price: float
-    entry_zone_lower: float | None
-    entry_zone_upper: float | None
-    target_zone_lower: float | None
-    target_zone_upper: float | None
     liquidation_price: float
     margin_mode: MarginMode
     risk_warning: str | None
@@ -619,7 +611,6 @@ class ManualReplay:
             margin_mode=self.margin_mode,
             maintenance_margin_rate=self.maintenance_margin_rate,
         )
-        structural_risk = signal.structural_risk
         return ActivePosition(
             signal_time=signal.signal_time,
             side=decision,
@@ -628,10 +619,6 @@ class ManualReplay:
             fill_price=fill_price,
             stop_price=stop_price,
             target_price=target_price,
-            entry_zone_lower=structural_risk.entry_zone_lower if structural_risk is not None else None,
-            entry_zone_upper=structural_risk.entry_zone_upper if structural_risk is not None else None,
-            target_zone_lower=structural_risk.target_zone_lower if structural_risk is not None else None,
-            target_zone_upper=structural_risk.target_zone_upper if structural_risk is not None else None,
             liquidation_price=liquidation_price,
             margin_mode=self.margin_mode,
             risk_warning=_liquidation_warning(decision, stop_price, liquidation_price),
@@ -676,10 +663,6 @@ class ManualReplay:
             fill_price=position.fill_price,
             stop_price=position.stop_price,
             target_price=position.target_price,
-            entry_zone_lower=position.entry_zone_lower,
-            entry_zone_upper=position.entry_zone_upper,
-            target_zone_lower=position.target_zone_lower,
-            target_zone_upper=position.target_zone_upper,
             liquidation_price=position.liquidation_price,
             margin_mode=position.margin_mode,
             exit_time=(
@@ -712,10 +695,6 @@ class ManualReplay:
                 'fill_price': position.fill_price,
                 'stop_price': position.stop_price,
                 'target_price': position.target_price,
-                'entry_zone_lower': position.entry_zone_lower,
-                'entry_zone_upper': position.entry_zone_upper,
-                'target_zone_lower': position.target_zone_lower,
-                'target_zone_upper': position.target_zone_upper,
                 'liquidation_price': position.liquidation_price,
                 'margin_mode': position.margin_mode.value,
                 'margin_mode_label': MARGIN_MODE_LABELS[position.margin_mode],
@@ -735,10 +714,6 @@ class ManualReplay:
                 'fill_price': trade.fill_price,
                 'stop_price': trade.stop_price,
                 'target_price': trade.target_price,
-                'entry_zone_lower': trade.entry_zone_lower,
-                'entry_zone_upper': trade.entry_zone_upper,
-                'target_zone_lower': trade.target_zone_lower,
-                'target_zone_upper': trade.target_zone_upper,
                 'liquidation_price': trade.liquidation_price,
                 'margin_mode': trade.margin_mode.value,
                 'margin_mode_label': MARGIN_MODE_LABELS[trade.margin_mode],

@@ -273,11 +273,6 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert "'5m': 300, '15m': 900, '1h': 3600" in drawing_script
     assert "rgba(33,197,139,.20)" in drawing_script
     assert "rgba(255,95,145,.22)" in drawing_script
-    assert "data-zone-kind" in drawing_script
-    assert "this.risk.entry_zone_lower" in drawing_script
-    assert "this.risk.target_zone_upper" in drawing_script
-    assert "入场关键区" in drawing_script
-    assert "下一关键区" in drawing_script
     assert "stroke: '#ff9f43'" in drawing_script
     assert 'this.risk.liquidation_price' in drawing_script
     assert '止盈 ${profitPct}%' not in drawing_script

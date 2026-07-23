@@ -152,20 +152,6 @@ def test_key_level_v2_keeps_frozen_structural_prices_after_next_open() -> None:
     payload = replay.visible_payload()['position_overlay']
     assert payload['stop_price'] == 97.0
     assert payload['target_price'] == 105.0
-    assert payload['entry_zone_lower'] == 97.5
-    assert payload['entry_zone_upper'] == 98.5
-    assert payload['target_zone_lower'] == 105.2
-    assert payload['target_zone_upper'] == 105.8
-
-    replay.snapshots.iloc[2] = _snapshot(2, high=106.0, low=99.0)
-    replay.step_position()
-
-    closed_payload = replay.visible_payload()['position_overlay']
-    assert closed_payload['status'] == 'CLOSED'
-    assert closed_payload['entry_zone_lower'] == 97.5
-    assert closed_payload['entry_zone_upper'] == 98.5
-    assert closed_payload['target_zone_lower'] == 105.2
-    assert closed_payload['target_zone_upper'] == 105.8
 
 
 def test_key_level_v2_rejects_reverse_decision_without_mutating_replay() -> None:
