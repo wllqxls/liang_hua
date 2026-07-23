@@ -88,43 +88,23 @@ templates = Jinja2Templates(directory=str(_templates_dir))
 
 MODE_GROUPS = [
     {
-        'label': '半自动实验候选',
+        'label': '唯一主动策略',
         'options': [
             {
-                'value': 'ORDER_FLOW_ABSORPTION_15M',
-                'label': '相对吸收（需生成因子）',
-                'description': '先生成 BTC/ETH 三年度因子，再作为半自动实验策略回放',
-            },
-            {
-                'value': 'ETH_RSI_WHITELIST_5M',
-                'label': 'ETH 5m RSI 白名单（实验）',
-                'description': '两年毛收益为正的人工筛选候选；不代表覆盖成本',
-            },
-        ],
-    },
-    {
-        'label': '历史失败基线',
-        'options': [
-            {
-                'value': 'KEY_LEVEL',
-                'label': '关键位（失败基线）',
-                'description': '仅用于对照：历史自动验证未通过',
-            },
-            {
-                'value': 'RSI_REVERSAL',
-                'label': 'RSI 反转（失败基线）',
-                'description': '仅用于对照：通用组合历史自动验证未通过',
-            },
-            {
-                'value': 'KEY_LEVEL_RSI',
-                'label': '关键位 + RSI（失败基线）',
-                'description': '仅用于对照：历史自动验证未通过',
+                'value': 'KEY_LEVEL_V2',
+                'label': '高质量关键区域',
+                'description': '多次独立触碰、强反应、清晰区域与支撑压力互换；等待拒绝、假突破或突破回踩',
             },
         ],
     },
 ]
 MODE_OPTIONS = [option for group in MODE_GROUPS for option in group['options']]
-MODE_LABELS = {option['value']: option['label'] for option in MODE_OPTIONS}
+MODE_LABELS = {
+    'KEY_LEVEL_V2': '高质量关键区域',
+    'KEY_LEVEL': '关键位（失败基线）',
+    'RSI_REVERSAL': 'RSI 反转（失败基线）',
+    'KEY_LEVEL_RSI': '关键位 + RSI（失败基线）',
+}
 
 TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
 

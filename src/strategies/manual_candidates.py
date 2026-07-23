@@ -60,6 +60,10 @@ def evaluate_manual_candidate(
     order_flow_features: Mapping[str, object] | None = None,
 ) -> Signal | None:
     """Evaluate one closed snapshot without using any future labels."""
+    if mode is ManualSignalMode.KEY_LEVEL_V2:
+        if order_flow_features is None:
+            return None
+        return _build_key_level_v2_signal(snapshot, order_flow_features)
     if mode in HISTORICAL_BASELINE_MODES:
         return dispatch_signal(snapshot, HISTORICAL_BASELINE_MODES[mode])
     if mode is ManualSignalMode.ETH_RSI_WHITELIST_5M:
@@ -80,6 +84,54 @@ def evaluate_manual_candidate(
             return None
         return _build_order_flow_absorption_signal(snapshot, order_flow_features)
     raise ValueError(f'Unsupported manual signal mode: {mode!r}')
+
+
+def _build_key_level_v2_signal(
+    snapshot: MarketSnapshot,
+    features: Mapping[str, object],
+) -> Signal:
+    side = str(features['side'])
+    if side not in {'BUY', 'SELL'}:
+        raise ValueError('KEY_LEVEL_V2 candidate side must be BUY or SELL')
+    zone_lower = float(features['zone_lower'])
+    zone_upper = float(features['zone_upper'])
+    touch_count = int(features['touch_count'])
+    reaction_atr = float(features['reaction_atr'])
+    role_flip = bool(features['role_flip'])
+    trigger = str(features['trigger'])
+    score = int(features['score'])
+    stop_distance = snapshot.atr * DEFAULT_SIGNAL_PARAMETERS.key_stop_atr_multiple
+    target_distance = snapshot.atr * DEFAULT_SIGNAL_PARAMETERS.key_target_atr_multiple
+    trigger_labels = {
+        'REJECTION': '触碰后收回',
+        'FALSE_BREAK': '刺穿后收回',
+        'BREAK_RETEST': '突破后回踩',
+    }
+    role_text = '，历史发生支撑压力互换' if role_flip else ''
+    reason = (
+        f'关键区域 {zone_lower:.2f}–{zone_upper:.2f}，{touch_count} 次独立触碰，'
+        f'中位反应 {reaction_atr:.2f} ATR{role_text}；'
+        f'当前为{trigger_labels.get(trigger, trigger)}，质量分 {score}'
+    )
+    typed_side = 'BUY' if side == 'BUY' else 'SELL'
+    return Signal(
+        mode=ManualSignalMode.KEY_LEVEL_V2,
+        strategy=ManualSignalMode.KEY_LEVEL_V2.value,
+        side=typed_side,
+        signal_time=snapshot.closed_at,
+        signal_close=snapshot.close,
+        atr_snapshot=snapshot.atr,
+        stop_atr_multiple=DEFAULT_SIGNAL_PARAMETERS.key_stop_atr_multiple,
+        target_atr_multiple=DEFAULT_SIGNAL_PARAMETERS.key_target_atr_multiple,
+        stop_distance=stop_distance,
+        target_distance=target_distance,
+        estimated_stop_price=snapshot.close - stop_distance if typed_side == 'BUY' else snapshot.close + stop_distance,
+        estimated_target_price=snapshot.close + target_distance if typed_side == 'BUY' else snapshot.close - target_distance,
+        environment_side=snapshot.environment_side or typed_side,
+        filter_label=snapshot.filter_label,
+        reason=reason,
+        score=score,
+    )
 
 
 def _build_order_flow_fading_signal(

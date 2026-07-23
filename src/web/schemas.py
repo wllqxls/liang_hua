@@ -315,7 +315,7 @@ class ManualReplayRequest(BaseModel):
     symbol: str = Field(default='BTC/USDT')
     timeframe: Literal['5m', '15m'] = Field(default='15m')
     data_year: int = Field(ge=2017, le=2100)
-    mode: ManualSignalMode = Field(default=ManualSignalMode.ORDER_FLOW_ABSORPTION_15M)
+    mode: ManualSignalMode = Field(default=ManualSignalMode.KEY_LEVEL_V2)
     cash: float = Field(default=100, gt=0)
     opening_amount: float = Field(default=10, gt=0)
     margin_mode: MarginMode = Field(default=MarginMode.ISOLATED)

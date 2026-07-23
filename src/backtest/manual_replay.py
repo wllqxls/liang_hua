@@ -16,6 +16,7 @@ from src.research.order_flow_events import load_funding_year, load_order_flow_ye
 from src.research.order_flow_failed_push import aggregate_order_flow_to_15m
 from src.research.order_flow_fading_push import build_fading_push_candidates
 from src.research.order_flow_relative_absorption import build_relative_absorption_candidates
+from src.strategies.key_level_v2 import build_key_level_candidates
 from src.strategies.manual_candidates import (
     evaluate_manual_candidate,
     validate_manual_candidate_scope,
@@ -207,6 +208,8 @@ class ManualReplay:
         except FileNotFoundError:
             funding_rates = pd.Series(dtype=float, name='funding_rate')
         candidate_features = None
+        if mode is ManualSignalMode.KEY_LEVEL_V2:
+            candidate_features = build_key_level_candidates(chart_frames[timeframe])
         if mode in {
             ManualSignalMode.ORDER_FLOW_FADING_15M,
             ManualSignalMode.ORDER_FLOW_ABSORPTION_15M,

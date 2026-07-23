@@ -26,7 +26,7 @@
                 <label>数据年份 <input id="data-fetch-year" type="number" min="2017" max="2100" value="2025"></label>
                 <div class="local-data-tabs" role="tablist" aria-label="本地数据类型">
                     <button id="market-data-tab" class="local-data-tab active" type="button" role="tab" aria-selected="true" aria-controls="market-data-page">基础行情</button>
-                    <button id="order-flow-data-tab" class="local-data-tab" type="button" role="tab" aria-selected="false" aria-controls="order-flow-data-page">增强 K 线</button>
+                    <button id="order-flow-data-tab" class="local-data-tab" type="button" role="tab" aria-selected="false" aria-controls="order-flow-data-page" hidden>增强 K 线</button>
                 </div>
             </div>
             <section id="market-data-page" class="local-data-page" role="tabpanel" aria-hidden="false">
@@ -68,7 +68,8 @@
                 <select id="chart-timeframe"><option value="5m">5m</option><option value="15m">15m</option><option value="1h">1h</option></select>
             </label>
             <label>策略选择
-                <select id="mode"><optgroup id="validated-strategy-options" label="半自动实验策略" hidden></optgroup>{% for group in mode_groups %}<optgroup label="{{ group.label }}">{% for mode in group.options %}<option value="{{ mode.value }}" data-description="{{ mode.description }}">{{ mode.label }}</option>{% endfor %}</optgroup>{% endfor %}</select>
+                <select id="mode" disabled><optgroup id="validated-strategy-options" label="历史实验策略" hidden></optgroup>{% for group in mode_groups %}<optgroup label="{{ group.label }}">{% for mode in group.options %}<option value="{{ mode.value }}" data-description="{{ mode.description }}">{{ mode.label }}</option>{% endfor %}</optgroup>{% endfor %}</select>
+                <span class="field-note">多次触碰 + 强反应 + 清晰区域 + 支撑压力互换</span>
             </label>
             <label>初始资金 <input id="cash" type="number" min="10" value="100"></label>
             <label>单笔保证金 <input id="opening-amount" type="number" min="1" value="10"></label>
@@ -90,7 +91,7 @@
                 </select>
             </label>
             <button id="start-btn" class="primary" type="button">开始回放</button>
-            <button id="whitelist-btn" type="button">生成订单流因子</button>
+            <button id="whitelist-btn" type="button" hidden>生成订单流因子</button>
         </section>
 
         <details class="panel advanced-options">
@@ -211,7 +212,7 @@
                 </table>
             </div>
         </section>
-        <section class="panel">
+        <section class="panel" hidden>
             <h2>半自动因子</h2>
             <div class="table-wrap"><table class="factor-table"><thead><tr><th>币种</th><th>触发逻辑</th><th>2023样本</th><th>2023净收益</th><th>2023胜/败</th><th>2024样本</th><th>2024净收益</th><th>2024胜/败</th><th>2025样本</th><th>2025净收益</th><th>2025胜/败</th><th>操作</th></tr></thead><tbody id="whitelist-table"><tr><td colspan="12">尚未生成</td></tr></tbody></table></div>
         </section>

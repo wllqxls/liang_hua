@@ -108,21 +108,15 @@ def test_index_renders_signal_mode_names() -> None:
     response = client.get("/")
 
     assert response.status_code == 200
-    assert [item['value'] for item in routes.MODE_OPTIONS] == [
-        'ORDER_FLOW_ABSORPTION_15M',
-        'ETH_RSI_WHITELIST_5M',
-        'KEY_LEVEL',
-        'RSI_REVERSAL',
-        'KEY_LEVEL_RSI',
-    ]
+    assert [item['value'] for item in routes.MODE_OPTIONS] == ['KEY_LEVEL_V2']
     html = response.text
-    assert '<optgroup label="半自动实验候选">' in html
-    assert '<option value="ORDER_FLOW_ABSORPTION_15M"' in html
-    assert '相对吸收（需生成因子）' in html
+    assert '<optgroup label="唯一主动策略">' in html
+    assert '<option value="KEY_LEVEL_V2"' in html
+    assert '高质量关键区域' in html
     assert 'id="mode-note"' not in html
     assert 'id="whitelist-status"' not in html
     assert '<h2>半自动因子</h2>' in html
-    assert '>生成订单流因子</button>' in html
+    assert 'id="whitelist-btn" type="button" hidden' in html
     assert '<th>币种</th><th>触发逻辑</th><th>2023样本</th><th>2023净收益</th><th>2023胜/败</th>' in html
     assert '<th>2024样本</th><th>2024净收益</th><th>2024胜/败</th>' in html
     assert '<th>2025样本</th><th>2025净收益</th><th>2025胜/败</th><th>操作</th>' in html
@@ -132,13 +126,10 @@ def test_index_renders_signal_mode_names() -> None:
     assert '<th>2024毛收益</th>' not in html
     assert '<th>2024资金费</th>' not in html
     assert '<th>2025毛收益</th>' not in html
-    assert '<optgroup label="历史失败基线">' in html
-    assert '<option value="KEY_LEVEL"' in html
-    assert '>关键位（失败基线）</option>' in html
-    assert '<option value="RSI_REVERSAL"' in html
-    assert '>RSI 反转（失败基线）</option>' in html
-    assert '<option value="KEY_LEVEL_RSI"' in html
-    assert '>关键位 + RSI（失败基线）</option>' in html
+    assert '<option value="KEY_LEVEL"' not in html
+    assert '<option value="RSI_REVERSAL"' not in html
+    assert '<option value="KEY_LEVEL_RSI"' not in html
+    assert '<select id="mode" disabled>' in html
     assert 'id="signal-timeframe"' in html
     assert '半自动交易回放' in html
     assert '<select id="strategy">' not in html
@@ -180,11 +171,11 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert "new Map(data.validations.map" not in script
     assert '/api/semi-auto-whitelist/validate' not in script
     assert '验证2025' not in script
-    assert "document.getElementById('start-btn').disabled = isOrderFlow && !activeWhitelistProfile" in script
+    assert "document.getElementById('start-btn').disabled = false" in script
     assert '>生成策略</button>' in script
     assert 'validatedStrategyProfiles' in script
     assert 'createValidatedStrategyPreset' in script
-    assert "mode: activeWhitelistProfile ? 'ORDER_FLOW_ABSORPTION_15M'" in script
+    assert "mode: document.getElementById('mode').value" in script
     assert 'item.metrics_2023' in script
     assert 'item.metrics_2024' in script
     assert 'item.metrics_2025' in script
@@ -194,7 +185,7 @@ def test_manual_replay_chart_is_local_responsive_and_auto_focuses() -> None:
     assert 'startReplay()' not in preset_function
     assert 'id="market-data-tab"' in html
     assert 'id="order-flow-data-tab"' in html
-    assert '>增强 K 线</button>' in html
+    assert 'aria-controls="order-flow-data-page" hidden>增强 K 线</button>' in html
     assert 'id="order-flow-fetch-btn"' in html
     assert 'id="order-flow-progress"' in html
     assert 'id="order-flow-status-table"' in html

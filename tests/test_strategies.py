@@ -50,14 +50,8 @@ class FakeContextData:
             self.ContextFastMA = FakeSeries(fast_ma)
 
 
-def test_manual_index_exposes_experiments_before_failed_baselines() -> None:
-    assert [item['value'] for item in MODE_OPTIONS] == [
-        'ORDER_FLOW_ABSORPTION_15M',
-        'ETH_RSI_WHITELIST_5M',
-        'KEY_LEVEL',
-        'RSI_REVERSAL',
-        'KEY_LEVEL_RSI',
-    ]
+def test_manual_index_exposes_only_key_level_v2() -> None:
+    assert [item['value'] for item in MODE_OPTIONS] == ['KEY_LEVEL_V2']
 
 
 def test_api_schema_exposes_only_stable_signal_modes() -> None:
@@ -71,10 +65,10 @@ def test_api_schema_exposes_only_stable_signal_modes() -> None:
     ]
 
 
-def test_manual_api_defaults_to_15m_order_flow_experiment() -> None:
+def test_manual_api_defaults_to_key_level_v2() -> None:
     request = ManualReplayRequest(data_year=2025)
 
-    assert request.mode.value == 'ORDER_FLOW_ABSORPTION_15M'
+    assert request.mode.value == 'KEY_LEVEL_V2'
     assert request.timeframe == '15m'
     assert request.margin_mode is MarginMode.ISOLATED
     assert request.maintenance_margin_rate == pytest.approx(0.005)

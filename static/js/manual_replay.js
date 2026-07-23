@@ -79,7 +79,7 @@ function chart(container) {
 }
 
 function number(id) { return Number(document.getElementById(id).value); }
-function payload() { return { symbol: document.getElementById('symbol').value, data_year: number('data-year'), timeframe: document.getElementById('signal-timeframe').value, mode: activeWhitelistProfile ? 'ORDER_FLOW_ABSORPTION_15M' : document.getElementById('mode').value, cash: number('cash'), opening_amount: number('opening-amount'), margin_mode: document.getElementById('margin-mode').value, leverage: number('leverage'), taker_fee: number('taker-fee'), slippage_rate: number('slippage-rate'), maintenance_margin_rate: number('maintenance-margin-rate'), liquidation_fee_rate: number('liquidation-fee-rate'), whitelist_profile: activeWhitelistProfile }; }
+function payload() { return { symbol: document.getElementById('symbol').value, data_year: number('data-year'), timeframe: document.getElementById('signal-timeframe').value, mode: document.getElementById('mode').value, cash: number('cash'), opening_amount: number('opening-amount'), margin_mode: document.getElementById('margin-mode').value, leverage: number('leverage'), taker_fee: number('taker-fee'), slippage_rate: number('slippage-rate'), maintenance_margin_rate: number('maintenance-margin-rate'), liquidation_fee_rate: number('liquidation-fee-rate'), whitelist_profile: null }; }
 
 function syncModeInputs() {
     const modeSelect = document.getElementById('mode');
@@ -102,7 +102,7 @@ function syncModeInputs() {
         timeframe.value = '5m';
     }
     timeframe.disabled = isOrderFlow || isEthRsi;
-    document.getElementById('start-btn').disabled = isOrderFlow && !activeWhitelistProfile;
+    document.getElementById('start-btn').disabled = false;
 }
 
 async function responseJson(response) {
