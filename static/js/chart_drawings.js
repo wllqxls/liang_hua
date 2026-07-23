@@ -348,8 +348,59 @@ class ChartDrawingController {
         const boxWidth = Math.max(12, endX - startX);
         this._riskRect(startX, Math.min(entryY, targetY), boxWidth, Math.abs(targetY - entryY), '#21c58b', 'rgba(33,197,139,.20)');
         this._riskRect(startX, Math.min(entryY, stopY), boxWidth, Math.abs(stopY - entryY), '#ff5f91', 'rgba(255,95,145,.22)');
+        this._frozenZone(
+            startX,
+            endX,
+            this.risk.entry_zone_lower,
+            this.risk.entry_zone_upper,
+            '#f4bd50',
+            'rgba(244,189,80,.15)',
+            '入场关键区',
+            'entry',
+        );
+        this._frozenZone(
+            startX,
+            endX,
+            this.risk.target_zone_lower,
+            this.risk.target_zone_upper,
+            '#55a7ff',
+            'rgba(85,167,255,.13)',
+            '下一关键区',
+            'target',
+        );
         this._svg('line', { x1: startX, y1: entryY, x2: endX, y2: entryY, stroke: '#4b9cff', 'stroke-width': 1.5, 'stroke-dasharray': '5 4', style: 'pointer-events:none' });
         this._svg('line', { x1: startX, y1: liquidationY, x2: endX, y2: liquidationY, stroke: '#ff9f43', 'stroke-width': 2, style: 'pointer-events:none' });
+    }
+
+    _frozenZone(x1, x2, lowerPrice, upperPrice, stroke, fill, label, kind) {
+        if (![lowerPrice, upperPrice].every(Number.isFinite)) return;
+        const lowerY = this.series.priceToCoordinate(lowerPrice);
+        const upperY = this.series.priceToCoordinate(upperPrice);
+        if ([lowerY, upperY].some(value => value == null)) return;
+        const top = Math.min(lowerY, upperY);
+        const height = Math.max(1, Math.abs(lowerY - upperY));
+        this._svg('rect', {
+            x: x1,
+            y: top,
+            width: Math.max(12, x2 - x1),
+            height,
+            fill,
+            stroke,
+            'stroke-width': 1.25,
+            'stroke-dasharray': '6 4',
+            'data-zone-kind': kind,
+            style: 'pointer-events:none',
+        });
+        this._svg('text', {
+            x: x1 + 5,
+            y: top + 4,
+            fill: stroke,
+            'font-size': 10,
+            'font-weight': 600,
+            'dominant-baseline': 'hanging',
+            'data-zone-label': kind,
+            style: 'pointer-events:none',
+        }).textContent = label;
     }
 
     _riskRect(x, y, width, height, stroke, fill) {
